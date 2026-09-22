@@ -221,7 +221,7 @@ def _cmd_build_packet(args: argparse.Namespace) -> int:
     from proofops.adapters.local.claim_store import LocalClaimStore
     from proofops.adapters.local.run_store import LocalSQLiteRunStore
     from proofops.adapters.parsing.opendataloader import OpenDataLoaderParser
-    from proofops.application.linkage_exchange import BlockedPacket, build_packet
+    from proofops.application.linkage_exchange import BlockedPacket, C2PeriodContext, build_packet
     from proofops.application.registry import Registry
     from proofops.application.uploads import UploadService
 
@@ -415,6 +415,24 @@ def _cmd_build_packet(args: argparse.Namespace) -> int:
     if args.financial_context:
         financial_context = _load_financial_context(Path(args.financial_context))
 
+    period_context = None
+    if getattr(args, "c2_period_context", None):
+        try:
+            period_context = C2PeriodContext(**json.loads(Path(args.c2_period_context).read_text()))
+            if args.item != "C2":
+                raise ValueError("period context is only supported for C2")
+        except (OSError, ValueError, TypeError) as exc:
+            print(
+                json.dumps(
+                    {
+                        "execution_state": "blocked",
+                        "reason": "invalid_c2_period_context",
+                        "detail": str(exc),
+                    }
+                )
+            )
+            return 1
+
     result = build_packet(
         claim=claim,
         tags=confirmed_tags,
@@ -425,6 +443,7 @@ def _cmd_build_packet(args: argparse.Namespace) -> int:
         period_end=frozen_period_end,
         sr_published_at=sr_published_at,
         trusted_company_id=trusted_company_id,
+        c2_period_context=period_context,
     )
     if isinstance(result, BlockedPacket):
         print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
@@ -552,6 +571,10 @@ def main(argv: list[str] | None = None) -> int:
     build.add_argument("--run-id", required=True)
     build.add_argument("--claim-id", required=True)
     build.add_argument("--item", required=True, choices=("C1", "C2", "C3", "C4"))
+    build.add_argument(
+        "--c2-period-context",
+        help="JSON normalized/source_id/quote; must match confirmed fact evidence",
+    )
     build.add_argument("--database-path", required=True)
     build.add_argument(
         "--financial-context",

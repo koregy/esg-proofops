@@ -181,6 +181,68 @@ def _build(**overrides):
     return build_packet(**kwargs)
 
 
+def test_c2_period_is_bound_to_confirmed_evidence_and_rejects_cross_range_dates():
+    from dataclasses import replace
+
+    from proofops.application.linkage_exchange import C2PeriodContext, period_from_literal
+    from proofops.domain.errors import DomainValidationError
+
+    quote = "배출량 10 tCO2e, 보고년도 : 2025년 1월 1일 ~ 2025년 12월 31일"
+    period = "2025-01-01/2025-12-31"
+    ref = _source_ref(quote=quote)
+    fact = replace(
+        _confirmed_tags().facts[0],
+        name="quantitative_or_qualified_ordinal",
+        evidence_refs=(ref,),
+        normalized_value=quote,
+    )
+    kwargs = dict(
+        item="C2",
+        claim=_claim(quote=quote, source_refs=(ref,)),
+        tags=_confirmed_tags(facts=(fact,)),
+        financial_context=_financial_context(
+            financial=FinancialFact(quote, period, "period", None, "fs-scope")
+        ),
+    )
+    context = C2PeriodContext(period, SR_SOURCE, quote)
+    result = _build(**kwargs, c2_period_context=context)
+    assert not isinstance(result, BlockedPacket), result
+    assert result["sustainability"]["kind"] == "period"
+    assert result["sustainability"]["normalized"] == period
+    assert isinstance(_build(**kwargs), BlockedPacket)
+    categorical = replace(
+        fact, normalized_value="ISO 14001 인증, 2025년 1월 1일 ~ 2025년 12월 31일"
+    )
+    assert isinstance(
+        _build(
+            **(kwargs | {"tags": _confirmed_tags(facts=(categorical,))}), c2_period_context=context
+        ),
+        BlockedPacket,
+    )
+    for invalid in (
+        replace(context, source_id="foreign"),
+        replace(context, normalized="2024-01-01/2024-12-31"),
+        replace(context, quote=quote + " changed"),
+    ):
+        assert isinstance(_build(**kwargs, c2_period_context=invalid), BlockedPacket)
+    assert isinstance(
+        _build(
+            **(kwargs | {"tenant_id": "99999999-9999-4999-8999-999999999999"}),
+            c2_period_context=context,
+        ),
+        BlockedPacket,
+    )
+    assert period_from_literal("2025년 01월 01일 부터 2025년 12월 31일 까지") == period
+    for text in (
+        quote + " / 2024년 1월 1일 ~ 2024년 12월 31일",
+        "발행일 2025년 1월 1일; 수정일 2025년 12월 31일",
+        "2025년 12월 31일 ~ 2025년 1월 1일",
+        "2025-02-30/2025-12-31",
+    ):
+        with pytest.raises((DomainValidationError, ValueError)):
+            period_from_literal(text)
+
+
 @pytest.mark.skipif(not CONTRACT_DIR.is_dir(), reason="handoff contract dir not present")
 def test_synthetic_full_roundtrip_passes_real_schema_and_validate_py_return_mode(tmp_path):
     """Case 1: synthetic full roundtrip through the EXISTING strict1.1 validator."""
