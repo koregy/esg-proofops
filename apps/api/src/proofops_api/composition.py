@@ -148,7 +148,9 @@ def build_composition() -> ApiComposition:
         tags=tags,
         classifications=LocalSQLiteClassificationStore(runs.store, uploads, parser, tags, claims),
         reviews=ReviewService(
-            LocalSQLiteReviewStore(runs.store.jobs), load_inputs=tags.load_inputs
+            LocalSQLiteReviewStore(runs.store.jobs),
+            load_inputs=tags.load_inputs,
+            verify_context_sources=tags.verify_context_sources,
         ),
         source_conditions=LocalSourceConditionReview(runs.store, uploads, parser),
         rescores=RescoreService(LocalSQLiteRescoreStore(runs.store), load_inputs=tags.load_inputs),

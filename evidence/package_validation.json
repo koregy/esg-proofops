@@ -1,9 +1,9 @@
 {
-  "checked_at": "2026-09-21T18:10:39.986498+00:00",
+  "checked_at": "2026-09-22T06:17:12.410164+00:00",
   "scope": "documentation, structured contracts and synthetic schema examples only",
   "status": "passed",
-  "checks_total": 971,
-  "passed": 971,
+  "checks_total": 975,
+  "passed": 975,
   "failed": 0,
   "counts": {
     "numbered_documents": 35,
@@ -1755,6 +1755,26 @@
     },
     {
       "name": "openapi_ref:#/components/schemas/Decision",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "openapi_ref:#/components/schemas/ReviewedDimensions",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "openapi_ref:#/components/schemas/NumericContextCheck",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "openapi_ref:#/components/schemas/NumericCandidateReview",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "openapi_ref:#/components/schemas/ReviewedContext",
       "passed": true,
       "detail": ""
     },

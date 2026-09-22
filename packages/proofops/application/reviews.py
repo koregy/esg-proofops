@@ -534,8 +534,15 @@ def _review_category(inputs: ReviewInputs, track: str, review: Any):
 
 
 class ReviewService:
-    def __init__(self, store: ReviewStore, *, load_inputs: Callable[[str, str, str], ReviewInputs]):
+    def __init__(
+        self,
+        store: ReviewStore,
+        *,
+        load_inputs: Callable[[str, str, str], ReviewInputs],
+        verify_context_sources=None,
+    ):
         self.store, self.load_inputs = store, load_inputs
+        self.verify_context_sources = verify_context_sources
 
     def _review(self, inputs: ReviewInputs, review_id: str | None = None) -> dict:
         inputs.validate()
@@ -619,6 +626,7 @@ class ReviewService:
         applicability_review: dict | None = None,
         safe_harbor_review: dict | None = None,
         category_review: dict | None = None,
+        context_review: dict | None = None,
         reopen: bool = False,
     ):
         """Trusted backend-only operation for explicit user-delegated AI review.
@@ -660,6 +668,7 @@ class ReviewService:
             applicability_review=applicability_review,
             safe_harbor_review=safe_harbor_review,
             category_review=category_review,
+            context_review=context_review,
             reopen=reopen,
         )
 
@@ -678,6 +687,7 @@ class ReviewService:
         applicability_review=None,
         safe_harbor_review=None,
         category_review=None,
+        context_review=None,
         reopen=False,
     ):
         if not isinstance(actor, AuthContext) or not actor.has_capability("reviewer"):
@@ -814,8 +824,69 @@ class ReviewService:
                 previous_names |= {f.name for f in safe_harbor_facts}
             new_facts = [f for n, f in facts.items() if n not in previous_names] + reviewed_facts
             new_facts += safe_harbor_facts
+            prior_context = initial.get("claim_context_review") if reopen else None
+            context_request = (
+                context_review
+                if context_review is not None
+                else (prior_context.get("request") if isinstance(prior_context, dict) else None)
+            )
+            context_receipt = None
+            if context_request is not None:
+                from proofops.application.claim_context_review import review_facility_context
+
+                if body["track"] != "performance":
+                    raise ReviewRejected("CONTEXT_TRACK_MISMATCH")
+                prior_p6 = next((e for e in initial["elements"] if e["element_id"] == "P6"), None)
+                frozen_model_conflict = any(
+                    e.element_id == "P6" and e.state == "conflict"
+                    for run in inputs.tag_runs
+                    if run.guarded
+                    for e in run.guarded.elements
+                )
+                if prior_p6 and (
+                    prior_p6["state"] == "present"
+                    or (prior_p6["state"] == "conflict" and not frozen_model_conflict)
+                ):
+                    raise ReviewRejected("CONTEXT_CANNOT_OVERRIDE_NUMERIC_RESULT")
+                try:
+                    context_receipt = review_facility_context(
+                        inputs, context_request, self.verify_context_sources
+                    )
+                except (ValueError, KeyError, TypeError) as exc:
+                    raise ReviewRejected("CONTEXT_REVIEW_REJECTED") from exc
+                original_refs = {
+                    canonical_hash(asdict(ref)): ref
+                    for run in inputs.tag_runs
+                    if run.guarded
+                    for e in run.guarded.elements
+                    if e.element_id == "P6"
+                    for ref in e.evidence_refs
+                }
+                if prior_p6 and any(
+                    canonical_hash(ref) not in original_refs for ref in prior_p6["evidence_refs"]
+                ):
+                    raise ReviewRejected("CONTEXT_CANNOT_OVERRIDE_NUMERIC_RESULT")
+                if context_review is None and prior_context is not None:
+                    if canonical_hash(context_receipt["source_receipt"]) != canonical_hash(
+                        prior_context["source_receipt"]
+                    ):
+                        raise ReviewRejected("CONTEXT_SOURCE_REPLAY_MISMATCH", 409)
+                    context_receipt["carried_from"] = prior_context.get(
+                        "carried_from", prior_provenance
+                    )
             checked_elements = []
             for element in elements:
+                if element.element_id == "P6" and context_receipt is not None:
+                    # The caller cannot choose the computed state. No accepted
+                    # table binding -> unknown, with every old citation retained.
+                    element = replace(
+                        element,
+                        state="unknown",
+                        normalized_value=None,
+                        evidence_refs=tuple(original_refs.values()),
+                        credited_from=None,
+                        reason_code="NUMERIC_BINDING_REQUIRED",
+                    )
                 names = MAPPINGS[body["track"]][element.element_id]
                 previous = [facts.get(name) for name in names]
                 refs = tuple(
@@ -976,6 +1047,8 @@ class ReviewService:
                 if category_carried and category_ancestry:
                     category_receipt = {**category_receipt, "carried_from": category_ancestry}
                 tag["category_review"] = category_receipt
+            if context_receipt is not None:
+                tag["claim_context_review"] = context_receipt
             if extra_tag:
                 tag.update(extra_tag)
             return tag, dict(
@@ -990,6 +1063,8 @@ class ReviewService:
                 trusted_options["safe_harbor_review"] = safe_harbor_review
             if category_review is not None:
                 trusted_options["category_review"] = category_review
+            if context_review is not None:
+                trusted_options["context_review"] = context_review
             # Every supplied trusted option joins the retry identity on EVERY
             # callable surface, not only when an AI provenance label is present:
             # a same-key retry with a changed receipt must conflict, never replay.

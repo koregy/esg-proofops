@@ -207,6 +207,46 @@ class LocalTagStore:
         self.store, self.uploads, self.parser = store, uploads, parser
         self.claims = LocalClaimStore(store, uploads, parser)
 
+    def verify_context_sources(self, inputs, refs):
+        """Source-only supplementary paragraph attestations; never mutate frozen inputs."""
+        from dataclasses import replace
+
+        from proofops.adapters.local.claim_source_verification import attest_claim_spans
+        from proofops.application.evidence.span_citations import (
+            span_verified_graph,
+            verify_source_ref,
+        )
+
+        claim, graph = inputs.context.claim, inputs.original
+        if not 1 <= len(refs) <= 6:
+            raise ValueError("CONTEXT_SOURCE_LIMIT")
+        source = self.uploads.read_original(claim.tenant_id, claim.document_version_id)
+        if sha256(source).hexdigest() != graph.source_sha256:
+            raise ValueError("CONTEXT_SOURCE_MISMATCH")
+        unresolved = tuple(
+            r
+            for r in refs
+            if verify_source_ref(r, graph, tenant_id=claim.tenant_id).verification_state
+            != "verified"
+        )
+        receipt = attest_claim_spans(graph, source, unresolved, tenant_id=claim.tenant_id)
+        if any(r["status"] != "verified" for r in receipt["records"]):
+            raise ValueError("CONTEXT_SOURCE_REJECTED")
+        scoped = span_verified_graph(
+            graph,
+            (
+                *getattr(graph, "verified_spans", ()),
+                *(replace(r, verification_state="verified") for r in unresolved),
+            ),
+            canonical_hash(
+                dict(
+                    prior=getattr(graph, "span_receipt_sha256", ""),
+                    supplemental=receipt["artifact_sha256"],
+                )
+            ),
+        )
+        return scoped, receipt
+
     def _load_snapshot_with_evidence(self, tenant_id, run_id):
         # Share the evidence replay used to verify the tag checkpoint pins.
         run = self.store.jobs.get_run(tenant_id, run_id)

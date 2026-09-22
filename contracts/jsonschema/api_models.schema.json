@@ -1304,6 +1304,16 @@
               "type": "null"
             }
           ]
+        },
+        "reviewed_context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReviewedContext"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -4010,6 +4020,110 @@
         "reasons"
       ],
       "title": "ObservationSourceHolds",
+      "type": "object"
+    },
+    "ReviewedContext": {
+      "additionalProperties": false,
+      "properties": {
+        "origin": {
+          "const": "ai_delegated",
+          "title": "Origin",
+          "type": "string"
+        },
+        "dimensions": {
+          "$ref": "#/$defs/ReviewedDimensions"
+        },
+        "numeric_check": {
+          "$ref": "#/$defs/NumericContextCheck"
+        }
+      },
+      "required": [
+        "origin",
+        "dimensions",
+        "numeric_check"
+      ],
+      "title": "ReviewedContext",
+      "type": "object"
+    },
+    "ReviewedDimensions": {
+      "additionalProperties": false,
+      "properties": {
+        "facility": {
+          "$ref": "#/$defs/SourceRef"
+        },
+        "reporting_period": {
+          "$ref": "#/$defs/SourceRef"
+        },
+        "metric": {
+          "$ref": "#/$defs/SourceRef"
+        },
+        "value": {
+          "$ref": "#/$defs/SourceRef"
+        },
+        "unit": {
+          "$ref": "#/$defs/SourceRef"
+        }
+      },
+      "required": [
+        "facility",
+        "reporting_period",
+        "metric",
+        "value",
+        "unit"
+      ],
+      "title": "ReviewedDimensions",
+      "type": "object"
+    },
+    "NumericContextCheck": {
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "const": "needs_review",
+          "title": "Status",
+          "type": "string"
+        },
+        "reason": {
+          "const": "no_comparable_table_observation",
+          "title": "Reason",
+          "type": "string"
+        },
+        "considered": {
+          "items": {
+            "$ref": "#/$defs/NumericCandidateReview"
+          },
+          "title": "Considered",
+          "type": "array"
+        }
+      },
+      "required": [
+        "status",
+        "reason",
+        "considered"
+      ],
+      "title": "NumericContextCheck",
+      "type": "object"
+    },
+    "NumericCandidateReview": {
+      "additionalProperties": false,
+      "properties": {
+        "source_ref": {
+          "$ref": "#/$defs/SourceRef"
+        },
+        "status": {
+          "enum": [
+            "claim_source",
+            "outside_reviewed_section",
+            "unresolved"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_ref",
+        "status"
+      ],
+      "title": "NumericCandidateReview",
       "type": "object"
     }
   }

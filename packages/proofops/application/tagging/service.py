@@ -559,6 +559,11 @@ def tag_replicates(
                     state = "unknown"
             elif state in ("absent", "not_applicable"):
                 state = "unknown"
+            if element.element_id == "P6" and element.state in ("present", "conflict"):
+                # Both agreement AND contradiction require the numeric service.
+                # Retain the raw vote and citations for review, never a model verdict.
+                state = "unknown"
+                errors.append("DETERMINISTIC_CHECK_REQUIRED:P6")
             if state in ("unknown", "conflict"):
                 errors.append(f"UNRESOLVED:{element.element_id}")
             scope = next(
@@ -617,7 +622,7 @@ def tag_replicates(
                     },
                     track=track.track,
                     safe_harbor_category=track.safe_harbor_category,
-                    guard_version="tagging-010-v3-local-identity",
+                    guard_version="tagging-010-v4-numeric-origin",
                 )
             ),
         )

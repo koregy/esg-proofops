@@ -67,6 +67,26 @@ type ReviewProjection = {
   field_agreements: FieldAgreement[];
   raw_candidates?: ReviewCandidate[];
 };
+// Optional read projection of the trusted local AI review (policy
+// facility_section_context_v1). Origin is always an AI delegation, never human
+// gold. numeric_check stays on hold: no same-scope bound table observation means
+// P6 unknown/needs_review, never a grade pass. Old responses omit this field.
+type ReviewedContextConsidered = { source_ref: SourceRef; status: string };
+type ReviewedContext = {
+  origin: "ai_delegated";
+  dimensions: {
+    facility: SourceRef;
+    reporting_period: SourceRef;
+    metric: SourceRef;
+    value: SourceRef;
+    unit: SourceRef;
+  };
+  numeric_check: {
+    status: "needs_review";
+    reason: "no_comparable_table_observation";
+    considered: ReviewedContextConsidered[];
+  };
+};
 type ClaimDetail = {
   claim: ClaimSummary;
   source_refs: SourceRef[];
@@ -84,6 +104,7 @@ type ClaimDetail = {
   }>;
   rulepack_approved_by?: string | null;
   review_projection?: ReviewProjection | null;
+  reviewed_context?: ReviewedContext | null;
 };
 type LoadState = "loading" | "ready" | "pending" | "error";
 
@@ -175,6 +196,19 @@ const fieldAgreementText: Record<FieldAgreement["status"], string> = {
   unresolved: "미해결",
 };
 
+// Reviewed-context dimension labels for the AI-delegated review read projection.
+const reviewedDimensionText: Record<keyof ReviewedContext["dimensions"], string> = {
+  facility: "사업장",
+  reporting_period: "보고기간",
+  metric: "지표",
+  value: "값",
+  unit: "단위",
+};
+
+// A considered comparison lying outside the reviewed section is excluded from
+// the reviewed-context read; surface only its count so the hold reason stays honest.
+const OUTSIDE_REVIEWED_SECTION = "outside_reviewed_section";
+
 function decisionText(decision: Decision | null): string {
   if (!decision) return "판정 미확정 · 상세 확인";
   if (decision.decision_status !== "decided") return pendingDecisionText[decision.decision_status];
@@ -187,6 +221,37 @@ function decisionTone(decision: Decision | null): "neutral" | "success" | "warni
   if (decision.decision_status !== "decided") return "warning";
   if (decision.evidence_grade === "E3") return "success";
   return decision.evidence_grade === "E0" ? "danger" : "warning";
+}
+
+// Small read-only projection of the trusted local AI review. It shows the
+// reviewed facility/period/metric and value+unit with source quote and page,
+// states honestly that provenance is an AI delegation (not human gold), and
+// keeps P6 on hold (never a grade pass). It reads only from the optional
+// claim-detail field, issues no network requests, adds no editing controls,
+// and relies on React's default escaping. Old/missing responses render nothing.
+export function ReviewedContextSection({ context }: { context: ReviewedContext }) {
+  const dimensionKeys = ["facility", "reporting_period", "metric", "value", "unit"] as const;
+  const excludedCount = context.numeric_check.considered.filter(
+    item => item.status === OUTSIDE_REVIEWED_SECTION,
+  ).length;
+  return <section aria-labelledby="reviewed-context-heading">
+    <h3 id="reviewed-context-heading">AI 검토 사업장 맥락 (위임·사람 확정 아님)</h3>
+    <p>사용자가 위임한 AI 검토 결과입니다. 아래 원문 인용과 쪽을 함께 확인하세요.</p>
+    <dl>
+      {dimensionKeys.map(key => {
+        const ref = context.dimensions[key];
+        return <div key={key}>
+          <dt>{reviewedDimensionText[key]}</dt>
+          <dd>{ref.page_num}쪽 · “{ref.quote}”</dd>
+        </div>;
+      })}
+    </dl>
+    <p>P6 수치 대조: 검토 필요 · 동일 사업장·기간의 비교 근거가 없습니다.</p>
+    <p role="status">비교 가능한 표 근거를 연결해야 수치 일치 여부를 판단할 수 있습니다.</p>
+    {excludedCount > 0
+      ? <p>검토 구간 밖으로 제외된 비교 후보: {excludedCount}건</p>
+      : null}
+  </section>;
 }
 
 export function ClaimWorkspace(props: ClaimWorkspaceProps) {
@@ -329,6 +394,9 @@ function ClaimDetailView({ apiBase = "", csrfToken, tenantKey, session, runId, c
         <h3>보증 연결</h3>{detail.assurance.status === "undetermined" ? <p>보증 범위를 확인할 수 없습니다. 보고서 전체가 보증되었다고 간주하지 않습니다.</p> : <p>{detail.assurance.status === "covered" ? "보증 범위 안" : "보증 범위 밖"} · {detail.assurance.level ?? "수준 미확인"} · {detail.assurance.provider ?? "기관 미확인"}</p>}
         {detail.suggestion ? <><h3>수정 제안</h3><p>{detail.suggestion}</p></> : null}
         <h3>기준 근거</h3>{detail.basis_refs.length ? <ul>{detail.basis_refs.map((basis, index) => <li key={`${basis.standard}:${basis.clause}:${index}`}>{basis.standard} {basis.clause ?? "조항 미확정"}: {basis.summary} ({basisVerificationText[basis.verification_status]})</li>)}</ul> : <p>표시할 검증된 기준 근거가 없습니다.</p>}
+        {detail.reviewed_context && detail.reviewed_context.origin === "ai_delegated"
+          ? <ReviewedContextSection context={detail.reviewed_context} />
+          : null}
         <PreliminaryClassification apiBase={apiBase} runId={runId} claimId={claimId} untagged={untagged} session={session} onSessionInvalid={onSessionInvalid} />
         {projection && projection.schema_version === 1 ? <section aria-labelledby="review-projection-heading"><h3 id="review-projection-heading">모델 태깅 당시 후보 (미확정)</h3>
           <p role="status">모델 태깅 당시의 미확정 기록입니다. 현재 검토 결과는 위의 태깅과 판정에 표시됩니다. 후보를 채택하려면 원문 검증을 통과해야 합니다.</p>

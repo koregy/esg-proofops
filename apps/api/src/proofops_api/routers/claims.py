@@ -181,6 +181,31 @@ class ReviewProjection(StrictDTO):
     raw_candidates: list[RawCandidate] = Field(default_factory=list)
 
 
+class ReviewedDimensions(StrictDTO):
+    facility: SourceRef
+    reporting_period: SourceRef
+    metric: SourceRef
+    value: SourceRef
+    unit: SourceRef
+
+
+class NumericCandidateReview(StrictDTO):
+    source_ref: SourceRef
+    status: Literal["claim_source", "outside_reviewed_section", "unresolved"]
+
+
+class NumericContextCheck(StrictDTO):
+    status: Literal["needs_review"]
+    reason: Literal["no_comparable_table_observation"]
+    considered: list[NumericCandidateReview]
+
+
+class ReviewedContext(StrictDTO):
+    origin: Literal["ai_delegated"]
+    dimensions: ReviewedDimensions
+    numeric_check: NumericContextCheck
+
+
 class ClaimDetail(StrictDTO):
     claim: ClaimSummary
     source_refs: list[SourceRef]
@@ -193,6 +218,7 @@ class ClaimDetail(StrictDTO):
     tag_status: Literal["tagged", "untagged"] | None = None
     rulepack_approved_by: str | None = None
     review_projection: ReviewProjection | None = None
+    reviewed_context: ReviewedContext | None = None
 
 
 def build_claims_router(claims, auth_store, *, tags=None, assurance=None, clock=time.time):
@@ -519,6 +545,7 @@ def build_claims_router(claims, auth_store, *, tags=None, assurance=None, clock=
                 claim=summary,
                 source_refs=[asdict(ref) for ref in claim.source_refs],
                 elements=tag["elements"],
+                reviewed_context=(tag.get("claim_context_review") or {}).get("projection"),
                 assurance=match.to_dict(),
                 replicate_request_ids=[run.request.request_id for run in inputs.tag_runs],
                 packet_sha256=inputs.packet.packet_sha256,

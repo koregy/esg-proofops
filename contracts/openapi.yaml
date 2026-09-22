@@ -6258,10 +6258,91 @@ components:
       - period_match
       - boundary_match
       - evidence_refs
+    ReviewedContext:
+      additionalProperties: false
+      properties:
+        origin:
+          const: ai_delegated
+          title: Origin
+          type: string
+        dimensions:
+          $ref: '#/components/schemas/ReviewedDimensions'
+        numeric_check:
+          $ref: '#/components/schemas/NumericContextCheck'
+      required:
+      - origin
+      - dimensions
+      - numeric_check
+      title: ReviewedContext
+      type: object
+    ReviewedDimensions:
+      additionalProperties: false
+      properties:
+        facility:
+          $ref: '#/components/schemas/SourceRef'
+        reporting_period:
+          $ref: '#/components/schemas/SourceRef'
+        metric:
+          $ref: '#/components/schemas/SourceRef'
+        value:
+          $ref: '#/components/schemas/SourceRef'
+        unit:
+          $ref: '#/components/schemas/SourceRef'
+      required:
+      - facility
+      - reporting_period
+      - metric
+      - value
+      - unit
+      title: ReviewedDimensions
+      type: object
+    NumericContextCheck:
+      additionalProperties: false
+      properties:
+        status:
+          const: needs_review
+          title: Status
+          type: string
+        reason:
+          const: no_comparable_table_observation
+          title: Reason
+          type: string
+        considered:
+          items:
+            $ref: '#/components/schemas/NumericCandidateReview'
+          title: Considered
+          type: array
+      required:
+      - status
+      - reason
+      - considered
+      title: NumericContextCheck
+      type: object
+    NumericCandidateReview:
+      additionalProperties: false
+      properties:
+        source_ref:
+          $ref: '#/components/schemas/SourceRef'
+        status:
+          enum:
+          - claim_source
+          - outside_reviewed_section
+          - unresolved
+          title: Status
+          type: string
+      required:
+      - source_ref
+      - status
+      title: NumericCandidateReview
+      type: object
     ClaimDetail:
       type: object
       additionalProperties: false
       properties:
+        reviewed_context:
+          anyOf:
+          - $ref: '#/components/schemas/ReviewedContext'
+          - type: 'null'
         claim:
           $ref: '#/components/schemas/ClaimSummary'
         source_refs:

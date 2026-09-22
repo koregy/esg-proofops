@@ -1,4 +1,4 @@
 Status: passed
-Checks: 971 | passed: 971 | failed: 0
+Checks: 975 | passed: 975 | failed: 0
 {"numbered_documents": 35, "requirements": 43, "tasks": 46, "api_operations": 60, "rule_vectors": 28, "edge_vectors": 24}
 Scope: documentation/contracts only; no application/model/cloud/PDF benchmark execution.

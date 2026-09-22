@@ -91,6 +91,9 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="Explicit removal of a wrong safe-harbor category; observed value must be pinned.",
     )
     parser.add_argument(
+        "--context-review-json", help="Source-backed facility section context JSON."
+    )
+    parser.add_argument(
         "--delegated-reviewer",
         required=True,
         help="Trusted local operator id, e.g. coordinator@orca.local.",
@@ -212,6 +215,16 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"ok": False, "error": "CATEGORY_REVIEW_CONFLICTS_SAFE_HARBOR"}))
         return 1
 
+    context_review = None
+    if args.context_review_json:
+        try:
+            context_review = json.loads(Path(args.context_review_json).read_text(encoding="utf-8"))
+            if not isinstance(context_review, dict):
+                raise ValueError("expected object")
+        except (OSError, ValueError):
+            print(json.dumps({"ok": False, "error": "context review JSON invalid"}))
+            return 1
+
     database_path = Path(args.state_db)
     # Same wiring as apps/api composition: real loader guards, no shortcuts.
     from proofops.adapters.local.review_store import LocalSQLiteReviewStore  # noqa: E402
@@ -253,7 +266,11 @@ def main(argv: list[str] | None = None) -> int:
     uploads = UploadService(database_path, database_path.parent / "objects", registry)
     parser = OpenDataLoaderParser(database_path.parent / "parser-prepared")
     tags = LocalTagStore(runs, uploads, parser)
-    service = _ReviewService(LocalSQLiteReviewStore(runs.jobs), load_inputs=tags.load_inputs)
+    service = _ReviewService(
+        LocalSQLiteReviewStore(runs.jobs),
+        load_inputs=tags.load_inputs,
+        verify_context_sources=tags.verify_context_sources,
+    )
 
     store = service.store
     try:
@@ -331,6 +348,19 @@ def main(argv: list[str] | None = None) -> int:
             "packet_sha256": receipt["identity"]["packet_sha256"],
             "note": "removal only; observed headers and packet stay pinned",
         }
+    if context_review is not None:
+        from proofops.application.claim_context_review import review_facility_context
+
+        try:
+            replayed = service.load_inputs(args.tenant_id, review["run_id"], review["claim_id"])
+            replayed.validate()
+            receipt = review_facility_context(replayed, context_review, tags.verify_context_sources)
+            report["context_review_validation"] = receipt["projection"]
+        except (ValueError, KeyError, TypeError) as exc:
+            print(
+                json.dumps({"ok": False, "error": str(exc), "stage": "context_review_validation"})
+            )
+            return 1
     if not args.apply:
         report["applied"] = False
         report["note"] = (
@@ -364,6 +394,7 @@ def main(argv: list[str] | None = None) -> int:
             applicability_review=applicability_review,
             safe_harbor_review=safe_harbor_review,
             category_review=category_review,
+            context_review=context_review,
             reopen=args.re_review,
         )
     except Exception as exc:  # noqa: BLE001
