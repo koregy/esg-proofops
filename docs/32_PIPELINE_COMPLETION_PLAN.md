@@ -783,3 +783,12 @@ R00의 충돌·호환성 경계를 필요한 범위만 정리한 뒤 R01 비교�
 - 기존 operator draft/import 경로로 C1/C2 case를 실제 등록·실행했다. C1 `e12c4d0b-b7db-4cfc-9dfe-68b3710c07d5`, C2 `bf7d961e-f37c-4295-b398-ef37c1e84276`, 둘 다 revision2/pending/blocked(policy_unapproved). C1 전체 법인 집합은 미확정(null). C2는 시설 범위가 아니라 기간 비교이며 활동 월을 달력 구간으로 기록한 AI 초안이다. 활동 월과 재무 보고기간의 comparability=unknown, 자동 trigger 없음. FY2025 DART 접수번호·공시일, 승인 정책과 검색 전수성은 여전히 미확정이다. 이 실행은 자동 build_packet 생산 완료/실서비스 준비 완료가 아니다.
 - 실제 새 모델56호출의 보수적 장부 비용 USD0.0472117800. 앞선 응답 중 원본 request signature·공급자 usage·model·응답 hash를 검증한 truncation1건만 USD1 예약→USD0.0009291150으로 오프라인 정산했다. 잘린 출력은 거부 유지, 나머지 미정산12건과 USD20 한도는 그대로다. 새 실행 후 장부 합계 USD18.048727982200000000059(실제 비용과 미정산 예약의 합)이며 콘솔 잔액을 뜻하지 않는다.
 - 검증: reconciliation 전체와 pilot config/stage-failure 검사575통과·12skip, 변경 lint/type 및 diff check 통과. 실제 claim API200과 제품 대사 등록/평가를 확인했다. UI/AWS 검증은 이번 범위에서 not_run. ROOT `outputs/agent-results/R25-real-company/`에 실행/원문/정산/검사 기록, `developer-b/`에 실제 ID·claim3건·두 import 초안·관측 결과·미정 항목을 둔다. IDs만으로 B DB에 레코드가 생기지 않으며 A의 통합 DB에서 재현한다. local_synthetic=true를 유지한다.
+
+
+### R30 · 2026-09-22 데이터관리자 첫 제출 수정 및 수치 경로 보완
+
+- 기아 원문 기반 5개 주장/34개 요소의 수정본과 변경 이력을 `outputs/agent-results/R30`(프로젝트 루트)에 작성. 실제 PDF 위치 56곳 재검증, 유료 모델 호출 0.
+- CSV 입력 검사에 상태/수치/참조/검토 조건 추가. 미확정 데이터를 정답이나 승인 정책으로 자동 승격하지 않음.
+- 수치 엔진 growth/product_reduction 및 명시적으로 검토한 동일 계산조건 각주 연결 지원. 두 실제 사례가 수치상 consistent; 기존 합계 해시 호환성과 원문 변조 거절 검증.
+- 관련 검사 321 passed / 11 skipped; lint/format/mypy/architecture 통과.
+- C01 범위·반올림/보증, 비율형 목표 등 도메인 미정, 정답 확정·권리, 재무 대조 및 다른 기업 평가 범위는 유지. 생산 DB 등록·전체 보고서 자동 실행·최종 등급 완료를 뜻하지 않음.
