@@ -121,7 +121,7 @@ def validate_source_bytes(
             raise SourceVerificationError("quote_mismatch")
         return
     if format_name == "pdf":
-        match = re.fullmatch(r"page:([1-9][0-9]*)", locator)
+        match = re.fullmatch(r"page:([1-9][0-9]*)(:whitespace-v1)?", locator)
         if match is None or not payload.startswith(b"%PDF-"):
             raise SourceVerificationError("unsupported_locator")
         try:
@@ -140,7 +140,19 @@ def validate_source_bytes(
             raise
         except Exception as exc:
             raise SourceVerificationError("pdf_invalid") from exc
-        if text is None or quote not in text:
+        if match.group(2) is not None:
+            # Opt-in locator version: preserve every non-whitespace character.
+            # Legacy page:N remains literal; no OCR, fuzzy matching or token joining.
+            normalized = " ".join((text or "").split())
+            canonical_quote = " ".join(quote.split())
+            if not canonical_quote or quote != canonical_quote:
+                raise SourceVerificationError("quote_not_canonical")
+            start = normalized.find(quote)
+            if start < 0:
+                raise SourceVerificationError("quote_mismatch")
+            if normalized.find(quote, start + 1) >= 0:
+                raise SourceVerificationError("locator_ambiguous")
+        elif text is None or quote not in text:
             raise SourceVerificationError("quote_mismatch")
         return
     raise SourceVerificationError("unsupported_locator")

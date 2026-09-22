@@ -7,6 +7,26 @@ from proofops.application.tagging.service import TaggingSettings
 from evaluation.local_upstage_pilot import live_tagging_settings
 
 
+def test_pilot_company_identity_is_explicit_and_new_run_only():
+    from evaluation.local_upstage_pilot import pilot_company_body
+
+    assert pilot_company_body(None, None, existing=False) == dict(
+        legal_name="실제 보고서 검토 시험", aliases=[], registration_identifier=None
+    )
+    assert pilot_company_body("네이버 주식회사", "DART:00266961", existing=False) == dict(
+        legal_name="네이버 주식회사", aliases=[], registration_identifier="DART:00266961"
+    )
+    for name, identifier, existing in (
+        ("네이버 주식회사", None, False),
+        (None, "DART:00266961", False),
+        (" ", "DART:00266961", False),
+        ("네이버 주식회사", " ", False),
+        ("네이버 주식회사", "DART:00266961", True),
+    ):
+        with pytest.raises(ValueError):
+            pilot_company_body(name, identifier, existing=existing)
+
+
 def test_live_pilot_settings_have_independent_real_profiles():
     result = live_tagging_settings(12)
     preliminary, tagging = (

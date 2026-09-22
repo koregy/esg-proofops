@@ -27,6 +27,21 @@ from fastapi import Request
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def pilot_company_body(legal_name, registration_identifier, *, existing: bool) -> dict:
+    """Explicit company identity belongs to a new run, never a stored snapshot."""
+    if legal_name is None and registration_identifier is None:
+        return dict(legal_name="실제 보고서 검토 시험", aliases=[], registration_identifier=None)
+    if existing:
+        raise ValueError("company identity cannot change on an existing run")
+    if any(not isinstance(v, str) or not v.strip() for v in (legal_name, registration_identifier)):
+        raise ValueError("--company-name and --company-registration are required together")
+    return dict(
+        legal_name=legal_name.strip(),
+        aliases=[],
+        registration_identifier=registration_identifier.strip(),
+    )
+
+
 def extraction_budget_settings(batch_calls: int, total_calls: int | None = None) -> dict:
     """Freeze a finite run allowance independently of each 1..20-source batch.
 
@@ -404,6 +419,8 @@ def main():
     parser.add_argument("--report-year", type=int)
     parser.add_argument("--period-start")
     parser.add_argument("--period-end")
+    parser.add_argument("--company-name", help="Explicit legal name for a NEW run")
+    parser.add_argument("--company-registration", help="Verified identifier, e.g. DART:00266961")
     parser.add_argument(
         "--resume",
         action="store_true",
@@ -595,6 +612,14 @@ def main():
         parser.error(str(exc))
     resume_state = args.state.resolve()
     resume_manifest = resume_state / "pilot.json"
+    try:
+        company_body = pilot_company_body(
+            args.company_name,
+            args.company_registration,
+            existing=args.resume or resume_manifest.exists(),
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
     if args.resume:
         if args.invoke:
             parser.error("--resume is read-only for model calls; omit --invoke")
@@ -970,10 +995,7 @@ def main():
         else:
             c.rulepack_store.add_pack(draft_pack, files)
             run_rule_pack_id = pack_id
-        company = post(
-            "/v1/companies",
-            dict(legal_name="실제 보고서 검토 시험", aliases=[], registration_identifier=None),
-        )
+        company = post("/v1/companies", company_body)
         document = post(
             "/v1/documents",
             dict(
@@ -1020,6 +1042,9 @@ def main():
         )
         manifest = dict(
             tenant_id=tenant,
+            company_id=company["company_id"],
+            company_legal_name=company_body["legal_name"],
+            company_registration_identifier=company_body["registration_identifier"],
             run_id=run["run_id"],
             document_version_id=version["resource_id"],
             source_path=str(args.pdf.resolve()),

@@ -1,5 +1,18 @@
 # 27 · 파싱·표 검증·근거 좌표 상세 계약
 
+## R25 · 로컬 대사 PDF 인용 연결 (2026-09-22)
+
+대사 reader의 기존 `page:N` locator는 문자 그대로 일치하는 검증을 유지한다.
+새 초안에서 명시한 `page:N:whitespace-v1`만 PDF 텍스트의 연속 공백·줄바꿈을
+공백 하나로 정규화하여 canonical 인용을 확인한다. 인용 자체도 같은 canonical
+형식이어야 하며, 지정 페이지에서 일치 위치가 하나여야 한다. 공백 제거,
+숫자·문장부호·단어 변경, OCR 추측은 허용하지 않는다. 원본 PDF의 SHA-256과
+페이지 검증, 제품 claim의 원문 재생 및 tenant/company/version 연결은 그대로다.
+이는 페이지 텍스트 내 인용 확인이지 별도의 의미 귀속 승인이나 표 행 연결 승인이 아니다.
+기존 packet/revision을 수정하지 않으며 API/DB 필드·migration 변경은 없다.
+이 버전을 모르는 reader는 새 locator를 거절한다. 롤백 시 해당 새 초안을 이전
+reader에 배정하지 않고 기존 문자 일치 locator의 읽기 경로만 계속 사용한다.
+
 > ESG ProofOps · 개발 명세 1.0 · 2026-09-08
 > 도메인 정본: `sources/PROJECT_DOMAIN_V2_ORIGINAL.md` (원문 2.0, 2026-09-07).
 

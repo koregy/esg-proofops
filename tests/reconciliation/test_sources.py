@@ -101,6 +101,57 @@ def test_pdf_page_quote_is_extracted_without_bbox(tmp_path: Path):
         reader.validate(_ref("doc", payload, "page:2", "Verified PDF quote"))
 
 
+def test_pdf_explicit_whitespace_locator_preserves_text_and_refuses_ambiguity(tmp_path):
+    from pypdf import PdfWriter
+    from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
+
+    writer = PdfWriter()
+    page = writer.add_blank_page(width=300, height=300)
+    page[NameObject("/Resources")] = DictionaryObject(
+        {
+            NameObject("/Font"): DictionaryObject(
+                {
+                    NameObject("/F1"): DictionaryObject(
+                        {
+                            NameObject("/Type"): NameObject("/Font"),
+                            NameObject("/Subtype"): NameObject("/Type1"),
+                            NameObject("/BaseFont"): NameObject("/Helvetica"),
+                        }
+                    )
+                }
+            )
+        }
+    )
+    stream = DecodedStreamObject()
+    stream.set_data(
+        b"BT /F1 12 Tf 20 250 Td (NAVER   reused) Tj 0 -20 Td "
+        b"(870000 cups in 2025) Tj 0 -20 Td (duplicate   words) Tj "
+        b"0 -20 Td (duplicate words) Tj ET"
+    )
+    page[NameObject("/Contents")] = writer._add_object(stream)
+    path = tmp_path / "source.pdf"
+    writer.write(path)
+    payload = path.read_bytes()
+    reader = FileSourceReader(
+        tmp_path, {"doc": {"path": path.name, "format": "pdf", "sha256": _sha(payload)}}
+    )
+    quote = "NAVER reused 870000 cups in 2025"
+    ref = _ref("doc", payload, "page:1:whitespace-v1", quote)
+    assert reader.validate(ref)
+    with pytest.raises(SourceReadError, match="quote_mismatch"):
+        reader.validate({**ref, "locator": "page:1"})
+    for wrong in (
+        quote.replace("870000", "870001"),
+        quote.replace("reused", "re used"),
+        quote.replace("2025", "2024"),
+        "duplicate words",
+    ):
+        with pytest.raises(SourceReadError):
+            reader.validate({**ref, "quote": wrong})
+    with pytest.raises(SourceReadError, match="unsupported_locator"):
+        reader.validate({**ref, "locator": "page:1:whitespace-v2"})
+
+
 def test_reader_rejects_root_escape_and_changed_artifact(tmp_path: Path):
     root = tmp_path / "root"
     root.mkdir()
