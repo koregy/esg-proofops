@@ -319,7 +319,10 @@ def test_run_settings_accept_approved_extraction_opt_ins(tmp_path: Path) -> None
     assert runtime["extraction_profile"].synthetic is False
 
 
-def test_run_settings_accept_the_assertion_prompt_opt_in(tmp_path: Path) -> None:
+@pytest.mark.parametrize("complete_selection", [False, True])
+def test_run_settings_accept_the_assertion_prompt_opt_in(
+    tmp_path: Path, complete_selection
+) -> None:
     """R20 fix 2: assertion prompt validates when paired with source-ids in probe mode."""
     from proofops_api.local_runtime import load_local_runtime
 
@@ -333,6 +336,7 @@ def test_run_settings_accept_the_assertion_prompt_opt_in(tmp_path: Path) -> None
             "extraction_limits": {"max_calls": 2, "max_output_tokens": 128},
             "extraction_source_ids": True,
             "extraction_assertion_prompt": True,
+            **({"extraction_complete_selection": True} if complete_selection else {}),
         },
     )
     runtime = load_local_runtime(
@@ -364,6 +368,18 @@ def test_run_settings_accept_the_assertion_prompt_opt_in(tmp_path: Path) -> None
         ({"extraction_assertion_prompt": False, "extraction_source_ids": True}, "upstage_probe"),
         ({"extraction_assertion_prompt": True, "extraction_source_ids": True}, "local_synthetic"),
         ({"extraction_assertion_prompt": True}, "upstage_probe"),
+        ({"extraction_complete_selection": True}, "upstage_probe"),
+        ({"extraction_complete_selection": True, "extraction_source_ids": True}, "upstage_probe"),
+        ({"extraction_complete_selection": False}, "upstage_probe"),
+        ({"extraction_complete_selection": "yes"}, "upstage_probe"),
+        (
+            {
+                "extraction_complete_selection": True,
+                "extraction_source_ids": True,
+                "extraction_assertion_prompt": True,
+            },
+            "local_synthetic",
+        ),
     ],
 )
 def test_run_settings_reject_bad_extraction_opt_ins(

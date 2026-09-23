@@ -332,6 +332,7 @@ def apply_resume_metadata(args, saved: dict) -> None:
     args.extraction_table_context = bool(saved.get("extraction_table_context", False))
     args.extraction_source_ids = bool(saved.get("extraction_source_ids", False))
     args.extraction_assertion_prompt = bool(saved.get("extraction_assertion_prompt", False))
+    args.extraction_complete_selection = bool(saved.get("extraction_complete_selection", False))
     if saved.get("tagging_max_calls"):
         args.tagging_max_calls = saved["tagging_max_calls"]
     saved_total = saved.get("extraction_total_calls")
@@ -604,6 +605,12 @@ def main():
         help="Require the selected source sentence itself to assert a claim. "
         "Requires --extraction-source-ids; new-run opt-in, pinned on --resume.",
     )
+    parser.add_argument(
+        "--extraction-complete-selection",
+        action="store_true",
+        help="Review every source sentence for claims; requires --extraction-assertion-prompt. "
+        "New-run opt-in, pinned on resume.",
+    )
     parser.add_argument("--tagging-max-calls", type=int, default=12)
     parser.add_argument("--serve", action="store_true")
     parser.add_argument(
@@ -651,6 +658,7 @@ def main():
         requested_table_context = args.extraction_table_context
         requested_source_ids = args.extraction_source_ids
         requested_assertion_prompt = args.extraction_assertion_prompt
+        requested_complete_selection = args.extraction_complete_selection
         requested_preliminary_table = args.preliminary_table_context
         requested_preliminary_role = args.preliminary_table_role
         requested_render_resolution = args.claim_span_render_resolution
@@ -670,6 +678,8 @@ def main():
             parser.error("--resume cannot add extraction source-id selection; create a new run")
         if requested_assertion_prompt and not args.extraction_assertion_prompt:
             parser.error("--resume cannot add extraction assertion prompt; create a new run")
+        if requested_complete_selection and not args.extraction_complete_selection:
+            parser.error("--resume cannot add extraction complete selection; create a new run")
         if requested_preliminary_table and not args.preliminary_table_context:
             parser.error("--resume cannot add preliminary table context; create a new run")
         if requested_preliminary_role and not args.preliminary_table_role:
@@ -708,6 +718,8 @@ def main():
         parser.error("--extraction-table-context requires --extraction-context")
     if args.extraction_assertion_prompt and not args.extraction_source_ids:
         parser.error("--extraction-assertion-prompt requires --extraction-source-ids")
+    if args.extraction_complete_selection and not args.extraction_assertion_prompt:
+        parser.error("--extraction-complete-selection requires --extraction-assertion-prompt")
     if args.raster_ocr and not args.verify_paragraphs:
         parser.error("--raster-ocr requires --verify-paragraphs")
     if args.native_quote_typography and (not args.verify_paragraphs or args.raster_ocr):
@@ -774,6 +786,7 @@ def main():
                     extraction_table_context=args.extraction_table_context,
                     source_ids=args.extraction_source_ids,
                     assertion_prompt=args.extraction_assertion_prompt,
+                    complete_selection=args.extraction_complete_selection,
                 )
             )
         else:
@@ -798,6 +811,8 @@ def main():
             settings["extraction_source_ids"] = True
         if args.extraction_assertion_prompt:
             settings["extraction_assertion_prompt"] = True
+        if args.extraction_complete_selection:
+            settings["extraction_complete_selection"] = True
         settings.update(raster)
         if args.verify_claim_spans:
             settings["claim_source_policy"] = claim_source_policy_for(args)
@@ -1118,6 +1133,8 @@ def main():
             manifest["extraction_source_ids"] = True
         if args.extraction_assertion_prompt:
             manifest["extraction_assertion_prompt"] = True
+        if args.extraction_complete_selection:
+            manifest["extraction_complete_selection"] = True
         with manifest_path.open("x") as stream:
             json.dump(manifest, stream, ensure_ascii=False, indent=2)
     else:

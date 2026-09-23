@@ -132,6 +132,28 @@ ASSERTION_SYSTEM_SUFFIX = (
     "sentences unchanged; do not classify tracks, assign grades, or infer tense."
 )
 
+# Opt-in complete-paragraph selection (R34): appended AFTER ASSERTION_SYSTEM_SUFFIX
+# and only when both source_ids and assertion_prompt are on. The additive bytes are
+# the exact tested wire from the R34 paragraph-selection probe (requests.json SHA
+# 11ede4c376b07ca1d288015fd53c66e0600f28758ff5d87d7f3383b1f38c4dc0) which was
+# derived by subtracting the source-request system_prompt from the probe system.
+# The probe recovered Kakao p48 analysis-activity and modelled-result sentences
+# across 3 replicas while 3 heading controls stayed empty.
+COMPLETE_SELECTION_SYSTEM_SUFFIX = (
+    " Evaluate EVERY supplied sentence independently and return ALL qualifying sentence_ids,"
+    " not just the first or most prominent claim."
+    " A paragraph may contain several claims."
+    " A literal company-specific statement that it performs climate scenario analysis,"
+    " and a stated finding of that analysis, can qualify even when it concerns a"
+    " conditional future financial impact of an environmental transition."
+    " Do not treat a modeled finding as a realized environmental improvement;"
+    " this step only selects statements for later review."
+    " Resolve '이에', '분석 결과', and similar references using the"
+    " supplied paragraph's own sentences without inventing content."
+    " General risk descriptions, topic headings and chart axes still do not qualify"
+    " merely because a nearby sentence is a claim."
+)
+
 _RULE_DESCRIPTOR = [
     "unique-exact-quote-v2-overlapping-occurrences",
     "single-occurrence-required",
@@ -284,6 +306,10 @@ _TABLE_CONTEXT_RULE_ENTRY = "extraction-table-context-v1"
 _SOURCE_ID_RULE_ENTRY = "extraction-source-id-selection-v1"
 # Distinguish assertion-mode receipts from the original source-ID policy.
 _ASSERTION_RULE_ENTRY = "extraction-assertion-prompt-v1"
+# Complete-paragraph selection (R34): appended after the assertion entry;
+# requires assertion_prompt. Pins its own rule so a complete-selection run
+# cannot replay an assertion-only receipt and vice versa.
+_COMPLETE_SELECTION_RULE_ENTRY = "extraction-complete-paragraph-selection-v1"
 # Bounded input/output for the ID wire: a source offering more sentences than
 # this is not served under this profile (its coverage stays unknown) rather than
 # sending an unbounded id list the model could truncate.
@@ -304,6 +330,7 @@ def _system_prompt(
     extraction_table_context: bool,
     source_ids: bool,
     assertion_prompt: bool = False,
+    complete_selection: bool = False,
 ) -> str:
     """The exact prompt sent for an option combination; legacy shapes untouched."""
     if not source_ids:
@@ -321,7 +348,12 @@ def _system_prompt(
             prompt = prompt + TABLE_CONTEXT_SYSTEM_SUFFIX
     # Appended last, after the whole source-ID(+context/table) prompt, exactly
     # as proven on the wire; the base bytes above are never mutated.
-    return prompt + ASSERTION_SYSTEM_SUFFIX if assertion_prompt else prompt
+    if assertion_prompt:
+        prompt = prompt + ASSERTION_SYSTEM_SUFFIX
+    # Appended after assertion suffix when opted in; requires assertion_prompt.
+    if complete_selection:
+        prompt = prompt + COMPLETE_SELECTION_SYSTEM_SUFFIX
+    return prompt
 
 
 def _profile_with_options(
@@ -332,6 +364,7 @@ def _profile_with_options(
     extraction_table_context: bool = False,
     source_ids: bool = False,
     assertion_prompt: bool = False,
+    complete_selection: bool = False,
 ) -> ExtractionProfile:
     """Versioned extraction profile for an explicit option combination.
 
@@ -345,7 +378,10 @@ def _profile_with_options(
     prompt suffix, so a table-context run can never replay a context-only
     receipt and vice versa. ``source_ids`` pins the R14 selection contract
     (its own prompt and rule entry), so an ID-selection response can never be
-    served or replayed under a quote-copy profile.
+    served or replayed under a quote-copy profile. ``complete_selection`` is the
+    R34 full-paragraph selection opt-in: it requires both ``source_ids`` and
+    ``assertion_prompt`` and pins its own rule entry and prompt suffix, so a
+    complete-selection run can never replay an assertion-only receipt.
     """
     if model not in (UPSTAGE_MODEL, MODEL_PRO4):
         raise ValueError("UPSTAGE_MODEL_MISMATCH")
@@ -357,6 +393,7 @@ def _profile_with_options(
             extraction_table_context,
             source_ids,
             assertion_prompt,
+            complete_selection,
         )
     ):
         raise ValueError("UPSTAGE_PROFILE_OPTION_INVALID")
@@ -364,6 +401,10 @@ def _profile_with_options(
         raise ValueError("UPSTAGE_PROFILE_OPTION_INVALID")
     if assertion_prompt and not source_ids:
         # The assertion suffix only refines source-ID mode; it has no wire alone.
+        raise ValueError("UPSTAGE_PROFILE_OPTION_INVALID")
+    if complete_selection and not (source_ids and assertion_prompt):
+        # Complete-selection refines assertion mode; it requires both source-IDs
+        # and the assertion prompt to be on.
         raise ValueError("UPSTAGE_PROFILE_OPTION_INVALID")
     descriptor = [*_RULE_DESCRIPTOR]
     if year_notation:
@@ -376,6 +417,8 @@ def _profile_with_options(
         descriptor.append(_SOURCE_ID_RULE_ENTRY)
     if assertion_prompt:
         descriptor.append(_ASSERTION_RULE_ENTRY)
+    if complete_selection:
+        descriptor.append(_COMPLETE_SELECTION_RULE_ENTRY)
     return ExtractionProfile(
         model_sha256=canonical_hash(
             {"model": model, "provider": "upstage", "transport": "UpstageProbe"}
@@ -386,6 +429,7 @@ def _profile_with_options(
                 extraction_table_context=extraction_table_context,
                 source_ids=source_ids,
                 assertion_prompt=assertion_prompt,
+                complete_selection=complete_selection,
             )
         ),
         rule_sha256=canonical_hash(descriptor),
@@ -407,6 +451,7 @@ class UpstageClaimExtractor:
         extraction_table_context: bool = False,
         extraction_source_ids: bool = False,
         extraction_assertion_prompt: bool = False,
+        extraction_complete_selection: bool = False,
     ) -> None:
         if not callable(getattr(probe, "complete", None)):
             raise ValueError("UPSTAGE_PROBE_REQUIRED")
@@ -426,6 +471,13 @@ class UpstageClaimExtractor:
             # The assertion suffix only refines source-ID selection; enabling it
             # without source-IDs (or with a non-bool) fails closed before any call.
             raise ValueError("UPSTAGE_EXTRACTION_ASSERTION_PROMPT_INVALID")
+        if type(extraction_complete_selection) is not bool or (
+            extraction_complete_selection
+            and not (extraction_source_ids and extraction_assertion_prompt)
+        ):
+            # Complete-selection requires both source-IDs and assertion-prompt;
+            # enabling it without either (or with a non-bool) fails closed.
+            raise ValueError("UPSTAGE_EXTRACTION_COMPLETE_SELECTION_INVALID")
         profile = _profile_with_options(
             getattr(probe, "model", UPSTAGE_MODEL),
             year_notation=extraction_year_notation,
@@ -433,6 +485,7 @@ class UpstageClaimExtractor:
             extraction_table_context=extraction_table_context,
             source_ids=extraction_source_ids,
             assertion_prompt=extraction_assertion_prompt,
+            complete_selection=extraction_complete_selection,
         )
         if type(max_tokens) is not int or not 1 <= max_tokens <= 4096:
             raise ValueError("UPSTAGE_MAX_TOKENS_INVALID")
@@ -447,6 +500,7 @@ class UpstageClaimExtractor:
         self._table_context = extraction_table_context
         self._source_ids = extraction_source_ids
         self._assertion_prompt = extraction_assertion_prompt
+        self._complete_selection = extraction_complete_selection
         self._request_ids: list[tuple[str, str]] = []
 
     def _validate_spans(self, payload: dict, text: str):
@@ -961,6 +1015,7 @@ class UpstageClaimExtractor:
             extraction_table_context=self._table_context,
             source_ids=True,
             assertion_prompt=self._assertion_prompt,
+            complete_selection=self._complete_selection,
         )
         user_data: dict[str, Any] = {
             "tenant_id": packet["tenant_id"],

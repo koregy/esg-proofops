@@ -164,3 +164,17 @@ the existing G1 definition; it neither adds a domain rule nor repairs historical
 classification records. A two-sentence, three-replicate same-Kakao wire comparison
 kept the explicit 2040 deadline and rejected the 2025 designation year in all
 three responses each; this is a bounded prompt result, not corpus accuracy.
+
+### R34 opt-in paragraph selection
+
+New local pilot runs may set `--extraction-complete-selection` together with
+`--extraction-source-ids` and `--extraction-assertion-prompt`. The extraction
+prompt asks for each independently reviewable sentence in a paragraph, preserving
+source-ID quote restoration and all existing evidence admission guards. The
+default remains false; existing prompt/rule hashes and receipts remain unchanged.
+New enabled runs pin distinct prompt/rule hashes. Resume restores the stored flag
+and rejects adding it to a legacy run. Invalid non-boolean or dependent settings
+are rejected. No API response or DB schema changes; no migration is needed.
+Rollback disables the option for new runs and retains pinned settings and
+immutable artifacts for existing runs. Complete selection does not establish
+complete recall, claim correctness, or approval of any final grade.

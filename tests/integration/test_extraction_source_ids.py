@@ -414,3 +414,34 @@ def test_assertion_receipt_rejects_replay_under_the_wrong_profile(tmp_path):
     # Two distinct request ids -> two distinct receipt directories, no crossover.
     assert probe.calls[0]["request_id"] != plain_probe.calls[0]["request_id"]
     assert probe.calls[0]["system"] != plain_probe.calls[0]["system"]
+
+
+def test_complete_selection_restores_all_three_kakao_sentences_and_replays(tmp_path):
+    # R34 real paragraph and selected indices from the three-replica wire probe.
+    text = (
+        "카카오는 2040년 RE100 및 탄소중립 달성을 목표로 재생에너지 조달을 확대하고 있습니다."
+        " 당사의 온실가스 배출량 대부분은 전력 사용에 기인하고 있어, 재생에너지 조달 확대 과정에서 "
+        "발생할 수 있는 전력 비용 상승 및 재생에너지 공급 환경 변화는 주요 전환 리스크로 식별됩니다"
+        ". 이에 카카오는 기후변화 시나리오를 기반으로 RE100 이행에 따른 재무적 영향을 분석하고 "
+        "있으며, 사업계획에 따른 전력 사용 전망, 에너지 효율화 계획 및 재생에너지 조달 비용 전망을"
+        " 반영하여 영향을 산정하였습니다. 분석 결과, 2030년까지의 연도별 재무영향은 예상 매출액 "
+        "대비 0.4% 미만 수준으로 분석되었습니다."
+    )
+    source_id = "74cd1f38-eb66-52c6-8c6a-f45b044b8638"
+    probe, extractor = id_extractor(
+        tmp_path,
+        json.dumps({"sentence_ids": [f"{source_id}:{i}" for i in (0, 2, 3)]}),
+        extraction_assertion_prompt=True,
+        extraction_complete_selection=True,
+    )
+    data = packet(extractor, text=text, source_id=source_id)
+    result = extractor.extract(data)
+    sentences = json.loads(probe.calls[0]["user_json"])["untrusted_document_data"][
+        "source_sentences"
+    ]
+    expected = [sentences[i]["text"] for i in (0, 2, 3)]
+    assert [span["quote"] for span in result["spans"]] == expected
+    for span in result["spans"]:
+        assert text[span["char_start"] : span["char_end"]] == span["quote"]
+    assert extractor.extract(data) == result
+    assert len(probe.calls) == 1
