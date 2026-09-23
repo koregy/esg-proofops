@@ -78,7 +78,11 @@ export function RunSummary({ summary }: { summary: Summary }) {
           ))}
         </ul>
       ) : (
-        <p>확인된 결손 요소가 없습니다.</p>
+        <p>
+          {gradeDenominator === 0
+            ? "아직 입증 판정이 없어 결손 여부를 확인할 수 없습니다."
+            : "판정된 주장에서는 확인된 결손 요소가 없습니다."}
+        </p>
       )}
     </section>
   );

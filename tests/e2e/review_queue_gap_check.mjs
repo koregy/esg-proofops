@@ -45,7 +45,7 @@ export async function check() {
   const reviewedClaim = { claim_id: reviewedId, page_num: 12, quote: 'REVIEWED CLAIM QUOTE',
     track: 'performance', topic_ids: ['emissions'], decision: reviewedDecision, revision: 1 };
   const reviewedReview = { review_id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', run_id: runId, claim_id: reviewedId,
-    status: 'open', revision: 1, base_tag_revision: 1, reason_codes: ['CONSENSUS_UNRESOLVED'] };
+    status: 'open', revision: 1, base_tag_revision: 1, reason_codes: ['RULEPACK_APPROVAL_REQUIRED'] };
   // Decided claim: decision_status decided; must never appear in the unregistered list.
   const decidedId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
   const decidedDecision = { decision_revision: 1, tag_revision: 1, decision_status: 'decided',
@@ -59,8 +59,10 @@ export async function check() {
     parse_manifest_id: '77777777-7777-4777-8777-777777777777',
     page_num: 12, printed_page_label: null, bbox: null, raw_text_sha256: 'a'.repeat(64),
     quote: 'REVIEWED CLAIM QUOTE', char_start: 0, char_end: 20, location_quality: 'candidate', verification_state: 'candidate' };
+  const extraSource = {...source, source_id:'88888888-8888-4888-8888-888888888888',page_num:13,quote:'EVIDENCE FROM ANOTHER PAGE'};
+  let openedSource = null;
   const detailFor = (claim) => ({ claim, source_refs: [source],
-    elements: claim.track ? [{ element_id: 'P1', state: 'unknown', evidence_refs: [], normalized_value: null, credited_from: null, reason_code: null }] : [],
+    elements: claim.track ? [{ element_id: 'P1', state: 'unknown', evidence_refs: [extraSource], normalized_value: null, credited_from: null, reason_code: null }] : [],
     assurance: { status: 'undetermined', level: null, provider: null, statement_id: null,
       metric_match: 'unknown', period_match: 'unknown', boundary_match: 'unknown', evidence_refs: [] },
     replicate_request_ids: [], packet_sha256: null, tag_status: 'untagged', suggestion: null, basis_refs: [] });
@@ -71,6 +73,11 @@ export async function check() {
 
   window.fetch = async (url, init = {}) => {
     const target = new URL(String(url), location.origin);
+    if (target.pathname.endsWith(`/sources/${extraSource.source_id}/view`)) {
+      openedSource = extraSource.source_id;
+      return Response.json({url:'/queue-preview.png',expires_at:'2099-01-01T00:00:00Z',sha256:'a'.repeat(64)});
+    }
+    if (target.pathname === '/queue-preview.png') return new Response(new Uint8Array([137,80,78,71]),{headers:{'Content-Type':'image/png'}});
     if (target.pathname === '/v1/session') return Response.json({ user_id: 'reviewer-1', tenant_id: tenant,
       role: 'reviewer', csrf_token: 'csrf-test', expires_at: '2026-09-10T00:00:00Z' });
     if (target.pathname === `/v1/runs/${runId}/claims`) return Response.json({ items: claimsItems, next_cursor: null, snapshot_epoch: 1 });
@@ -126,6 +133,15 @@ export async function check() {
     assert(!unregHrefs.includes(`/runs/${runId}/claims/${reviewedId}`), 'Reviewed claim must not be duplicated into the unregistered list');
     assert(!unregHrefs.includes(`/runs/${runId}/claims/${decidedId}`), 'Decided claim must never appear in the unregistered list');
     assert(unregHrefs.includes(`/runs/${runId}/claims/${blockedId}`), 'Blocked claim must still be listed in mixed state');
+
+    // Read-only review still opens evidence from another page through SourceViewer.
+    const evidenceButton = [...host.querySelectorAll('button')].find(button =>
+      button.textContent === '원문 위치 열기' && button.parentElement.textContent.includes(extraSource.quote));
+    assert(evidenceButton && !evidenceButton.matches(':disabled'), 'Evidence viewing must stay enabled');
+    assert(host.querySelector('textarea').disabled, 'Approval hold must keep edits disabled');
+    evidenceButton.click();
+    await waitFor('PDF 13쪽 미리보기');
+    assert(openedSource === extraSource.source_id, 'Open clicked evidence, not only claim source');
 
     // Scenario 3: genuinely empty — no reviews and no unregistered undecided claims.
     claimsItems = [decidedClaim];

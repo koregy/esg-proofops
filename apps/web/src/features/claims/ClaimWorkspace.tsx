@@ -467,6 +467,7 @@ const reviewQueueStatusText: Record<Review["status"], string> = {
 };
 
 export function ReviewQueueWorkspace({ apiBase = "", tenantKey, session, runId, onSessionInvalid, onDataChanged, localSynthetic = false }: CommonProps & { localSynthetic?: boolean }) {
+  const [sourceOpen, setSourceOpen] = useState<SourceOpenRequest | null>(null);
   const [reviews, setReviews] = useState<Review[]>([]);
   const [claims, setClaims] = useState<ClaimSummary[]>([]);
   const [selected, setSelected] = useState("");
@@ -493,7 +494,7 @@ export function ReviewQueueWorkspace({ apiBase = "", tenantKey, session, runId, 
     controller.current?.abort();
     const request = new AbortController();
     controller.current = request;
-    setState("loading"); setMessage("");
+    setState("loading"); setMessage(""); setSourceOpen(null);
     try {
       const [nextReviews, nextClaims] = await Promise.all([
         allPages<Review>(`${apiBase}/v1/runs/${runId}/reviews`, request.signal),
@@ -521,7 +522,7 @@ export function ReviewQueueWorkspace({ apiBase = "", tenantKey, session, runId, 
   }, [allowed, load, tenantKey]);
 
   async function choose(reviewId: string) {
-    setSelected(reviewId); setState("loading"); setMessage("");
+    setSelected(reviewId); setState("loading"); setMessage(""); setSourceOpen(null);
     const request = new AbortController();
     controller.current?.abort(); controller.current = request;
     try {
@@ -561,7 +562,13 @@ export function ReviewQueueWorkspace({ apiBase = "", tenantKey, session, runId, 
     </section> : null}
     {state === "ready" && snapshot && detail ? <ReviewWorkspace key={`${snapshot.review.review_id}:${snapshot.review.revision}`} {...snapshot} session={session}
       sourceChoices={detail.source_refs} loadLatest={async () => (await latest(snapshot.review.review_id, new AbortController().signal)).snapshot}
-      onResolved={resolved} onSourceOpen={source => document.getElementById(`review-source-${source.source_id}`)?.focus()} localSynthetic={localSynthetic} /> : null}
-    {detail ? <section aria-label="검토 원문"><h2>접근 가능한 원문</h2>{detail.source_refs.map(source => <article key={source.source_id}><h3 id={`review-source-${source.source_id}`} tabIndex={-1}>{source.page_num}쪽</h3><p>{source.quote}</p><Link to={`/runs/${runId}/claims/${detail.claim.claim_id}`}>원문 PDF와 전체 상세 열기</Link></article>)}</section> : null}
+      onResolved={resolved} onSourceOpen={source => setSourceOpen(current => ({ source, nonce: (current?.nonce ?? 0) + 1 }))} localSynthetic={localSynthetic} /> : null}
+    {state === "ready" && detail && snapshot ? <section aria-label="검토 원문">
+      <SourceViewer key={`${tenantKey}:${runId}:${selected}`} apiBase={apiBase} csrfToken={session.csrf_token} runId={runId}
+        sources={[...new Map([...detail.source_refs, ...snapshot.elements.flatMap(element => element.evidence_refs)]
+          .map(source => [`${source.source_id}:${source.char_start}:${source.char_end}`, source])).values()]}
+        openRequest={sourceOpen} onSessionInvalid={onSessionInvalid} />
+      <Link to={`/runs/${runId}/claims/${detail.claim.claim_id}`}>원문 PDF와 전체 상세 열기</Link>
+    </section> : null}
   </section>;
 }

@@ -367,7 +367,7 @@ def test_review_component_renders_actual_react_with_escaped_sources(tmp_path):
     esbuild = next((root / "node_modules/.pnpm").glob("esbuild@*/node_modules/esbuild/bin/esbuild"))
     entry = tmp_path / "review-render.tsx"
     entry.write_text(
-        """
+        r"""
 import React from REACT;
 import { renderToStaticMarkup } from SERVER;
 import { ReviewWorkspace } from COMPONENT;
@@ -377,14 +377,23 @@ quote:"<script>alert(1)</script>"};
 const props = {session:{tenant_id:"tenant",user_id:"user",role:"reviewer"},
 review:{review_id:"review",run_id:"run",claim_id:"claim",status:"open",revision:1,base_tag_revision:1,reason_codes:[]},
 track:"performance",elements:[{element_id:"P1",state:"unknown",evidence_refs:[ref],normalized_value:null}],
-loadLatest:async()=>{},onResolved:()=>{},localSynthetic:true};
+loadLatest:async()=>{},onResolved:()=>{},onSourceOpen:()=>{},localSynthetic:true};
 const html=renderToStaticMarkup(React.createElement(ReviewWorkspace,props));
 assert.ok(html.includes("태깅 검토") && html.includes("변경 사유"));
 assert.ok(html.includes("&lt;script&gt;") && !html.includes("<script>"));
 assert.ok(html.includes("로컬 합성 자료") && html.includes("태깅 확정 및 재채점"));
 const viewer=renderToStaticMarkup(React.createElement(ReviewWorkspace,
 {...props,session:{...props.session,role:"viewer"}}));
-assert.ok(viewer.includes('fieldset disabled=""'));
+for (const readOnly of [viewer, renderToStaticMarkup(React.createElement(ReviewWorkspace,
+{...props,localSynthetic:false,
+ review:{...props.review,reason_codes:["RULEPACK_APPROVAL_REQUIRED"]}}))]) {
+  assert.ok(!readOnly.includes('fieldset disabled=""'),
+    "read-only source buttons must not inherit disabled");
+  assert.ok(readOnly.includes('<button type="button">원문 위치 열기</button>'));
+  for (const control of readOnly.match(/<(?:select|input|textarea)\b[^>]*>/g) ?? [])
+    assert.ok(control.includes('disabled=""'), "tag edits remain disabled");
+  assert.ok(/<button[^>]*disabled=""[^>]*>변경 확인<\/button>/.test(readOnly));
+}
 // A resolved review shows an explicit re-review action (reviewer), never an
 // auto-open editor; it references the current head tag revision.
 const resolvedProps={...props,review:{...props.review,status:"resolved",revision:2},

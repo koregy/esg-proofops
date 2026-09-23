@@ -88,6 +88,7 @@ function Editor(props: Props) {
   const headTagRevision = base.headTagRevision ?? base.review.base_tag_revision;
   const canStartReReview = canReview && base.review.status === "resolved" && !reReviewing;
   const editable = canReview && (base.review.status === "open" || reReviewing);
+  const editDisabled = !editable || busy || stale;
   const sources = [...new Map([...props.elements.flatMap(e => e.evidence_refs), ...(props.sourceChoices ?? [])].map(s => [sourceKey(s), s])).values()];
   const changed = elements.filter(e => JSON.stringify(e) !== JSON.stringify(base.elements.find(old => old.element_id === e.element_id)));
 
@@ -177,10 +178,10 @@ function Editor(props: Props) {
         }}>차이를 확인했습니다. 내 초안을 새 기준에서 다시 검토</button>
       </>}
     </section>}
-    <form onSubmit={event => { event.preventDefault(); dialog.current?.showModal(); }}>
-      <fieldset disabled={!editable || busy || stale}>
+    <form onSubmit={event => { event.preventDefault(); if (!editDisabled) dialog.current?.showModal(); }}>
+      <fieldset>
         <legend>원문 태깅 수정</legend>
-        <label>트랙 <select value={track} onChange={event => {
+        <label>트랙 <select disabled={editDisabled} value={track} onChange={event => {
           const next = event.target.value as Track;
           setTrack(next);
           setElements(trackElements[next].map(element_id => ({ element_id, state: "unknown", evidence_refs: [],
@@ -188,14 +189,14 @@ function Editor(props: Props) {
         }}><option value="goal">목표형</option><option value="performance">성과형</option><option value="management">관리체계형</option></select></label>
         {elements.map((element, index) => <fieldset key={element.element_id}>
           <legend>{element.element_id}</legend>
-          <label>상태 <select value={element.state} onChange={event => update(index, { state: event.target.value as ReviewElement["state"] })}>
+          <label>상태 <select disabled={editDisabled} value={element.state} onChange={event => update(index, { state: event.target.value as ReviewElement["state"] })}>
             {states.map(state => <option key={state} value={state}>{stateText[state]}</option>)}
           </select></label>
-          <label>원문 값 <input value={element.normalized_value ?? ""} onChange={event => update(index, { normalized_value: event.target.value || null })} /></label>
+          <label>원문 값 <input disabled={editDisabled} value={element.normalized_value ?? ""} onChange={event => update(index, { normalized_value: event.target.value || null })} /></label>
           <fieldset><legend>근거 선택</legend>
             {sources.length === 0 && <p>선택 가능한 원문 근거가 없습니다.</p>}
             {sources.map(source => <div key={sourceKey(source)}>
-              <label><input type="checkbox" checked={element.evidence_refs.some(ref => sourceKey(ref) === sourceKey(source))} onChange={event => update(index, {
+              <label><input type="checkbox" disabled={editDisabled} checked={element.evidence_refs.some(ref => sourceKey(ref) === sourceKey(source))} onChange={event => update(index, {
                 evidence_refs: event.target.checked ? [...element.evidence_refs, source] : element.evidence_refs.filter(ref => sourceKey(ref) !== sourceKey(source)),
                 credited_from: null,
               })} />{source.page_num}쪽: {source.quote}</label>
@@ -203,8 +204,8 @@ function Editor(props: Props) {
             </div>)}
           </fieldset>
         </fieldset>)}
-        <label>변경 사유 <textarea required minLength={5} maxLength={1000} value={reason} onChange={event => setReason(event.target.value)} /></label>
-        <button ref={confirmButton} type="submit" disabled={reason.trim().length < 5 || elements.some(e => e.state === "present" && e.evidence_refs.length === 0)}>변경 확인</button>
+        <label>변경 사유 <textarea disabled={editDisabled} required minLength={5} maxLength={1000} value={reason} onChange={event => setReason(event.target.value)} /></label>
+        <button ref={confirmButton} type="submit" disabled={editDisabled || reason.trim().length < 5 || elements.some(e => e.state === "present" && e.evidence_refs.length === 0)}>변경 확인</button>
       </fieldset>
     </form>
     <dialog ref={dialog} aria-labelledby="review-confirm-title" onClose={() => confirmButton.current?.focus()}>
