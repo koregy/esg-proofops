@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ApiError, requestJson, type Session } from "../session/api";
+import { getElementLabel } from "../labels";
 
 type Track = "goal" | "performance" | "management";
 export type SourceRef = {
@@ -164,7 +165,7 @@ function Editor(props: Props) {
       {latest && <>
         <p>서버 revision {latest.review.revision} · {latest.review.status} · 트랙 {latest.track}</p>
         <table><thead><tr><th>요소</th><th>서버</th><th>내 초안</th></tr></thead><tbody>
-          {elements.map(e => { const server = latest.elements.find(old => old.element_id === e.element_id)?.state; return <tr key={e.element_id}><th>{e.element_id}</th>
+          {elements.map(e => { const server = latest.elements.find(old => old.element_id === e.element_id)?.state; return <tr key={e.element_id}><th>{getElementLabel(e.element_id)}</th>
             <td>{server ? stateText[server] : "미수집"}</td><td>{stateText[e.state]}</td></tr>; })}
         </tbody></table>
         <details><summary>근거와 값 전체 비교</summary><pre>{JSON.stringify({ server: latest.elements, draft: elements }, null, 2)}</pre></details>
@@ -188,7 +189,7 @@ function Editor(props: Props) {
             normalized_value: null, credited_from: null, reason_code: null })));
         }}><option value="goal">목표형</option><option value="performance">성과형</option><option value="management">관리체계형</option></select></label>
         {elements.map((element, index) => <fieldset key={element.element_id}>
-          <legend>{element.element_id}</legend>
+          <legend>{getElementLabel(element.element_id)}</legend>
           <label>상태 <select disabled={editDisabled} value={element.state} onChange={event => update(index, { state: event.target.value as ReviewElement["state"] })}>
             {states.map(state => <option key={state} value={state}>{stateText[state]}</option>)}
           </select></label>
@@ -211,7 +212,7 @@ function Editor(props: Props) {
     <dialog ref={dialog} aria-labelledby="review-confirm-title" onClose={() => confirmButton.current?.focus()}>
       <h3 id="review-confirm-title">태깅 변경 후 재채점</h3>
       <p>트랙: {base.track} → {track}</p>
-      <ul>{changed.map(e => { const prev = base.elements.find(old => old.element_id === e.element_id)?.state; return <li key={e.element_id}>{e.element_id}: {prev ? stateText[prev] : "미수집"} → {stateText[e.state]} · 근거 {e.evidence_refs.length}개</li>; })}</ul>
+      <ul>{changed.map(e => { const prev = base.elements.find(old => old.element_id === e.element_id)?.state; return <li key={e.element_id}>{getElementLabel(e.element_id)}: {prev ? stateText[prev] : "미수집"} → {stateText[e.state]} · 근거 {e.evidence_refs.length}개</li>; })}</ul>
       <p>{reason}</p><p>기존 revision은 보존되며, 미정 규칙은 확정 뒤에도 남을 수 있습니다.</p>
       <button type="button" onClick={() => dialog.current?.close()}>취소</button>
       <button type="button" onClick={save}>태깅 확정 및 재채점</button>

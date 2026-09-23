@@ -12,6 +12,7 @@ import {
   type ReviewSnapshot,
   type SourceRef,
 } from "../reviews/ReviewWorkspace";
+import { getElementLabel } from "../labels";
 
 type Track = "goal" | "performance" | "management";
 type ReviewStatus = "auto_confirmed" | "needs_review" | "human_confirmed" | "ai_delegated_confirmed";
@@ -409,11 +410,11 @@ function ClaimDetailView({ apiBase = "", csrfToken, tenantKey, session, runId, c
         <p>{detail.claim.quote}</p><p>트랙: {track ? trackText[track] : "미분류"}</p><p>판정: <StatusBadge label={decisionText(decision)} tone={decisionTone(decision)} /></p>
         {decision?.review_status ? <p>검토 상태: <StatusBadge label={reviewStatusText[decision.review_status]} tone={decision.review_status === "human_confirmed" ? "success" : "warning"} /></p> : null}
         {decision?.gap_ids.length ? <p>규칙 판정 보류(다음 규칙 항목이 갈리거나 정의되지 않음): {decision.gap_ids.join(", ")}</p> : null}
-        {decision?.missing_elements.length ? <p>아직 충족이 확인되지 않은 요소: {decision.missing_elements.join(", ")}</p> : null}
+        {decision?.missing_elements.length ? <p>아직 충족이 확인되지 않은 요소: {decision.missing_elements.map(getElementLabel).join(", ")}</p> : null}
         {detail.rulepack_approved_by?.startsWith("ai-delegated-review:")
           ? <p role="status">이 판정에 쓰인 규칙집은 AI 프로젝트 검토(사람 전문가 승인 아님)로 활성화되었습니다.</p>
           : null}
-        <h3>요소</h3>{elements.length === 0 ? <p>{untagged ? "태깅 전이므로 표시할 요소가 없습니다. 태그가 게시되면 여기에 표시됩니다." : "표시할 요소가 없습니다."}</p> : <ul>{elements.map(element => <li key={element.element_id}>{element.element_id}: {elementStateText[element.state]} · 근거 {element.evidence_refs.length}개</li>)}</ul>}
+        <h3>요소</h3>{elements.length === 0 ? <p>{untagged ? "태깅 전이므로 표시할 요소가 없습니다. 태그가 게시되면 여기에 표시됩니다." : "표시할 요소가 없습니다."}</p> : <ul>{elements.map(element => <li key={element.element_id}>{getElementLabel(element.element_id)}: {elementStateText[element.state]} · 근거 {element.evidence_refs.length}개</li>)}</ul>}
         <h3>보증 연결</h3>{detail.assurance.status === "undetermined" ? <p>보증 범위를 확인할 수 없습니다. 보고서 전체가 보증되었다고 간주하지 않습니다.</p> : <p>{detail.assurance.status === "covered" ? "보증 범위 안" : "보증 범위 밖"} · {detail.assurance.level ?? "수준 미확인"} · {detail.assurance.provider ?? "기관 미확인"}</p>}
         {detail.suggestion ? <><h3>수정 제안</h3><p>{detail.suggestion}</p></> : null}
         <h3>기준 근거</h3>{detail.basis_refs.length ? <ul>{detail.basis_refs.map((basis, index) => <li key={`${basis.standard}:${basis.clause}:${index}`}>{basis.standard} {basis.clause ?? "조항 미확정"}: {basis.summary} ({basisVerificationText[basis.verification_status]})</li>)}</ul> : <p>표시할 검증된 기준 근거가 없습니다.</p>}
