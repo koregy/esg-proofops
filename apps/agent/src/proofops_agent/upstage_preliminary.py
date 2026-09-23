@@ -37,6 +37,7 @@ from proofops.application.tagging.preliminary import (
     CONTEXT_SCHEMA,
     CONTEXT_SYSTEM_SUFFIX,
     GOAL_ROLE_SYSTEM_SUFFIX,
+    PERIOD_ROLE_SYSTEM_SUFFIX,
     SCHEMA,
     SYSTEM_PROMPT,
     TABLE_ROLE_SYSTEM_SUFFIX,
@@ -59,6 +60,7 @@ TABLE_ROLE_MODEL_PROFILE = "upstage-preliminary-source-quotes-table-role-v1"
 # the table-role prompt. Requires preliminary_table_role=True and its dependencies.
 GOAL_ROLE_MODEL_PROFILE = "upstage-preliminary-source-quotes-goal-role-v1"
 ACTOR_ROLE_MODEL_PROFILE = "upstage-preliminary-source-quotes-actor-role-v1"
+ACTOR_ROLE_MODEL_PROFILE_V2 = "upstage-preliminary-source-quotes-actor-role-v2"
 TRANSPORT_VERSION = "preliminary-source-quotes-v1"
 CONTEXT_TRANSPORT_VERSION = "preliminary-source-quotes-context-v1"
 TABLE_TRANSPORT_VERSION = "preliminary-source-quotes-table-v1"
@@ -67,11 +69,13 @@ TABLE_ROLE_TRANSPORT_VERSION = "preliminary-source-quotes-table-role-v1"
 # be replayed as a table-role response and vice versa.
 GOAL_ROLE_TRANSPORT_VERSION = "preliminary-source-quotes-goal-role-v1"
 ACTOR_ROLE_TRANSPORT_VERSION = "preliminary-source-quotes-actor-role-v1"
+ACTOR_ROLE_TRANSPORT_VERSION_V2 = "preliminary-source-quotes-actor-role-v2"
 CONTEXT_SYSTEM_PROMPT = SYSTEM_PROMPT + CONTEXT_SYSTEM_SUFFIX
 TABLE_SYSTEM_PROMPT = CONTEXT_SYSTEM_PROMPT + TABLE_SYSTEM_SUFFIX
 TABLE_ROLE_SYSTEM_PROMPT = TABLE_SYSTEM_PROMPT + TABLE_ROLE_SYSTEM_SUFFIX
 GOAL_ROLE_SYSTEM_PROMPT = TABLE_ROLE_SYSTEM_PROMPT + GOAL_ROLE_SYSTEM_SUFFIX
 ACTOR_ROLE_SYSTEM_PROMPT = GOAL_ROLE_SYSTEM_PROMPT + ACTOR_ROLE_SYSTEM_SUFFIX
+ACTOR_ROLE_SYSTEM_PROMPT_V2 = ACTOR_ROLE_SYSTEM_PROMPT + PERIOD_ROLE_SYSTEM_SUFFIX
 
 _ENVELOPE_KEYS = frozenset(
     (
@@ -146,7 +150,9 @@ class UpstagePreliminaryTransport(UpstageTaggingTransport):
         resume=None,
     ):
         _require_uuid("tenant_id", tenant_id)
-        if settings.model_profile == ACTOR_ROLE_MODEL_PROFILE:
+        if settings.model_profile == ACTOR_ROLE_MODEL_PROFILE_V2:
+            expected_prompt = ACTOR_ROLE_SYSTEM_PROMPT_V2
+        elif settings.model_profile == ACTOR_ROLE_MODEL_PROFILE:
             expected_prompt = ACTOR_ROLE_SYSTEM_PROMPT
         elif settings.model_profile == GOAL_ROLE_MODEL_PROFILE:
             expected_prompt = GOAL_ROLE_SYSTEM_PROMPT
@@ -179,6 +185,8 @@ class UpstagePreliminaryTransport(UpstageTaggingTransport):
             self.TRANSPORT_VERSION = TABLE_TRANSPORT_VERSION
         elif settings.model_profile == TABLE_ROLE_MODEL_PROFILE:
             self.TRANSPORT_VERSION = TABLE_ROLE_TRANSPORT_VERSION
+        elif settings.model_profile == ACTOR_ROLE_MODEL_PROFILE_V2:
+            self.TRANSPORT_VERSION = ACTOR_ROLE_TRANSPORT_VERSION_V2
         elif settings.model_profile == ACTOR_ROLE_MODEL_PROFILE:
             self.TRANSPORT_VERSION = ACTOR_ROLE_TRANSPORT_VERSION
         elif settings.model_profile == GOAL_ROLE_MODEL_PROFILE:
@@ -227,14 +235,17 @@ class UpstagePreliminaryTransport(UpstageTaggingTransport):
 
     def _wire_request(self, request: dict) -> tuple[str, str, dict[str, dict], Preflight]:
         settings = self._settings
-        actor_role = settings.model_profile == ACTOR_ROLE_MODEL_PROFILE
+        actor_role_v2 = settings.model_profile == ACTOR_ROLE_MODEL_PROFILE_V2
+        actor_role = settings.model_profile == ACTOR_ROLE_MODEL_PROFILE or actor_role_v2
         goal_role = settings.model_profile == GOAL_ROLE_MODEL_PROFILE or actor_role
         role_table = settings.model_profile == TABLE_ROLE_MODEL_PROFILE or goal_role
         is_table = settings.model_profile == TABLE_MODEL_PROFILE or role_table
         is_context = settings.model_profile == CONTEXT_MODEL_PROFILE or is_table
         if is_table:
             expected_schema = TABLE_SCHEMA
-            if actor_role:
+            if actor_role_v2:
+                expected_prompt = ACTOR_ROLE_SYSTEM_PROMPT_V2
+            elif actor_role:
                 expected_prompt = ACTOR_ROLE_SYSTEM_PROMPT
             elif goal_role:
                 expected_prompt = GOAL_ROLE_SYSTEM_PROMPT

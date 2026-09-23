@@ -146,7 +146,7 @@ def test_actor_requires_goal_role():
         )
 
 
-def _configured(tmp_path, monkeypatch, *, profile, prompt, actor_role):
+def _configured(tmp_path, monkeypatch, *, profile, prompt, actor_role, period_role=False):
     from proofops_agent.upstage_preliminary import ACTOR_ROLE_TRANSPORT_VERSION
 
     graph, claim, _ = table_corpus()
@@ -157,6 +157,7 @@ def _configured(tmp_path, monkeypatch, *, profile, prompt, actor_role):
         role_resolution=True,
         goal_role=True,
         actor_role=actor_role,
+        period_role=period_role,
     )
     settings = TaggingSettings(
         ModelBinding("00000000-0000-4000-8000-000000000001", "tagger", False),
@@ -226,7 +227,10 @@ def test_actor_profile_accepts_own_envelope_and_pins_transport_version(tmp_path,
 
 
 def test_actor_and_goal_prompts_can_never_be_swapped(tmp_path, monkeypatch):
-    from proofops_agent.upstage_preliminary import ACTOR_ROLE_SYSTEM_PROMPT, GOAL_ROLE_SYSTEM_PROMPT
+    from proofops_agent.upstage_preliminary import (
+        ACTOR_ROLE_SYSTEM_PROMPT,
+        GOAL_ROLE_SYSTEM_PROMPT,
+    )
 
     adapter, request, _, _, _ = _configured(
         tmp_path, monkeypatch, profile=GOAL_MODEL_PROFILE, prompt=GOAL_ROLE_SYSTEM_PROMPT,
@@ -314,7 +318,10 @@ def test_null_consensus_returns_none_without_element_dispatch(tmp_path, monkeypa
 
 def test_preflight_allowlist_accepts_actor_pair_and_rejects_mismatch():
     from proofops.application.preflight import check_local_upstage_tagger
-    from proofops_agent.upstage_preliminary import ACTOR_ROLE_SYSTEM_PROMPT, GOAL_ROLE_SYSTEM_PROMPT
+    from proofops_agent.upstage_preliminary import (
+        ACTOR_ROLE_SYSTEM_PROMPT,
+        GOAL_ROLE_SYSTEM_PROMPT,
+    )
 
     from tests.integration.test_upstage_tagger_preflight import configured as approvals
 
@@ -342,7 +349,11 @@ def test_preflight_allowlist_accepts_actor_pair_and_rejects_mismatch():
 
 
 def test_pilot_actor_settings_select_own_pair_and_require_goal_role():
-    from proofops_agent.upstage_preliminary import ACTOR_ROLE_SYSTEM_PROMPT, GOAL_ROLE_SYSTEM_PROMPT
+    from proofops_agent.upstage_preliminary import (
+        ACTOR_ROLE_MODEL_PROFILE_V2,
+        ACTOR_ROLE_SYSTEM_PROMPT_V2,
+        GOAL_ROLE_SYSTEM_PROMPT,
+    )
 
     from evaluation.local_upstage_pilot import live_tagging_settings
 
@@ -355,8 +366,8 @@ def test_pilot_actor_settings_select_own_pair_and_require_goal_role():
         12, preliminary_context=True, preliminary_table_context=True,
         preliminary_table_role=True, preliminary_goal_role=True, preliminary_actor_role=True,
     )
-    assert enabled["preliminary_settings"]["model_profile"] == ACTOR_MODEL_PROFILE
-    assert enabled["preliminary_settings"]["system_prompt"] == ACTOR_ROLE_SYSTEM_PROMPT
+    assert enabled["preliminary_settings"]["model_profile"] == ACTOR_ROLE_MODEL_PROFILE_V2
+    assert enabled["preliminary_settings"]["system_prompt"] == ACTOR_ROLE_SYSTEM_PROMPT_V2
     assert enabled["preliminary_settings"]["system_prompt"].startswith(
         goal["preliminary_settings"]["system_prompt"]
     )
@@ -435,3 +446,76 @@ def test_pilot_resume_cannot_add_actor_to_legacy_run(tmp_path, monkeypatch, caps
     with pytest.raises(SystemExit):
         pilot.main()
     assert "--resume cannot add preliminary actor role" in capsys.readouterr().err
+
+def test_preflight_allowlist_accepts_actor_v2():
+    from proofops.application.preflight import check_local_upstage_tagger
+    from proofops_agent.upstage_preliminary import (
+        ACTOR_ROLE_MODEL_PROFILE_V2,
+        ACTOR_ROLE_SYSTEM_PROMPT_V2,
+    )
+
+    from tests.integration.test_upstage_tagger_preflight import configured as approvals
+
+    def _settings(profile, prompt):
+        return TaggingSettings(
+            ModelBinding("00000000-0000-4000-8000-000000000001", "tagger", False),
+            MODEL_PRO4, profile, "provider-managed-unverified", prompt,
+            json.dumps({"type": "object"}), max_tokens=1024,
+        )
+
+    settings = _settings(ACTOR_ROLE_MODEL_PROFILE_V2, ACTOR_ROLE_SYSTEM_PROMPT_V2)
+    authorization = approvals()
+    authorization.pop("settings")
+    authorization["binding"].update(
+        model_id=settings.model_id, tagging_settings_sha256=canonical_hash(asdict(settings))
+    )
+    assert check_local_upstage_tagger(settings=settings, **authorization).ready
+
+
+def test_actor_v2_transport_accepts_exact_v2_and_rejects_v1_packet(tmp_path, monkeypatch):
+    from proofops_agent.upstage_preliminary import (
+        ACTOR_ROLE_MODEL_PROFILE_V2,
+        ACTOR_ROLE_SYSTEM_PROMPT_V2,
+        ACTOR_ROLE_TRANSPORT_VERSION_V2,
+    )
+    adapter, request, packet, claim, graph = _configured(
+        tmp_path, monkeypatch, profile=ACTOR_ROLE_MODEL_PROFILE_V2,
+        prompt=ACTOR_ROLE_SYSTEM_PROMPT_V2, actor_role=True, period_role=True,
+    )
+    assert adapter.TRANSPORT_VERSION == ACTOR_ROLE_TRANSPORT_VERSION_V2
+    assert json.loads(adapter._wire_request(request)[1]) == json.loads(json.dumps(packet))
+    legacy = preliminary_table_request(claim, graph, tenant_id=TENANT,
+        role_resolution=True, goal_role=True, actor_role=True)
+    assert [key for key in packet if packet[key] != legacy[key]] == ['prompt_sha256']
+    with pytest.raises(ValueError):
+        adapter._wire_request(dict(request, user_json=json.dumps(legacy)))
+
+
+def test_worker_builds_the_pinned_actor_v2_packet():
+    from types import SimpleNamespace
+
+    from proofops_agent.upstage_preliminary import ACTOR_ROLE_SYSTEM_PROMPT_V2
+    from proofops_worker.live_tagging import LiveTaggingRuntime
+    graph, claim, _ = table_corpus()
+    seen=[]
+    def replicas(role, claim, packet, *args):
+        seen.append(packet)
+        assert packet['prompt_sha256'] == canonical_hash(ACTOR_ROLE_SYSTEM_PROMPT_V2)
+        return None
+    runtime=SimpleNamespace(
+        auth=SimpleNamespace(tenant_id=TENANT),
+        preliminary_settings=SimpleNamespace(model_profile='upstage-preliminary-source-quotes-actor-role-v2'),
+        preliminary_transport=SimpleNamespace(bound_context=lambda packet:packet),
+        preliminary_records={}, _source_replicas=replicas,
+    )
+    assert LiveTaggingRuntime.preliminary(runtime,claim,graph) is None
+    assert len(seen)==1
+
+
+def test_actor_v2_suffix_is_the_evaluated_period_role_prompt():
+    from hashlib import sha256
+
+    from proofops.application.tagging.preliminary import PERIOD_ROLE_SYSTEM_SUFFIX
+    assert sha256(PERIOD_ROLE_SYSTEM_SUFFIX.encode()).hexdigest() == (
+        'b6bde180178474df6e8939816563730f759c91d7f00087467c7f5fc9621a141a'
+    )

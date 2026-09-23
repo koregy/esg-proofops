@@ -388,6 +388,7 @@ class RunService:
                 # R34 opt-in goal-role profile; requires table-role and its deps.
                 "upstage-preliminary-source-quotes-goal-role-v1",
                 "upstage-preliminary-source-quotes-actor-role-v1",
+                "upstage-preliminary-source-quotes-actor-role-v2",
             } or tagging.model_profile not in {
                 "upstage-compact-ids-frozen-unicode-v1",
                 "upstage-compact-coverage-unicode-v2",

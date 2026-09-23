@@ -195,9 +195,12 @@ def live_tagging_settings(
     )
     settings = {}
     if preliminary_actor_role:
-        from proofops.application.tagging.preliminary import ACTOR_ROLE_SYSTEM_SUFFIX
+        from proofops.application.tagging.preliminary import (
+            ACTOR_ROLE_SYSTEM_SUFFIX,
+            PERIOD_ROLE_SYSTEM_SUFFIX,
+        )
 
-        preliminary_profile = "upstage-preliminary-source-quotes-actor-role-v1"
+        preliminary_profile = "upstage-preliminary-source-quotes-actor-role-v2"
         preliminary_prompt = (
             SYSTEM_PROMPT
             + CONTEXT_SYSTEM_SUFFIX
@@ -205,6 +208,7 @@ def live_tagging_settings(
             + TABLE_ROLE_SYSTEM_SUFFIX
             + GOAL_ROLE_SYSTEM_SUFFIX
             + ACTOR_ROLE_SYSTEM_SUFFIX
+            + PERIOD_ROLE_SYSTEM_SUFFIX
         )
     elif preliminary_goal_role:
         preliminary_profile = "upstage-preliminary-source-quotes-goal-role-v1"

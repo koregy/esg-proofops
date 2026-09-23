@@ -525,6 +525,7 @@ def check_local_upstage_tagger(
         ACTOR_ROLE_SYSTEM_SUFFIX,
         CONTEXT_SYSTEM_SUFFIX,
         GOAL_ROLE_SYSTEM_SUFFIX,
+        PERIOD_ROLE_SYSTEM_SUFFIX,
         TABLE_ROLE_SYSTEM_SUFFIX,
         TABLE_SYSTEM_SUFFIX,
     )
@@ -586,6 +587,17 @@ def check_local_upstage_tagger(
             + TABLE_ROLE_SYSTEM_SUFFIX
             + GOAL_ROLE_SYSTEM_SUFFIX
             + ACTOR_ROLE_SYSTEM_SUFFIX
+        )
+        or (
+            settings.model_profile == "upstage-preliminary-source-quotes-actor-role-v2"
+            and settings.system_prompt
+            == PRELIMINARY_SYSTEM_PROMPT
+            + CONTEXT_SYSTEM_SUFFIX
+            + TABLE_SYSTEM_SUFFIX
+            + TABLE_ROLE_SYSTEM_SUFFIX
+            + GOAL_ROLE_SYSTEM_SUFFIX
+            + ACTOR_ROLE_SYSTEM_SUFFIX
+            + PERIOD_ROLE_SYSTEM_SUFFIX
         )
         or (
             settings.model_profile == "upstage-relation-source-quotes-v1"

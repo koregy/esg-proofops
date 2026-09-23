@@ -285,3 +285,22 @@ are rejected. No API response or DB schema changes; no migration is needed.
 Rollback disables the option for new runs and retains pinned settings and
 immutable artifacts for existing runs. Complete selection does not establish
 complete recall, claim correctness, or approval of any final grade.
+
+### Actor-role-v2: target deadline is not reporting period
+
+New runs using the existing `--preliminary-actor-role` option select
+`upstage-preliminary-source-quotes-actor-role-v2` /
+`preliminary-source-quotes-actor-role-v2`. The prompt appends the evaluated
+528-byte period-role clarification (SHA256
+`b6bde180178474df6e8939816563730f759c91d7f00087467c7f5fc9621a141a`).
+Future target deadlines remain available for G1; they must not be classified as
+observed reporting periods. No period syntax, binding, source, consensus or
+grade rule changes. Unknown periods stay null. TABLE_SCHEMA and source indices
+are unchanged. Worker packet hashes, transport construction and preflight all
+pin the same v2 prompt.
+
+Saved settings retain their exact v1 or earlier profile/prompt on resume. There
+is no data/API migration or rewrite of old revisions. Rollback for new runs is
+to select the v1 profile/prompt again while retaining v2 readers for stored
+receipts. Trial evidence covers selected Samsung/Kakao cases, not general
+accuracy; the historical methodology footnote remains classification-uncertain.
