@@ -146,6 +146,16 @@ def live_tagging_settings(
         "No grades, legal conclusions, inferred numbers or invented evidence. "
         "This rule reference is tagging guidance, not an approval of the draft rulepack.\n"
         + json.dumps(reference, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        + "\nBefore returning JSON, check each non-null normalized_value against its "
+        "evidence_refs: at least one selected quote MUST be exactly that value, not the "
+        "containing sentence. Example for an unrelated source "
+        '"2035년까지 20% 감축을 목표로 합니다.": normalized_value="2035년" requires '
+        '{"id":"e0","quote":"2035년"}; citing the whole sentence alone is invalid. '
+        "Keep additional full-sentence context citations if useful. For qualitative "
+        "elements use normalized_value=null unless an exact quoted value is needed. "
+        "Do not invent values or quote identifiers; ambiguous or unsupported elements "
+        "remain unknown. This changes citation granularity only, never evidence admission "
+        "or grading. Validate this equality for every element before submitting."
     )
     settings = {}
     if preliminary_table_role:

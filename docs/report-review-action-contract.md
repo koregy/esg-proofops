@@ -148,3 +148,11 @@ a grade or proof that the subsequent tagging job finished. It does not overwrite
 later tag/decision fields. Older snapshots project null. CSV appends the field;
 existing column positions and stored ZIP bytes remain unchanged. No DB migration;
 rollback stops writing the optional projection and retains historical exports.
+
+### R34 새 실행의 값 인용 안내
+
+The local pilot's element prompt now explicitly demonstrates that a non-null
+normalized value needs an identical literal evidence quote, not only its enclosing
+sentence. The existing v3 quote transport and all source/binding/grade guards stay
+unchanged. New runs pin the new prompt hash; resume and classification reprocessing
+use the stored run settings. Historical responses and tag revisions are not reinterpreted.

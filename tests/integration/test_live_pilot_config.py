@@ -190,3 +190,19 @@ def test_extraction_batch_and_run_budget_are_separate_and_bounded():
     for invalid in (True, 0, 7, 2001, 8.5):
         with pytest.raises(ValueError, match="extraction total"):
             extraction_budget_settings(8, invalid)
+
+
+def test_element_prompt_requires_literal_value_quotes_without_changing_wire_schema():
+    result = live_tagging_settings(12)
+    settings = TaggingSettings(
+        **(
+            result["tagging_settings"]
+            | {"binding": ModelBinding(**result["tagging_settings"]["binding"])}
+        )
+    )
+    assert "at least one selected quote MUST be exactly that value" in settings.system_prompt
+    assert "citing the whole sentence alone is invalid" in settings.system_prompt
+    assert settings.model_profile == "upstage-compact-source-quotes-v3"
+    import json
+
+    assert json.loads(settings.schema_json)["$defs"]["SourceRef"]["type"] == "object"
