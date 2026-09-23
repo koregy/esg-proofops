@@ -4,6 +4,7 @@ Covers the _assert_disjoint guard and _prepare_writable copy/reuse logic that
 the R34 fix depends on.  No model calls, no network, no filesystem state
 outside tmp_path.
 """
+
 from __future__ import annotations
 
 import json
@@ -19,6 +20,7 @@ import submission_demo as sd  # noqa: E402
 # ---------------------------------------------------------------------------
 # _assert_disjoint
 # ---------------------------------------------------------------------------
+
 
 def test_disjoint_same_path_raises(tmp_path):
     with pytest.raises(SystemExit, match="must differ"):
@@ -43,6 +45,7 @@ def test_disjoint_sibling_paths_pass(tmp_path):
 # ---------------------------------------------------------------------------
 # _prepare_writable
 # ---------------------------------------------------------------------------
+
 
 def _make_seed(base: Path, run_id: str = "run-abc") -> Path:
     seed = base / "seed"

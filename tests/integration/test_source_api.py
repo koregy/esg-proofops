@@ -312,3 +312,39 @@ def test_quality_surfaces_unread_image_even_when_page_has_header_text(tmp_path, 
         i["kind"] == "image_text_not_extracted"
         for i in http.get(f"/v1/runs/{run_id}/quality", params={"limit": 100}).json()["items"]
     )
+
+
+def test_quality_exposes_unprocessed_extraction_spans_without_approving_them(tmp_path, monkeypatch):
+    from proofops_agent.extraction import SyntheticClaimExtractor
+    from proofops_api.routers.sources import build_sources_router
+
+    from tests.integration.test_local_extract_runner import extraction_setup
+
+    class EmptyExtractor(SyntheticClaimExtractor):
+        def extract(self, packet):
+            return {"spans": []}
+
+    service, run_id, runner, now, _ = extraction_setup(
+        tmp_path, monkeypatch, extractor=EmptyExtractor()
+    )
+    assert runner.run_once(tenant_id=TENANT, run_id=run_id) == "committed"
+    discovery = runner.claims.load(TENANT, run_id)
+    expected = {e.source_id for e in discovery.exclusions if e.reason == "unprocessed_span"}
+    assert expected
+    before = service.store.jobs.get_run(TENANT, run_id)["claim_snapshot_sha256"]
+    http, auth = client(service)
+    http.app.include_router(
+        build_sources_router(
+            service.store, service.uploads, runner.parser, auth, clock=lambda: now[0]
+        )
+    )
+    response = http.get(f"/v1/runs/{run_id}/quality", params={"limit": 100})
+    assert response.status_code == 200
+    validate("QualityIssuePage", response.json())
+    items = [i for i in response.json()["items"] if i["kind"] == "extraction_span_unprocessed"]
+    assert {s for i in items for s in i["source_ids"]} == expected
+    assert all(i["state"] == "open" and "주장 여부" in i["reason"] for i in items)
+    assert service.store.jobs.get_run(TENANT, run_id)["claim_snapshot_sha256"] == before
+    auth.sessions.put(replace(auth.sessions.get("admin-session"), active_tenant_id=FOREIGN))
+    auth.memberships.put(MembershipRecord(FOREIGN, "admin-user", "admin", "active"))
+    assert http.get(f"/v1/runs/{run_id}/quality").status_code == 404

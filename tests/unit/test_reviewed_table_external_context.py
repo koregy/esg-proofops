@@ -88,7 +88,8 @@ def _patch_native(monkeypatch):
     still runs, so every downstream binding/hold check exercises real code.
     """
 
-    def fake(review, source, *, tenant_id=_TENANT, verify_context=False):
+    def fake(review, source, *, tenant_id=_TENANT, verify_context=False, requested_values=False):
+        assert requested_values is False  # These cases exercise the unchanged default policy.
         graph, native_ids = graph_from_review(review, source, tenant_id=tenant_id)
         canonical = {
             candidate.source.source_native_id: block.source_id

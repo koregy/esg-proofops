@@ -127,6 +127,15 @@ The execution screen paginates these warnings and uses the existing authorized
 source/ticket/preview endpoints. Empty/error responses never establish complete
 extraction. Source conflicts or invalid geometry can still prevent a preview.
 
+Published extraction snapshots additionally project `extraction_span_unprocessed`
+for `unknown` exclusions whose reason is `unprocessed_span`, one warning per
+source with a maximum 120-character excerpt. The existing `LocalClaimStore`
+verifies and replays the immutable snapshot before projection; corrupted
+published data returns 409 rather than an empty success. Parse-only runs retain
+their parser warnings. These spans are neither confirmed claims nor confirmed
+non-claims. This additive read projection does not change saved extraction,
+source verification, grades, or previous exports; the same rollback applies.
+
 ### R34 선행분류 출처 보존
 
 New immutable export snapshots may carry optional `classification_review` with

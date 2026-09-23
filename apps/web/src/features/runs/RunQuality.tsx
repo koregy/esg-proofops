@@ -12,6 +12,7 @@ const reasons: Record<string, string> = {
   "No text extracted; absence of evidence is not established.": "텍스트를 추출하지 못했습니다. 근거가 없다는 뜻은 아니므로 원문을 확인하세요.",
 };
 const labels: Record<string, string> = {
+  extraction_span_unprocessed: "주장 여부 미확정 구간",
   image_text_not_extracted: "이미지 영역 확인 필요", table_vision_not_run: "표 이미지 대조 미실행",
   no_extractable_text: "텍스트 추출 실패", parse_conflict: "파서 결과 불일치",
   source_geometry_invalid: "원문 좌표 확인 필요", source_geometry_missing: "원문 좌표 없음",
