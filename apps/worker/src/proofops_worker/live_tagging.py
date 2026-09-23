@@ -234,7 +234,8 @@ class LiveTaggingRuntime:
 
     def preliminary(self, claim, graph):
         profile = self.preliminary_settings.model_profile
-        role_table = profile == "upstage-preliminary-source-quotes-table-role-v1"
+        goal_role = profile == "upstage-preliminary-source-quotes-goal-role-v1"
+        role_table = profile == "upstage-preliminary-source-quotes-table-role-v1" or goal_role
         table = profile == "upstage-preliminary-source-quotes-table-v1" or role_table
         if table:
             packet = preliminary_table_request(
@@ -242,6 +243,7 @@ class LiveTaggingRuntime:
                 graph,
                 tenant_id=self.auth.tenant_id,
                 role_resolution=role_table,
+                goal_role=goal_role,
             )
         else:
             packet = preliminary_request(
@@ -257,8 +259,9 @@ class LiveTaggingRuntime:
             # The table profile recomputes its own quotable source tuple from
             # claim+graph; the legacy validator stays the only path for the two
             # older profiles, so stored responses replay unchanged. The R16
-            # role-resolution profile differs only in its prompt, so it reuses
-            # this same validator without a new schema or a new source rule.
+            # role-resolution profile and the R34 goal-role profile differ only
+            # in their prompt, so they reuse this same validator without a new
+            # schema or a new source rule.
             result = (
                 validate_preliminary_table_sources(claim, graph, raw, tenant_id=self.auth.tenant_id)
                 if table

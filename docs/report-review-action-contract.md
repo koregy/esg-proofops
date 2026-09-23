@@ -165,6 +165,26 @@ classification records. A two-sentence, three-replicate same-Kakao wire comparis
 kept the explicit 2040 deadline and rejected the 2025 designation year in all
 three responses each; this is a bounded prompt result, not corpus accuracy.
 
+### R34 opt-in preliminary goal-role prompt
+
+New local pilot runs may set `--preliminary-goal-role` together with
+`--preliminary-table-role` and its dependencies. The new
+`upstage-preliminary-source-quotes-goal-role-v1` profile reuses the existing
+`TABLE_SCHEMA` wire shape and the unchanged table validator; it differs from
+the table-role profile only in its pinned prompt (the table-role prompt plus
+one additive goal-role suffix, rendered before the existing Output JSON
+schema). It adds no wire field, no new schema, and no new grade rule. The
+default remains false, so existing prompt hashes, receipts, and replays are
+unchanged; enabled runs pin a distinct prompt hash and a distinct transport
+version for replay separation. Resume restores the stored flag and rejects
+adding it to a legacy run. Profile/prompt pairs are pinned so neither the
+table-role prompt nor any older prompt can be sent under the goal-role profile
+and vice versa. Rollback disables the option for new runs and retains pinned
+settings and immutable artifacts for existing runs. A bounded same-source
+probe extracted the named company-target indicator in 3/3 goal cases and kept
+3/3 ongoing-management cases, but still misread external risk in 2/3 cases, so
+this change makes no accuracy or fix claim.
+
 ### R34 opt-in paragraph selection
 
 New local pilot runs may set `--extraction-complete-selection` together with

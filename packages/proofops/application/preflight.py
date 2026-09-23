@@ -523,6 +523,7 @@ def check_local_upstage_tagger(
     )
     from proofops.application.tagging.preliminary import (
         CONTEXT_SYSTEM_SUFFIX,
+        GOAL_ROLE_SYSTEM_SUFFIX,
         TABLE_ROLE_SYSTEM_SUFFIX,
         TABLE_SYSTEM_SUFFIX,
     )
@@ -561,6 +562,19 @@ def check_local_upstage_tagger(
             + CONTEXT_SYSTEM_SUFFIX
             + TABLE_SYSTEM_SUFFIX
             + TABLE_ROLE_SYSTEM_SUFFIX
+        )
+        or (
+            # R34 opt-in: the table-role chain plus the goal-role suffix, pinned
+            # as one longer chain so neither the table-role prompt nor any older
+            # prompt can be sent under this profile and vice versa. Requires
+            # preliminary_table_role=True and its dependencies.
+            settings.model_profile == "upstage-preliminary-source-quotes-goal-role-v1"
+            and settings.system_prompt
+            == PRELIMINARY_SYSTEM_PROMPT
+            + CONTEXT_SYSTEM_SUFFIX
+            + TABLE_SYSTEM_SUFFIX
+            + TABLE_ROLE_SYSTEM_SUFFIX
+            + GOAL_ROLE_SYSTEM_SUFFIX
         )
         or (
             settings.model_profile == "upstage-relation-source-quotes-v1"

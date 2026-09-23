@@ -385,6 +385,8 @@ class RunService:
                 # below, so this set only names the accepted profiles.
                 "upstage-preliminary-source-quotes-table-v1",
                 "upstage-preliminary-source-quotes-table-role-v1",
+                # R34 opt-in goal-role profile; requires table-role and its deps.
+                "upstage-preliminary-source-quotes-goal-role-v1",
             } or tagging.model_profile not in {
                 "upstage-compact-ids-frozen-unicode-v1",
                 "upstage-compact-coverage-unicode-v2",
