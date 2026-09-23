@@ -41,10 +41,18 @@ type SafeHarborRecord =
       gap_ids: string[];
     };
 
+type TagElement = {
+  element_id: string;
+  state: string;
+  normalized_value: string | null;
+  evidence_refs: SourceRef[];
+};
+
 type ReportClaim = {
   claim_id: string;
   claim_quote?: string | null;
   classification_review?: { origin: string; track: string; revision: number } | null;
+  tag_elements?: TagElement[] | null;
   tag_revision: number;
   decision_revision: number;
   decision_status: string;
@@ -191,6 +199,33 @@ export function ReportPreview({ report }: { report: ReportModel }) {
           {claim.unresolved_elements.length ? (
             <p>미해결 요소: {claim.unresolved_elements.map(getElementLabel).join(", ")}</p>
           ) : null}
+          {claim.tag_elements === undefined || claim.tag_elements === null ? (
+            <p>태그 요소 미포함(이전 스냅샷)</p>
+          ) : claim.tag_elements.length === 0 ? (
+            <p>태그된 요소 없음(미태깅)</p>
+          ) : (
+            <section aria-label="태그 요소">
+              <h3>태그 요소</h3>
+              <ul>
+                {claim.tag_elements.map((element) => (
+                  <li key={element.element_id}>
+                    {getElementLabel(element.element_id)}: {element.state} · 값 {element.normalized_value ?? "값 없음"}
+                    {element.evidence_refs.length ? (
+                      <ul>
+                        {element.evidence_refs.map((source, index) => (
+                          <li key={index}>
+                            p.{source.page_num}: {source.quote}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p>인용 없음</p>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
           {claim.basis_refs.length ? (
             <ul aria-label="기준 근거">
               {claim.basis_refs.map((basis, index) => (

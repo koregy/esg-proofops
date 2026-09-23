@@ -636,3 +636,117 @@ def test_classification_review_provenance_rejects_unknown_origin():
     )
     with pytest.raises(ValueError, match="classification review provenance"):
         build_report_model(manifest(), records)
+
+
+def _tag_element(element_id, state, value, quote):
+    ref = source_ref(quote=quote)
+    return {
+        "element_id": element_id,
+        "state": state,
+        "evidence_refs": [ref] if state == "present" else [],
+        "normalized_value": value,
+        "credited_from": None,
+        "reason_code": None,
+    }
+
+
+def test_tag_elements_round_trip_values_states_and_exact_quotes():
+    records = decisions()
+    records[CLAIMS[0]]["tag_elements"] = [
+        _tag_element("G1", "present", "2040년", "2040년까지 탄소중립을 달성하겠습니다."),
+        _tag_element("G2", "present", "RE100 및 탄소중립", "RE100 및 탄소중립을 추진합니다."),
+        _tag_element("G6", "present", None, "재생에너지 조달을 확대하고 있습니다."),
+    ]
+    records[CLAIMS[1]]["tag_elements"] = []
+    model = build_report_model(manifest(), records)
+    decided, blocked, not_run = model["claims"]
+    assert [e["element_id"] for e in decided["tag_elements"]] == ["G1", "G2", "G6"]
+    assert decided["tag_elements"][0]["normalized_value"] == "2040년"
+    assert decided["tag_elements"][2]["state"] == "present"
+    assert decided["tag_elements"][2]["normalized_value"] is None
+    quote = decided["tag_elements"][1]["evidence_refs"][0]["quote"]
+    assert quote == "RE100 및 탄소중립을 추진합니다."
+    # No grade/label inference from tag values.
+    assert decided["evidence_grade"] == "E1" and decided["label"] == "INCOMPLETE"
+    assert blocked["tag_elements"] == []
+    assert not_run["tag_elements"] is None
+    assert json.loads(render_report(model, "json"))["claims"][0]["tag_elements"] == decided[
+        "tag_elements"
+    ]
+    rows = list(reader(StringIO(render_report(model, "csv").decode())))
+    assert rows[0][-1] == "tag_elements"
+    assert json.loads(rows[1][rows[0].index("tag_elements")]) == decided["tag_elements"]
+    assert rows[3][rows[0].index("tag_elements")] == "null"
+    html = render_report(model, "html").decode()
+    assert "태그 요소" in html and "2040년" in html and "RE100 및 탄소중립을 추진합니다." in html
+    assert "태그 요소 미포함(이전 스냅샷)" in html
+    assert "태그된 요소 없음(미태깅)" in html
+
+
+def test_tag_elements_old_snapshot_null_and_untagged_empty_are_distinct():
+    old = build_report_model(manifest(), decisions())
+    assert all(claim["tag_elements"] is None for claim in old["claims"])
+    records = decisions()
+    records[CLAIMS[2]]["tag_elements"] = []
+    model = build_report_model(manifest(), records)
+    assert model["claims"][2]["tag_elements"] == []
+    assert model["claims"][0]["tag_elements"] is None
+    html = render_report(model, "html").decode()
+    assert "태그 요소 미포함(이전 스냅샷)" in html
+    assert "태그된 요소 없음(미태깅)" in html
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "duplicate",
+        "foreign",
+        "sourceless_present",
+        "unverified_present",
+        "malformed",
+        "untagged_with_elements",
+    ],
+)
+def test_tag_elements_fail_closed(change):
+    records = decisions()
+    good = [
+        _tag_element("G1", "present", "2040년", "2040년까지 탄소중립을 달성하겠습니다."),
+        _tag_element("G2", "unknown", None, "x"),
+    ]
+    good[1]["evidence_refs"] = []
+    if change == "duplicate":
+        records[CLAIMS[0]]["tag_elements"] = [good[0], dict(good[0])]
+    elif change == "foreign":
+        bad = _tag_element("G1", "present", "2040년", "2040년 목표")
+        bad["evidence_refs"][0]["document_version_id"] = RUN
+        records[CLAIMS[0]]["tag_elements"] = [bad]
+    elif change == "sourceless_present":
+        bad = _tag_element("G1", "present", "2040년", "2040년 목표")
+        bad["evidence_refs"] = []
+        records[CLAIMS[0]]["tag_elements"] = [bad]
+    elif change == "unverified_present":
+        bad = _tag_element("G1", "present", "2040년", "2040년 목표")
+        bad["evidence_refs"][0]["verification_state"] = "candidate"
+        records[CLAIMS[0]]["tag_elements"] = [bad]
+    elif change == "malformed":
+        records[CLAIMS[0]]["tag_elements"] = [{"element_id": "G1"}]
+    else:
+        records[CLAIMS[2]]["tag_elements"] = [good[0]]
+    with pytest.raises(ValueError):
+        build_report_model(manifest(), records)
+
+
+def test_tag_elements_escape_html_and_guard_csv_formulas():
+    records = decisions()
+    records[CLAIMS[0]]["tag_elements"] = [
+        _tag_element("G1", "present", "=HYPERLINK(\"bad\")", "<script>alert(1)</script>")
+    ]
+    model = build_report_model(manifest(), records)
+    html = render_report(model, "html").decode()
+    assert "<script>" not in html and "&lt;script&gt;alert(1)&lt;/script&gt;" in html
+    rows = list(reader(StringIO(render_report(model, "csv").decode())))
+    cell = rows[1][rows[0].index("tag_elements")]
+    assert "<script>" in cell
+    assert json.loads(cell[1:] if cell.startswith("'") else cell)[0][
+        "normalized_value"
+    ].startswith("=")

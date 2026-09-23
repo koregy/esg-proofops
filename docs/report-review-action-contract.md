@@ -185,6 +185,76 @@ probe extracted the named company-target indicator in 3/3 goal cases and kept
 3/3 ongoing-management cases, but still misread external risk in 2/3 cases, so
 this change makes no accuracy or fix claim.
 
+## 7. Optional tag_elements snapshot (R34-day1 export usability)
+
+Status: additive optional `tag_elements` projection in `report_model_v1`,
+captured in new local export snapshots only. No request-field, route, DTO,
+database table, or migration change. Schema stays `report_model_v1`.
+
+### Problem this closes
+
+Claim UI shows accepted tag values and per-element source buttons, but report
+export only records unresolved IDs (`missing_elements` / `unresolved_elements`).
+Accepted values (`normalized_value`), states, and exact evidence quotes are not
+in the report model, so JSON/CSV/HTML and `ReportPreview` cannot show what the
+reviewer already accepted.
+
+### Contract
+
+- New `LocalExportStore.capture` copies the pinned immutable current tag
+  revision's `elements` into optional `decisions[claim_id].tag_elements`:
+  each entry keeps `element_id`, `state`, `normalized_value`, and full
+  `evidence_refs` (exact quotes). No grade/label inference, no recalculation,
+  no AI/human provenance change.
+- `build_report_model` projects `tag_elements` per claim with existing
+  validators only (`domain _element_from_dict` shape plus reporting
+  `_source_refs` manifest pin). `report_model_v1` is unchanged; the field is
+  optional and documented here.
+- Semantics:
+  - missing key (old snapshots, wholly-unavailable records) -> `null` =
+    unavailable, never an empty evaluated list; HTML says the snapshot did not
+    carry tag elements, CSV renders `null`.
+  - `tag_revision == 0` new snapshots store `[]` = no tagged elements
+    (untagged); tagged claims store the validated non-empty list.
+  - duplicate `element_id`, malformed element, foreign
+    `document_version_id`/`parse_manifest_id`, source-less `present`, or any
+    `present` evidence ref whose `verification_state != verified` fails closed
+    (`ValueError` in projection, `EXPORT_INTEGRITY_FAILED` in capture) and is
+    never displayed as valid present.
+  - `state` is preserved even when `normalized_value` is null.
+  - all existing unknown/conflict/absent semantics and source verification are
+    untouched.
+- Renderers: JSON keeps the validated list/null; CSV appends exactly one
+  `tag_elements` column at END (old order retained, canonical JSON cell,
+  formula-guarded); HTML adds an escaped per-element block (value/state/exact
+  quote, bbox/page when present). `ReportPreview` renders the same three
+  states (unavailable / no tagged elements / element list) with React escaping.
+- No mandatory request fields are introduced.
+
+### Old-export immutability and rollback
+
+- `tag_elements` lives only inside newly captured frozen `export_snapshot`
+  JSON (`decisions` map). No DB schema migration is expected because the
+  export snapshot is a frozen JSON blob validated by `build_report_model`,
+  not a relational table: old blobs lacking the key still validate to `null`,
+  new code reads old blobs, old code ignores the extra key. No backfill is
+  run because rewriting history would break immutability; verification mints
+  a fresh export with a new idempotency key. Old exported ZIPs/revisions are
+  never rewritten.
+- Rollback: reverting `reporting.py` + `export_store.py` + `ReportPreview.tsx`
+  removes the capture/projection/column with zero migration and zero effect on
+  stored artifacts, tag/decision revisions, or audit records.
+
+### Verification
+
+- Focused fail-first regression in `tests/acceptance/test_report.py` and
+  `tests/acceptance/test_exports.py`: immutable new element snapshot
+  (values/states/exact quotes round-trip), old snapshot null, tamper/foreign
+  evidence fail-closed, escaped HTML/CSV.
+- Existing export/review lineage and report tests as applicable plus
+  `ruff`/`mypy`/web build for touched files. Full 3600-test suite is not run;
+  full PDF/UI/ZIP export is coordinator responsibility after code review.
+
 ### R34 opt-in paragraph selection
 
 New local pilot runs may set `--extraction-complete-selection` together with

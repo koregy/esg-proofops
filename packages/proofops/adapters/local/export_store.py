@@ -21,7 +21,7 @@ from proofops.application.exports import (
     encode_revision_record,
     timestamp,
 )
-from proofops.application.reporting import _basis_refs, build_report_model
+from proofops.application.reporting import _basis_refs, _tag_elements, build_report_model
 from proofops.domain.audit import ChangeSet
 from proofops.domain.provenance import canonical_hash
 from proofops.domain.rulepacks import canonical_json
@@ -234,6 +234,10 @@ class LocalExportStore:
                         )
                     }
                 tag, decision, raw_record = None, None, None
+                if not head["tag_revision"]:
+                    # New untagged snapshots carry an empty list; old snapshots
+                    # omit the key entirely and project to null (unavailable).
+                    record["tag_elements"] = []
                 if head["tag_revision"]:
                     current = self.claims.current_tag(tenant, run_id, claim_id, connection=db)
                     tag = current["tag"]
@@ -278,6 +282,18 @@ class LocalExportStore:
                             for k in ("model_sha256", "prompt_sha256", "replicate_hashes")
                         }
                     )
+                    # Optional immutable usability snapshot of accepted values,
+                    # states, and exact quotes from the pinned tag revision.
+                    # Reuses domain/reporting validators; no grading or inference.
+                    try:
+                        raw_elements = tag.get("elements")
+                        if not isinstance(raw_elements, list):
+                            raise ValueError("tag elements must be an array")
+                        record["tag_elements"] = _tag_elements(
+                            raw_elements, claim.document_version_id, graph.parse_manifest_id
+                        )
+                    except (ValueError, TypeError, KeyError) as exc:
+                        raise ExportRejected("EXPORT_INTEGRITY_FAILED") from exc
                     # Preserve tag uncertainty even while approval prevents a decision.
                     # Existing frozen snapshots omit this optional list; never rewrite them.
                     if not head["decision_revision"]:

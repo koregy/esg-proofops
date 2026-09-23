@@ -13,6 +13,7 @@ from typing import Any
 from proofops.application.summaries import _validated_coverage
 from proofops.domain.rulepacks import canonical_json
 from proofops.domain.values import (
+    _element_from_dict,
     _require_sha256,
     _require_strict_int,
     _require_uuid,
@@ -91,6 +92,53 @@ def _source_refs(
         copied = asdict(source)
         copied["bbox"] = list(source.bbox) if source.bbox is not None else None
         result.append(copied)
+    return result
+
+
+def _tag_elements(
+    value: object, document_version_id: str, parse_manifest_id: str | None
+) -> list[dict[str, Any]] | None:
+    """Project optional immutable tag elements without grading or inference.
+
+    Missing key (old snapshots) yields None = unavailable, never an empty
+    evaluated list. Empty list means untagged (no tagged elements). Each entry
+    keeps element_id/state/normalized_value plus validated evidence_refs with
+    exact quotes. State is preserved even when normalized_value is null.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, list | tuple):
+        raise ValueError("tag_elements must be an array or null")
+    seen: set[str] = set()
+    result: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, Mapping):
+            raise ValueError("tag_elements must contain objects")
+        try:
+            element = _element_from_dict(_copy(item))
+        except (ValueError, TypeError, KeyError) as exc:
+            raise ValueError("tag element is malformed") from exc
+        if element.element_id in seen:
+            raise ValueError("duplicate tag element_id")
+        seen.add(element.element_id)
+        refs = _source_refs(
+            _copy(item.get("evidence_refs")), document_version_id, parse_manifest_id
+        )
+        if element.state == "present":
+            if not refs or any(
+                ref.get("verification_state") != "verified" for ref in refs
+            ):
+                raise ValueError("source-less/unverified present is prohibited")
+        result.append(
+            {
+                "element_id": element.element_id,
+                "state": element.state,
+                "normalized_value": element.normalized_value,
+                "credited_from": element.credited_from,
+                "reason_code": element.reason_code,
+                "evidence_refs": refs,
+            }
+        )
     return result
 
 
@@ -310,6 +358,7 @@ def _unfinished(
             "model_sha256": None,
             "prompt_sha256": None,
             "replicate_hashes": [],
+            "tag_elements": None,
         }
     if (
         record.get("tenant_id") != tenant_id
@@ -323,6 +372,11 @@ def _unfinished(
     ):
         raise ValueError("unfinished claim does not match the pinned revision")
     sources = _source_refs(record.get("source_refs"), document_version_id, parse_manifest_id)
+    tag_elements = _tag_elements(
+        record.get("tag_elements"), document_version_id, parse_manifest_id
+    )
+    if tag_revision == 0 and tag_elements:
+        raise ValueError("untagged claim cannot carry tag elements")
     return (
         result
         | _provenance(
@@ -337,6 +391,7 @@ def _unfinished(
             ),
             "source_refs": sources,
             "source_status": "available" if sources else "not_run",
+            "tag_elements": tag_elements,
         }
     )
 
@@ -449,6 +504,9 @@ def build_report_model(
         gaps = _strings(record.get("gap_ids"), "gap_ids")
         basis = _basis_refs(record.get("basis_refs"))
         sources = _source_refs(record.get("source_refs"), document_version_id, parse_manifest_id)
+        tag_elements = _tag_elements(
+            record.get("tag_elements"), document_version_id, parse_manifest_id
+        )
         if status == "decided" and not sources:
             raise ValueError("decided claim must preserve its source reference")
         provenance = _provenance(
@@ -473,6 +531,7 @@ def build_report_model(
                 "source_refs": sources,
                 "source_status": "available" if sources else "not_run",
                 "basis_refs": basis,
+                "tag_elements": tag_elements,
                 **provenance,
                 "assurance": _assurance(
                     record.get("assurance"), document_version_id, parse_manifest_id
@@ -585,6 +644,7 @@ def render_report(model: Mapping[str, object], output_format: str) -> bytes:
             "rule_pack_sha256",
             "claim_quote",
             "classification_review",
+            "tag_elements",
         )
         stream = StringIO(newline="")
         rows = writer(stream)
@@ -629,6 +689,28 @@ def render_report(model: Mapping[str, object], output_format: str) -> bytes:
             else:
                 action_html = "<p>자동 생성된 후속 검토 안내 없음</p>"
             quote = claim.get("claim_quote") or "이전 스냅샷에 주장 문장이 저장되지 않았습니다"
+            tag_elements = claim.get("tag_elements")
+            if tag_elements is None:
+                tag_html = "<p>태그 요소 미포함(이전 스냅샷)</p>"
+            elif not tag_elements:
+                tag_html = "<p>태그된 요소 없음(미태깅)</p>"
+            else:
+                parts = []
+                for element in tag_elements:
+                    value = element.get("normalized_value")
+                    value_text = (
+                        escape(value) if isinstance(value, str) else "값 없음"
+                    )
+                    quotes = "".join(
+                        f"<li>p.{ref['page_num']}: {escape(ref['quote'])}</li>"
+                        for ref in element.get("evidence_refs", [])
+                    ) or "<li>인용 없음</li>"
+                    parts.append(
+                        f"<li>{escape(element.get('element_id', ''))}: "
+                        f"{escape(element.get('state', ''))} · 값 {value_text}"
+                        f"<ul>{quotes}</ul></li>"
+                    )
+                tag_html = "<h3>태그 요소</h3><ul>" + "".join(parts) + "</ul>"
             classification = claim.get("classification_review")
             classification_html = ""
             if classification:
@@ -655,6 +737,7 @@ def render_report(model: Mapping[str, object], output_format: str) -> bytes:
                 f"<p>{escape(claim.get('suggestion') or '확정된 수정 제안 없음')}</p>"
                 f"{action_html}"
                 f"<h3>원문 근거</h3><ul>{sources}</ul>"
+                f"{tag_html}"
                 f"<details><summary>감사 세부정보</summary><pre>{audit_details}</pre></details>"
                 "</section>"
             )

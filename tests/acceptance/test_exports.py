@@ -374,6 +374,55 @@ def test_unfinished_export_preserves_tag_uncertainty_without_grading(tmp_path, m
     assert "미해결 요소의 원문 근거 귀속" in bundle.read("report.html").decode()
 
 
+def test_capture_projects_immutable_tag_elements_without_grading(tmp_path, monkeypatch):
+    from proofops.application.reporting import build_report_model
+
+    ws = exports(tmp_path, monkeypatch)
+    store = ws["export_store"]
+    claim_id = ws["review"]["claim_id"]
+    current = ws["runner"].claims.current_tag(TENANT, ws["run"], claim_id)
+    assert current["tag"]["elements"]
+    export_id = store.reserve(
+        ws["actor"],
+        ws["run"],
+        dict(formats=["json", "csv", "html"], allow_partial=True),
+        "tag-elements-check",
+        now=ws["now"][0],
+    )
+    captured = store.capture(TENANT, export_id)
+    record = captured["decisions"][claim_id]
+    assert isinstance(record["tag_elements"], list) and record["tag_elements"]
+    pinned = {e["element_id"]: e for e in current["tag"]["elements"]}
+    for element in record["tag_elements"]:
+        assert element["state"] == pinned[element["element_id"]]["state"]
+        assert element["normalized_value"] == pinned[element["element_id"]]["normalized_value"]
+        assert len(element["evidence_refs"]) == len(
+            pinned[element["element_id"]]["evidence_refs"]
+        )
+        if element["evidence_refs"]:
+            assert element["evidence_refs"][0]["quote"] == pinned[element["element_id"]][
+                "evidence_refs"
+            ][0]["quote"]
+        if element["state"] == "present":
+            assert element["evidence_refs"]
+            assert all(
+                ref.get("verification_state") == "verified"
+                for ref in element["evidence_refs"]
+            )
+    model = build_report_model(captured["manifest"], captured["decisions"])
+    got = [(e["element_id"], e["state"]) for e in model["claims"][0]["tag_elements"]]
+    want = [(e["element_id"], e["state"]) for e in record["tag_elements"]]
+    assert got == want
+    assert model["claims"][0]["evidence_grade"] is None
+    # Foreign/tampered evidence must fail closed at projection time.
+    tampered = json.loads(json.dumps(captured["decisions"]))
+    tampered[claim_id]["tag_elements"].append(
+        json.loads(json.dumps(tampered[claim_id]["tag_elements"][0]))
+    )
+    with pytest.raises(ValueError):
+        build_report_model(captured["manifest"], tampered)
+
+
 def test_idempotency_accepts_contract_strings_and_invalid_json_is_422(tmp_path, monkeypatch):
     ws = exports(tmp_path, monkeypatch)
     ws["http"].headers["Idempotency-Key"] = "synthetic-export-request-0001"
