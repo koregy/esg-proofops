@@ -493,6 +493,11 @@ def build_report_model(
     if set(decisions) != seen:
         raise ValueError("decisions contain claims outside the snapshot")
     for claim in claims:
+        record = decisions[claim["claim_id"]]
+        quote = record.get("claim_quote") if record is not None else None
+        if quote is not None and (not isinstance(quote, str) or not quote.strip()):
+            raise ValueError("claim_quote must be non-empty text or null")
+        claim["claim_quote"] = quote
         claim["review_action"] = _review_action(claim)
     unfinished_count = sum(item["decision_status"] != "decided" for item in claims)
     unverified_clause_count = sum(
@@ -561,6 +566,7 @@ def render_report(model: Mapping[str, object], output_format: str) -> bytes:
             "prompt_sha256",
             "replicate_hashes",
             "rule_pack_sha256",
+            "claim_quote",
         )
         stream = StringIO(newline="")
         rows = writer(stream)
@@ -604,9 +610,11 @@ def render_report(model: Mapping[str, object], output_format: str) -> bytes:
                 )
             else:
                 action_html = "<p>자동 생성된 후속 검토 안내 없음</p>"
+            quote = claim.get("claim_quote") or "이전 스냅샷에 주장 문장이 저장되지 않았습니다"
             items.append(
                 "<section>"
-                f"<h2>{escape(claim['claim_id'])}</h2>"
+                f"<h2>검토 대상 주장</h2><p>{escape(quote)}</p>"
+                f"<p>주장 ID: {escape(claim['claim_id'])}</p>"
                 f"<p>판정: {escape(grade_label)} ({escape(claim['decision_status'])})</p>"
                 f"<p>검토: {escape(claim['review_status'])} · "
                 f"tag revision {claim['tag_revision']} · decision revision "
@@ -616,7 +624,7 @@ def render_report(model: Mapping[str, object], output_format: str) -> bytes:
                 f"gaps: {escape(', '.join(claim['gap_ids']) or empty_result)}</p>"
                 f"<p>{escape(claim.get('suggestion') or '확정된 수정 제안 없음')}</p>"
                 f"{action_html}"
-                f"<ul>{sources}</ul>"
+                f"<h3>원문 근거</h3><ul>{sources}</ul>"
                 f"<details><summary>감사 세부정보</summary><pre>{audit_details}</pre></details>"
                 "</section>"
             )

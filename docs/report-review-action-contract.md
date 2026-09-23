@@ -100,3 +100,15 @@ empty. Untagged claims and older snapshots without this optional list retain the
 empty-list default. No API route, DTO, database table, or migration changes.
 Rollback reverts the capture/projection additions; prior frozen ZIP bytes remain
 unchanged. Verified by the unfinished-export regression and immutable-export tests.
+
+## 6. Explicit claim quote (R34)
+
+New local export snapshots copy the frozen discovered claim's exact `quote` into
+optional `claim_quote`. The report projects it unchanged into JSON/CSV and labels
+it separately from evidence excerpts in HTML. It is not a verified assertion,
+source approval, rewritten quote, or new grade. Old records default to null; HTML
+states the quote was not stored rather than guessing it from a source paragraph.
+Non-null values must be non-empty strings. HTML escaping and CSV formula guards
+apply. This is additive report/snapshot metadata: no route/DTO/table migration.
+Readers that ignore extra keys remain compatible. Reverting capture/projection
+removes the field from future reports; existing snapshots/ZIPs are never rewritten.

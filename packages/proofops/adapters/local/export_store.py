@@ -175,6 +175,7 @@ class LocalExportStore:
                     tenant_id=tenant,
                     document_version_id=claim.document_version_id,
                     claim_id=claim_id,
+                    claim_quote=claim.quote,
                     **head,
                     parse_manifest_id=graph.parse_manifest_id,
                     source_sha256=graph.source_sha256,

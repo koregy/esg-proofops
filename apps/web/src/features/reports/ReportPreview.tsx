@@ -41,6 +41,7 @@ type SafeHarborRecord =
 
 type ReportClaim = {
   claim_id: string;
+  claim_quote?: string | null;
   tag_revision: number;
   decision_revision: number;
   decision_status: string;
@@ -149,6 +150,7 @@ export function ReportPreview({ report }: { report: ReportModel }) {
       {report.claims.map((claim) => (
         <section key={claim.claim_id} aria-labelledby={`claim-${claim.claim_id}`}>
           <h2 id={`claim-${claim.claim_id}`}>주장 {claim.claim_id}</h2>
+          <p>검토 대상 주장: {claim.claim_quote ?? "이전 스냅샷에 주장 문장이 저장되지 않았습니다"}</p>
           <p>
             판정: {claim.decision_status === "decided"
               ? `${claim.evidence_grade} / ${claim.label}`

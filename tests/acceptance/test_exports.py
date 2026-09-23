@@ -73,6 +73,7 @@ def test_real_http_bundle_manifest_provenance_idempotency_and_immutable_reopen(
     assert claim["tag_revision"] == 2 and claim["decision_revision"] == 1
     assert claim["replicate_hashes"] == list(ws["tags"].replicate_hashes)
     assert claim["source_refs"] and claim["source_refs"][0]["bbox"]
+    assert claim["claim_quote"] == ws["runner"].claims.list(TENANT, ws["run"])[0].quote
     assert create(ws).json() == result
     assert create(ws, formats=["json"]).status_code == 409
     # Real rules-only rescore changes current heads, never the old report or audit event.
@@ -364,6 +365,7 @@ def test_unfinished_export_preserves_tag_uncertainty_without_grading(tmp_path, m
     assert response.status_code == 202, response.text
     bundle = archive(ws, response.json())[0]
     claim = json.loads(bundle.read("report.json"))["claims"][0]
+    assert claim["claim_quote"] == ws["runner"].claims.list(TENANT, ws["run"])[0].quote
     assert claim["unresolved_elements"] == expected
     assert claim["review_action"]["unresolved_elements"] == expected
     assert "unresolved_evidence" in claim["review_action"]["reasons"]

@@ -545,7 +545,9 @@ def test_stdlib_renderers_escape_html_and_guard_csv_formulas():
 def test_unrun_html_reports_unevaluated_lists_and_keeps_raw_data_in_audit_details():
     model = build_report_model(manifest(), decisions())
     html = render_report(model, "html").decode()
-    section = next(part for part in html.split("<section>") if f"<h2>{CLAIMS[2]}</h2>" in part)
+    section = next(
+        part for part in html.split("<section>") if f"<p>주장 ID: {CLAIMS[2]}</p>" in part
+    )
     summary, audit = section.split("<details>", 1)
     assert "결손: 미평가 · 미해결: 미평가 · gaps: 미평가" in summary
     assert "<pre>" not in summary
@@ -564,10 +566,12 @@ import { renderToStaticMarkup } from SERVER;
 import { ReportPreview } from COMPONENT;
 import assert from "node:assert/strict";
 const report=REPORT;
+report.claims[0].claim_quote="HTML 근거와 구분되는 검토 주장";
 const html=renderToStaticMarkup(React.createElement(ReportPreview,{report}));
 for (const text of ["검토용 부분 리포트","미완료 2건","판독 불가 1쪽","미처리 1쪽",
 "p.34","G3, G4","조항 미확인","보증 범위 밖","세이프하버 미실행",MODEL,PROMPT,
-"규칙 공백으로 미판정", "다음 검토 작업", "기준 조항의 대응"] )
+"규칙 공백으로 미판정", "다음 검토 작업", "기준 조항의 대응",
+"HTML 근거와 구분되는 검토 주장", "이전 스냅샷에 주장 문장이 저장되지 않았습니다"] )
   assert.ok(html.includes(text), text);
 console.log("ReportPreview audit-state checks passed");
 """.replace("REACT", json.dumps(str(root / "apps/web/node_modules/react/index.js")))
@@ -595,3 +599,25 @@ console.log("ReportPreview audit-state checks passed");
     )
     rendered = subprocess.run(["node", str(bundle)], check=True, capture_output=True, text=True)
     assert "checks passed" in rendered.stdout
+
+
+def test_report_preserves_claim_quote_separately_from_evidence_and_escapes_it():
+    records = decisions()
+    quote = "=검토 주장 <script>alert(1)</script>"
+    for record in records.values():
+        record["claim_quote"] = quote
+    model = build_report_model(manifest(), records)
+    assert all(claim["claim_quote"] == quote for claim in model["claims"])
+    assert model["claims"][0]["source_refs"][0]["quote"] != quote
+    html = render_report(model, "html").decode()
+    assert "검토 대상 주장" in html
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
+    assert "<script>" not in html
+    rows = list(reader(StringIO(render_report(model, "csv").decode())))
+    assert rows[1][rows[0].index("claim_quote")] == "'" + quote
+    old = build_report_model(manifest(), decisions())
+    assert all(claim["claim_quote"] is None for claim in old["claims"])
+    assert "이전 스냅샷에 주장 문장이 저장되지 않았습니다" in render_report(old, "html").decode()
+    records[CLAIMS[0]]["claim_quote"] = {"untrusted": "value"}
+    with pytest.raises(ValueError, match="claim_quote"):
+        build_report_model(manifest(), records)
