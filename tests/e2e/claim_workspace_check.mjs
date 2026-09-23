@@ -51,8 +51,8 @@ export async function check() {
     topic_ids: ['emissions'], decision, revision: 1,
   };
   const detail = {
-    claim, source_refs: [source], elements: [{ element_id: 'P1', state: 'unknown',
-      evidence_refs: [], normalized_value: null, credited_from: null, reason_code: null }],
+    claim, source_refs: [source], elements: [{ element_id: 'P1', state: 'present',
+      evidence_refs: [source], normalized_value: source.quote, credited_from: null, reason_code: null }],
     assurance: { status: 'undetermined', level: null, provider: null, statement_id: null,
       metric_match: 'unknown', period_match: 'unknown', boundary_match: 'unknown', evidence_refs: [] },
     replicate_request_ids: ['req-1', 'req-2', 'req-3'], packet_sha256: 'd'.repeat(64),
@@ -121,12 +121,20 @@ export async function check() {
     window.dispatchEvent(new PopStateEvent('popstate'));
     await waitFor('보증 범위를 확인할 수 없습니다');
     assert(!host.querySelector('img[src="x"]'), 'Source quote must render as text, never HTML');
+    assert(host.textContent.includes(`값: ${source.quote}`), 'Element must show its stored value as text');
     const sourceButton = [...host.querySelectorAll('button')].find(button => button.textContent.includes('원문 위치'));
     sourceButton.click();
     await waitFor('원본 PDF 새 탭에서 열기');
     assert(host.querySelector('img[alt*="1쪽"]'), 'Verified located source should render the issued PNG preview');
     assert(host.querySelector('[data-source-highlight="true"]'), 'Allowed verified bbox should render a real overlay');
     assert(sourceTickets === 2, 'Expired source preview should issue exactly one replacement ticket');
+    const elementEvidence = host.querySelector('details[data-element-evidence="P1"]');
+    assert(elementEvidence, 'Element evidence should be available beside its value');
+    elementEvidence.querySelector('summary').click();
+    assert(elementEvidence.textContent.includes(source.quote), 'Evidence must retain the exact quote');
+    elementEvidence.querySelector('button').click();
+    for (let attempt = 0; attempt < 20 && sourceTickets < 3; attempt += 1) await flush();
+    assert(sourceTickets === 3, 'Element source button should reuse the authenticated source viewer');
 
     history.pushState({}, '', `/runs/${runId}/reviews?track=performance&grade=E1&review_status=needs_review`);
     window.dispatchEvent(new PopStateEvent('popstate'));
