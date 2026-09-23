@@ -34,6 +34,36 @@ _LABELS = {
 }
 
 
+_ELEMENT_LABELS = {
+    "G1": "목표연도",
+    "G2": "목표수치·지표",
+    "G3": "기준연도·기준값",
+    "G4": "적용범위 (Scope·조직경계)",
+    "G5": "현재 이행률·진척",
+    "G6": "전환계획·달성수단",
+    "G7": "상쇄(탄소배출권) 사용 계획",
+    "G8": "과학기반 목표 검증",
+    "P1": "정량수치와 단위",
+    "P2": "비교기준 (전년·기준연도)",
+    "P3": "산정방법론과 경계",
+    "P4": "보증 연결",
+    "P5": "절대량/원단위 구분 명시",
+    "P6": "본문 수치와 데이터 표의 일치",
+    "M1": "이행방법·명명된 표준",
+    "M2": "적용범위 (조직경계·사업장)",
+    "M3": "외부검증",
+    "M4": "이행 실적의 구체성",
+    "M5": "담당 조직·거버넌스",
+    "M6": "경영진 보상 연동",
+}
+_ELEMENT_STATES = {"present": "있음", "absent": "없음", "unknown": "미상", "conflict": "불일치"}
+
+
+def _element_label(element_id: str) -> str:
+    name = _ELEMENT_LABELS.get(element_id)
+    return f"{element_id} · {name}" if name else element_id
+
+
 def _copy(value: Any) -> Any:
     return json.loads(canonical_json(value))
 
@@ -699,15 +729,16 @@ def render_report(model: Mapping[str, object], output_format: str) -> bytes:
                 for element in tag_elements:
                     value = element.get("normalized_value")
                     value_text = (
-                        escape(value) if isinstance(value, str) else "값 없음"
+                        escape(value) if isinstance(value, str) else "기록 없음"
                     )
                     quotes = "".join(
                         f"<li>p.{ref['page_num']}: {escape(ref['quote'])}</li>"
                         for ref in element.get("evidence_refs", [])
                     ) or "<li>인용 없음</li>"
                     parts.append(
-                        f"<li>{escape(element.get('element_id', ''))}: "
-                        f"{escape(element.get('state', ''))} · 값 {value_text}"
+                        f"<li>{escape(_element_label(element['element_id']))}: "
+                        f"{escape(_ELEMENT_STATES.get(element['state'], element['state']))}"
+                        f" ({escape(element['state'])}) · 값: {value_text}"
                         f"<ul>{quotes}</ul></li>"
                     )
                 tag_html = "<h3>태그 요소</h3><ul>" + "".join(parts) + "</ul>"
@@ -723,6 +754,10 @@ def render_report(model: Mapping[str, object], output_format: str) -> bytes:
                     f"<p>선행분류 기록: {origin} · {escape(classification['track'])} · "
                     f"revision {classification['revision']} (등급 승인 아님)</p>"
                 )
+            missing = ", ".join(map(_element_label, claim["missing_elements"])) or empty_result
+            unresolved = (
+                ", ".join(map(_element_label, claim["unresolved_elements"])) or empty_result
+            )
             items.append(
                 "<section>"
                 f"<h2>검토 대상 주장</h2><p>{escape(quote)}</p>"
@@ -731,8 +766,8 @@ def render_report(model: Mapping[str, object], output_format: str) -> bytes:
                 f"<p>검토: {escape(claim['review_status'])} · "
                 f"tag revision {claim['tag_revision']} · decision revision "
                 f"{claim['decision_revision']}</p>"
-                f"<p>결손: {escape(', '.join(claim['missing_elements']) or empty_result)} · "
-                f"미해결: {escape(', '.join(claim['unresolved_elements']) or empty_result)} · "
+                f"<p>결손: {escape(missing)} · "
+                f"미해결: {escape(unresolved)} · "
                 f"gaps: {escape(', '.join(claim['gap_ids']) or empty_result)}</p>"
                 f"<p>{escape(claim.get('suggestion') or '확정된 수정 제안 없음')}</p>"
                 f"{action_html}"

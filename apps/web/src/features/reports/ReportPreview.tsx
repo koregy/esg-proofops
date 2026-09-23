@@ -209,7 +209,7 @@ export function ReportPreview({ report }: { report: ReportModel }) {
               <ul>
                 {claim.tag_elements.map((element) => (
                   <li key={element.element_id}>
-                    {getElementLabel(element.element_id)}: {element.state} · 값 {element.normalized_value ?? "값 없음"}
+                    {getElementLabel(element.element_id)}: {element.state} · 값: {element.normalized_value ?? "기록 없음"}
                     {element.evidence_refs.length ? (
                       <ul>
                         {element.evidence_refs.map((source, index) => (
