@@ -228,6 +228,14 @@ class LocalExportStore:
                             for k in ("model_sha256", "prompt_sha256", "replicate_hashes")
                         }
                     )
+                    # Preserve tag uncertainty even while approval prevents a decision.
+                    # Existing frozen snapshots omit this optional list; never rewrite them.
+                    if not head["decision_revision"]:
+                        record["unresolved_elements"] = [
+                            element["element_id"]
+                            for element in tag["elements"]
+                            if element["state"] in ("unknown", "conflict")
+                        ]
                     if head["decision_revision"]:
                         decision = self.jobs._get(
                             db,

@@ -332,6 +332,9 @@ def _unfinished(
             source_sha256=source_sha256,
         )
         | {
+            "unresolved_elements": _strings(
+                record.get("unresolved_elements", []), "unresolved_elements"
+            ),
             "source_refs": sources,
             "source_status": "available" if sources else "not_run",
         }

@@ -29,7 +29,7 @@ states. This is a review-usefulness gap, not a grading gap.
     "claim_id":            <uuid, same as claim>,
     "reasons":             [ordered reason codes],
     "checks":              [human-readable next steps, aligned to reasons],
-    "unresolved_elements": [element ids, copied from the decision],
+    "unresolved_elements": [element ids, from the decision or pinned unfinished tag],
     "gap_ids":             [gap ids, copied from the decision],
     "source_pages":        [page numbers of the claim's existing source_refs]
   }
@@ -89,3 +89,14 @@ Reason codes (each distinct from verified-missing `suggestion`):
   unchanged. Evidence: ROOT `outputs/agent-results/R24/exports/validation.json`.
 - `ruff` and `mypy` clean on the changed modules. No new model calls for this
   report-format verification; AWS checks are **not_run**.
+
+## 5. Unfinished tagged claims (R34)
+
+When `decision_revision == 0`, a new local export snapshot also copies element IDs
+whose pinned tag state is `unknown` or `conflict` into `unresolved_elements`.
+The report retains these IDs and existing `unresolved_evidence` guidance. This
+is review work, not a decision: grade/label stay null and `missing_elements` stays
+empty. Untagged claims and older snapshots without this optional list retain the
+empty-list default. No API route, DTO, database table, or migration changes.
+Rollback reverts the capture/projection additions; prior frozen ZIP bytes remain
+unchanged. Verified by the unfinished-export regression and immutable-export tests.

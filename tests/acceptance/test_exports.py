@@ -351,6 +351,27 @@ def test_mutation_after_freeze_does_not_recapture_or_change_pinned_report(tmp_pa
     assert report["claims"][0]["label"] is None
 
 
+def test_unfinished_export_preserves_tag_uncertainty_without_grading(tmp_path, monkeypatch):
+    ws = exports(tmp_path, monkeypatch)
+    current = ws["runner"].claims.current_tag(TENANT, ws["run"], ws["review"]["claim_id"])
+    expected = [
+        element["element_id"]
+        for element in current["tag"]["elements"]
+        if element["state"] in ("unknown", "conflict")
+    ]
+    assert expected
+    response = create(ws)
+    assert response.status_code == 202, response.text
+    bundle = archive(ws, response.json())[0]
+    claim = json.loads(bundle.read("report.json"))["claims"][0]
+    assert claim["unresolved_elements"] == expected
+    assert claim["review_action"]["unresolved_elements"] == expected
+    assert "unresolved_evidence" in claim["review_action"]["reasons"]
+    assert claim["missing_elements"] == []
+    assert claim["evidence_grade"] is None and claim["decision_status"] == "not_run"
+    assert "미해결 요소의 원문 근거 귀속" in bundle.read("report.html").decode()
+
+
 def test_idempotency_accepts_contract_strings_and_invalid_json_is_422(tmp_path, monkeypatch):
     ws = exports(tmp_path, monkeypatch)
     ws["http"].headers["Idempotency-Key"] = "synthetic-export-request-0001"
