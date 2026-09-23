@@ -90,12 +90,15 @@ function SessionApp() {
     {sessionStatus === "missing" ? <section aria-labelledby="login-heading"><h1 id="login-heading">로그인이 필요합니다</h1><p>현재 로그인 정보가 없습니다. 구성된 로그인 경로로 이동해 주세요.</p><a href={loginUrl}>로그인</a><p>로그인 서비스를 사용할 수 없다는 안내가 나오면 관리자에게 계정 구성을 요청하세요.</p></section> : null}
     {sessionStatus === "error" ? <section aria-labelledby="session-error-heading"><h1 id="session-error-heading">세션 확인 실패</h1><p role="alert">{sessionError}</p><button type="button" onClick={loadSession} style={{ minHeight: 44 }}>다시 확인</button></section> : null}
     {sessionStatus === "ready" && session ? <>
-      <section aria-labelledby="tenant-heading"><h2 id="tenant-heading">작업 테넌트</h2>
+      <section aria-labelledby="tenant-heading"><h2 id="tenant-heading">작업 공간</h2>
         {session.tenant_id ? <p>선택됨: <code>{session.tenant_id}</code> · 권한: {session.role ?? "없음"}</p> : <p role="status">선택된 테넌트가 없습니다.</p>}
+        <details open={!session.tenant_id}>
+          <summary>{session.tenant_id ? "작업 공간 변경" : "작업 공간 선택"}</summary>
         <form onSubmit={switchTenant} aria-label="작업 테넌트 선택" style={{ display: "flex", alignItems: "end", gap: 8, flexWrap: "wrap" }}>
           <label htmlFor="tenant-id">테넌트 식별자 <input id="tenant-id" value={tenantId} onChange={event => setTenantId(event.target.value)} placeholder="00000000-0000-4000-8000-000000000000" required /></label>
           <button type="submit" disabled={switchingTenant || !tenantId.trim()} style={{ minHeight: 44 }}>{switchingTenant ? "선택 중…" : session.tenant_id ? "테넌트 변경" : "테넌트 선택"}</button>
         </form>
+        </details>
         {sessionError ? <p role="alert">{sessionError}</p> : null}
       </section>
       {session.tenant_id ? <Routes>

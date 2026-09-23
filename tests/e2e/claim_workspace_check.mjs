@@ -149,6 +149,10 @@ export async function check() {
     window.dispatchEvent(new PopStateEvent('popstate'));
     for (let attempt = 0; attempt < 20 && !lateSignal; attempt += 1) await flush();
     assert(lateSignal, 'Late claim request must start before tenant replacement');
+    const tenantSettings = host.querySelector('#tenant-id').closest('details');
+    assert(tenantSettings && !tenantSettings.open, 'Selected tenant settings should start collapsed');
+    tenantSettings.querySelector('summary').click();
+    assert(tenantSettings.open, 'Tenant switch must remain accessible');
     input(host.querySelector('#tenant-id'), '99999999-9999-4999-8999-999999999999');
     await flush();
     host.querySelector('form[aria-label="작업 테넌트 선택"]').requestSubmit();
