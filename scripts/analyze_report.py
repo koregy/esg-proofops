@@ -111,12 +111,22 @@ def _pdf_page_count(pdf: Path) -> int:
     return count
 
 
-def validate_pdf(pdf: Path, pages: list[int]) -> int:
-    """Confirm the PDF exists and every requested page is within its page count."""
+def _validate_pdf_file(pdf: Path) -> None:
+    """Refuse unsupported files before reading contents or discovering scope."""
+    from proofops.application.uploads_security import PdfLimits
+
     if not pdf.is_file():
         raise PlanError(f"--pdf not found: {pdf}")
     if pdf.suffix.lower() != ".pdf":
         raise PlanError(f"--pdf must be a .pdf file: {pdf}")
+    limit = PdfLimits().max_bytes
+    if pdf.stat().st_size > limit:
+        raise PlanError(f"--pdf exceeds the supported upload limit of {limit} bytes (100 MiB)")
+
+
+def validate_pdf(pdf: Path, pages: list[int]) -> int:
+    """Confirm the PDF exists and every requested page is within its page count."""
+    _validate_pdf_file(pdf)
     count = _pdf_page_count(pdf)
     over = [page for page in pages if page > count]
     if over:
@@ -415,6 +425,7 @@ def plan_run(args: argparse.Namespace) -> dict:
             raise PlanError("--auto-scope cannot be combined with an explicit --pages")
         if getattr(args, "claim_pages", None) is not None:
             raise PlanError("--auto-scope cannot be combined with an explicit --claim-pages")
+        _validate_pdf_file(pdf)
         auto_scope_proposal = discover_auto_scope(pdf)
         if auto_scope_proposal["source_sha256"] != sha256(pdf.read_bytes()).hexdigest():
             raise PlanError(f"--auto-scope source changed while inspecting {pdf}")

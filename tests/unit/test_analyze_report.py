@@ -509,3 +509,24 @@ def test_explicit_parser_output_limit_is_frozen_in_new_run_argv(pdf, tmp_path):
     for invalid in (0, -1, True, 128 * 1024 * 1024 + 1):
         with pytest.raises(ar.PlanError, match="parser-max-output-bytes"):
             ar.plan_run(_args(pdf, state=tmp_path / "new", parser_max_output_bytes=invalid))
+
+
+@pytest.mark.parametrize("auto_scope", [False, True])
+def test_oversized_pdf_rejected_before_read_or_scope_discovery(tmp_path, monkeypatch, auto_scope):
+    from proofops.application.uploads_security import PdfLimits
+
+    source = tmp_path / "oversized.pdf"
+    with source.open("wb") as stream:
+        stream.truncate(PdfLimits().max_bytes + 1)
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("Oversized input must be refused before content processing")
+
+    monkeypatch.setattr(ar, "_pdf_page_count", unexpected)
+    monkeypatch.setattr(ar, "discover_auto_scope", unexpected)
+    state = tmp_path / "new-state"
+    with pytest.raises(ar.PlanError, match="104857600 bytes"):
+        ar.plan_run(
+            _args(source, auto_scope=auto_scope, pages=None if auto_scope else "1", state=state)
+        )
+    assert not state.exists()

@@ -213,3 +213,40 @@ def test_element_prompt_distinguishes_target_deadline_from_event_date():
     assert "G1 requires a deadline for the claimed goal" in prompt
     assert "designation, registration, publication or reporting year" in prompt
     assert "a goal track assignment does not establish a target deadline" in prompt
+
+
+def test_pilot_oversized_pdf_rejected_before_state_creation(tmp_path, monkeypatch, capsys):
+    import sys
+
+    from proofops.application.uploads_security import PdfLimits
+
+    from evaluation import local_upstage_pilot as pilot
+
+    source = tmp_path / "oversized.pdf"
+    with source.open("wb") as stream:
+        stream.truncate(PdfLimits().max_bytes + 1)
+    state = tmp_path / "new-state"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "pilot",
+            "--pdf",
+            str(source),
+            "--state",
+            str(state),
+            "--pages",
+            "1",
+            "--report-year",
+            "2025",
+            "--period-start",
+            "2024-01-01",
+            "--period-end",
+            "2024-12-31",
+        ],
+    )
+    with pytest.raises(SystemExit) as error:
+        pilot.main()
+    assert error.value.code == 2
+    assert "104857600 bytes" in capsys.readouterr().err
+    assert not state.exists()
