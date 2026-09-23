@@ -250,3 +250,36 @@ def test_pilot_oversized_pdf_rejected_before_state_creation(tmp_path, monkeypatc
     assert error.value.code == 2
     assert "104857600 bytes" in capsys.readouterr().err
     assert not state.exists()
+
+
+def test_local_login_link_mints_fresh_session_after_expiry(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from proofops.adapters.local.auth_store import InMemorySessionStore
+    from proofops_api.auth import SESSION_COOKIE_NAME
+
+    from evaluation import local_upstage_pilot as pilot
+
+    sessions = InMemorySessionStore()
+    app = FastAPI()
+    app.get("/__local/test-secret")(
+        lambda: pilot.local_login_response(sessions, "user", "tenant", "run")
+    )
+    client = TestClient(app, base_url="https://localhost", follow_redirects=False)
+    monkeypatch.setattr(pilot.time, "time", lambda: 1000.0)
+    first = client.get("/__local/test-secret")
+    first_id = client.cookies[SESSION_COOKIE_NAME]
+    first_record = sessions.get(first_id)
+    assert first.status_code == 303 and first.headers["location"] == "/runs/run/claims"
+    monkeypatch.setattr(pilot.time, "time", lambda: 5000.0)
+    second = client.get("/__local/test-secret")
+    second_id = client.cookies[SESSION_COOKIE_NAME]
+    second_record = sessions.get(second_id)
+    assert first_id != second_id
+    assert first_record.expires_at == 4600.0
+    assert second_record.expires_at == second_record.idle_deadline == 8600.0
+    assert second_record.user_sub == "user" and second_record.active_tenant_id == "tenant"
+    assert sessions.csrf_token_for(first_id) != sessions.csrf_token_for(second_id)
+    assert all(
+        flag in second.headers["set-cookie"] for flag in ("Secure", "HttpOnly", "SameSite=strict")
+    )

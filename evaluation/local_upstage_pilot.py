@@ -27,6 +27,24 @@ from fastapi import Request
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def local_login_response(sessions, user: str, tenant: str, run_id: str):
+    """The secret loopback login link renews an expired demo session on each visit."""
+    from fastapi.responses import RedirectResponse
+    from proofops.adapters.local.auth_store import hash_token, new_session_id
+    from proofops.application.authorization import SessionRecord
+    from proofops_api.auth import SESSION_COOKIE_NAME
+
+    session, csrf, now = new_session_id(), secrets.token_urlsafe(32), time.time()
+    sessions.put_with_token(
+        SessionRecord(session, user, tenant, hash_token(csrf), now + 3600, now + 3600, False), csrf
+    )
+    response = RedirectResponse(f"/runs/{run_id}/claims", status_code=303)
+    response.set_cookie(
+        SESSION_COOKIE_NAME, session, secure=True, httponly=True, samesite="strict", path="/"
+    )
+    return response
+
+
 def pilot_company_body(legal_name, registration_identifier, *, existing: bool) -> dict:
     """Explicit company identity belongs to a new run, never a stored snapshot."""
     if legal_name is None and registration_identifier is None:
@@ -1282,23 +1300,14 @@ def main():
             )
         import uvicorn
         from fastapi import HTTPException
-        from fastapi.responses import FileResponse, RedirectResponse
+        from fastapi.responses import FileResponse
         from fastapi.staticfiles import StaticFiles
 
         login_token = secrets.token_urlsafe(24)
 
         @app.get("/__local/" + login_token, include_in_schema=False)
         def login():
-            response = RedirectResponse(f"/runs/{run_id}/claims", status_code=303)
-            response.set_cookie(
-                SESSION_COOKIE_NAME,
-                session,
-                secure=True,
-                httponly=True,
-                samesite="strict",
-                path="/",
-            )
-            return response
+            return local_login_response(c.auth_store.sessions, user, tenant, run_id)
 
         app.mount("/assets", StaticFiles(directory=ROOT / "apps/web/dist/assets"))
 
