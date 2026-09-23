@@ -75,3 +75,24 @@ Neither a number match nor merely identical note text creates acceptance.
 Source fields may use different verified subspans of one original cell (e.g.
 `tCO2eq/대` as unit and `대` as denominator). Every subspan keeps the same raw block
 hash and geometry and passes the existing original-source verifier independently.
+
+## R34: requested numeric-cell verification (opt-in)
+
+`evaluation.reviewed_table_bridge --numeric-input --requested-values` selects the
+reviewed candidates' explicit value source IDs instead of the first24 numeric
+cells in the table. It retains the full graph and rejects empty, duplicate,
+unknown or more-than24 requests. `requested_table_verification` reuses the
+unchanged v3 geometry/native/rendered/row-coverage checks and shared read bound.
+The new `native_requested_cell_table_source_v1` receipt pins the request IDs,
+complete input graph, original source, its own code and the legacy policy. Replay
+recomputes the same proof before promoting only the attested values. No fuzzy
+matching, numeric repair, cap increase or unverified promotion is introduced.
+
+Without the option, the original v3 behavior and receipt bytes remain unchanged.
+When context-cell verification is also requested, that reader still revalidates
+its own separate v3 header proof; the new receipt is never mislabeled as v3.
+This may add local OCR work and does not introduce model calls. The role-binding
+normalizer and unknown external context guards are unchanged. Native literal
+verification alone does not approve semantics, bind a claim or calculate a grade.
+There is no API/DB migration and no historical run/ZIP rewriting. Rollback removes
+the opt-in caller and new reader while retaining generated receipts for audit.

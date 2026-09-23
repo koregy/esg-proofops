@@ -43,7 +43,14 @@ def main() -> None:
         action="store_true",
         help="also verify reviewed metric/unit/year literals; requires --numeric-input",
     )
+    parser.add_argument(
+        "--requested-values",
+        action="store_true",
+        help="verify exactly the reviewed value cells within the existing 24-cell bound",
+    )
     args = parser.parse_args()
+    if args.requested_values and not args.numeric_input:
+        parser.error("--requested-values requires --numeric-input")
     if args.verify_context_cells and not args.numeric_input:
         parser.error("--verify-context-cells requires --numeric-input")
     if args.numeric_input:
@@ -53,6 +60,7 @@ def main() -> None:
             args.pdf.read_bytes(),
             tenant_id=_TENANT,
             verify_context=args.verify_context_cells,
+            requested_values=args.requested_values,
         )
         artifact = numeric_input_report(inputs, review)
     else:
