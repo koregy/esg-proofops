@@ -41,7 +41,7 @@ export function CoveragePanel({ status, coverage }: Props) {
       <dl>
         <dt>페이지</dt>
         <dd>
-          전체 {coverage.pages_total}, 처리 {coverage.pages_processed}, 판독 불가{" "}
+          전체 {coverage.pages_total}, 처리(판독 불가 제외) {coverage.pages_processed}, 판독 불가{" "}
           {coverage.pages_unreadable}, 미처리 {coverage.pages_unprocessed}
         </dd>
         <dt>청크</dt>
