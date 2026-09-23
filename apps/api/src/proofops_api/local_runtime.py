@@ -31,6 +31,7 @@ _SETTINGS_FIELDS = frozenset(
         "extraction_source_ids",
         "extraction_assertion_prompt",
         "extraction_complete_selection",
+        "extraction_content_bounds",
         "tagging_settings",
         "preliminary_settings",
         "relation_settings",
@@ -293,6 +294,7 @@ def load_local_runtime(env: Mapping[str, str]) -> dict[str, Any]:
         "extraction_source_ids",
         "extraction_assertion_prompt",
         "extraction_complete_selection",
+        "extraction_content_bounds",
     ):
         # Approved extraction opt-ins (R03d/R03f/R12/R14/R20): explicit True only, and
         # only with the real probe mode. Validated here so the gate never rejects
@@ -308,6 +310,11 @@ def load_local_runtime(env: Mapping[str, str]) -> dict[str, Any]:
         and settings.get("extraction_source_ids") is not True
     ):
         # The assertion prompt refines source-ID selection; alone it has no wire.
+        raise _invalid()
+    if (
+        "extraction_content_bounds" in settings
+        and settings.get("extraction_source_ids") is not True
+    ):
         raise _invalid()
     if "extraction_complete_selection" in settings and (
         settings.get("extraction_source_ids") is not True

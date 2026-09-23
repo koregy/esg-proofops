@@ -196,6 +196,7 @@ def live_tagging_settings(
     settings = {}
     if preliminary_actor_role:
         from proofops.application.tagging.preliminary import ACTOR_ROLE_SYSTEM_SUFFIX
+
         preliminary_profile = "upstage-preliminary-source-quotes-actor-role-v1"
         preliminary_prompt = (
             SYSTEM_PROMPT
@@ -382,6 +383,7 @@ def apply_resume_metadata(args, saved: dict) -> None:
     args.extraction_source_ids = bool(saved.get("extraction_source_ids", False))
     args.extraction_assertion_prompt = bool(saved.get("extraction_assertion_prompt", False))
     args.extraction_complete_selection = bool(saved.get("extraction_complete_selection", False))
+    args.extraction_content_bounds = bool(saved.get("extraction_content_bounds", False))
     if saved.get("tagging_max_calls"):
         args.tagging_max_calls = saved["tagging_max_calls"]
     saved_total = saved.get("extraction_total_calls")
@@ -678,6 +680,12 @@ def main():
         help="Review every source sentence for claims; requires --extraction-assertion-prompt. "
         "New-run opt-in, pinned on resume.",
     )
+    parser.add_argument(
+        "--extraction-content-bounds",
+        action="store_true",
+        help="Excludes a single terminal period for proven OCR mismatches; requires "
+        "--extraction-source-ids.",
+    )
     parser.add_argument("--tagging-max-calls", type=int, default=12)
     parser.add_argument("--serve", action="store_true")
     parser.add_argument(
@@ -726,6 +734,7 @@ def main():
         requested_source_ids = args.extraction_source_ids
         requested_assertion_prompt = args.extraction_assertion_prompt
         requested_complete_selection = args.extraction_complete_selection
+        requested_content_bounds = args.extraction_content_bounds
         requested_preliminary_table = args.preliminary_table_context
         requested_preliminary_role = args.preliminary_table_role
         requested_preliminary_goal_role = args.preliminary_goal_role
@@ -749,6 +758,8 @@ def main():
             parser.error("--resume cannot add extraction assertion prompt; create a new run")
         if requested_complete_selection and not args.extraction_complete_selection:
             parser.error("--resume cannot add extraction complete selection; create a new run")
+        if requested_content_bounds and not args.extraction_content_bounds:
+            parser.error("--resume cannot add extraction content bounds; create a new run")
         if requested_preliminary_table and not args.preliminary_table_context:
             parser.error("--resume cannot add preliminary table context; create a new run")
         if requested_preliminary_role and not args.preliminary_table_role:
@@ -791,6 +802,8 @@ def main():
         parser.error("--claim-span-typography requires --claim-span-bullet-spacing")
     if args.extraction_table_context and not args.extraction_context:
         parser.error("--extraction-table-context requires --extraction-context")
+    if args.extraction_content_bounds and not args.extraction_source_ids:
+        parser.error("--extraction-content-bounds requires --extraction-source-ids")
     if args.extraction_assertion_prompt and not args.extraction_source_ids:
         parser.error("--extraction-assertion-prompt requires --extraction-source-ids")
     if args.extraction_complete_selection and not args.extraction_assertion_prompt:
@@ -859,7 +872,12 @@ def main():
             table_structure_repair="odl_header_v2" if args.repair_table_headers else None,
         )
         (state / "parser.json").write_text(json.dumps(config.config_snapshot()))
-        if args.extraction_year_notation or args.extraction_context or args.extraction_source_ids:
+        if (
+            args.extraction_year_notation
+            or args.extraction_context
+            or args.extraction_source_ids
+            or args.extraction_content_bounds
+        ):
             from proofops_agent.upstage_extraction import _profile_with_options
 
             extraction_profile = asdict(
@@ -871,6 +889,7 @@ def main():
                     source_ids=args.extraction_source_ids,
                     assertion_prompt=args.extraction_assertion_prompt,
                     complete_selection=args.extraction_complete_selection,
+                    extraction_content_bounds=args.extraction_content_bounds,
                 )
             )
         else:
@@ -897,6 +916,8 @@ def main():
             settings["extraction_assertion_prompt"] = True
         if args.extraction_complete_selection:
             settings["extraction_complete_selection"] = True
+        if args.extraction_content_bounds:
+            settings["extraction_content_bounds"] = True
         settings.update(raster)
         if args.verify_claim_spans:
             settings["claim_source_policy"] = claim_source_policy_for(args)
@@ -1225,6 +1246,8 @@ def main():
             manifest["extraction_assertion_prompt"] = True
         if args.extraction_complete_selection:
             manifest["extraction_complete_selection"] = True
+        if args.extraction_content_bounds:
+            manifest["extraction_content_bounds"] = True
         with manifest_path.open("x") as stream:
             json.dump(manifest, stream, ensure_ascii=False, indent=2)
     else:
@@ -1280,6 +1303,10 @@ def main():
         if manifest.get("extraction_source_ids", False) != args.extraction_source_ids:
             raise ValueError(
                 "pilot extraction source-id policy changed; create a new state directory"
+            )
+        if manifest.get("extraction_content_bounds", False) != args.extraction_content_bounds:
+            raise ValueError(
+                "pilot extraction content-bounds policy changed; create a new state directory"
             )
         if manifest["source_sha256"] != digest:
             raise ValueError("pilot source changed")

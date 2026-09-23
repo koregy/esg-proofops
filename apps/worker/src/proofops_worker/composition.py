@@ -180,6 +180,7 @@ def build_composition(
             source_ids_opt_in = settings.get("extraction_source_ids") is True
             assertion_prompt_opt_in = settings.get("extraction_assertion_prompt") is True
             complete_selection_opt_in = settings.get("extraction_complete_selection") is True
+            content_bounds_opt_in = settings.get("extraction_content_bounds") is True
             if year_notation or context_opt_in or source_ids_opt_in:
                 # New-run opt-in only: the frozen settings must carry the exact
                 # option-combination profile hash, otherwise fail closed.
@@ -192,6 +193,7 @@ def build_composition(
                         source_ids=source_ids_opt_in,
                         assertion_prompt=assertion_prompt_opt_in,
                         complete_selection=complete_selection_opt_in,
+                        extraction_content_bounds=content_bounds_opt_in,
                     )
                 ):
                     raise ValueError("EXTRACTION_PROFILE_MISMATCH")
@@ -205,10 +207,17 @@ def build_composition(
                     extraction_source_ids=source_ids_opt_in,
                     extraction_assertion_prompt=assertion_prompt_opt_in,
                     extraction_complete_selection=complete_selection_opt_in,
+                    extraction_content_bounds=content_bounds_opt_in,
                 )
-            elif table_context_opt_in or assertion_prompt_opt_in or complete_selection_opt_in:
+            elif (
+                table_context_opt_in
+                or assertion_prompt_opt_in
+                or complete_selection_opt_in
+                or content_bounds_opt_in
+            ):
                 # Table context refines the context profile; assertion prompt refines
-                # source-ID selection; complete selection refines assertion mode.
+                # source-ID selection; complete selection refines assertion mode;
+                # content bounds refines source-ID.
                 # None can stand alone without their required dependencies.
                 raise ValueError("EXTRACTION_PROFILE_MISMATCH")
             else:

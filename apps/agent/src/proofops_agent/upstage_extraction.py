@@ -310,6 +310,8 @@ _ASSERTION_RULE_ENTRY = "extraction-assertion-prompt-v1"
 # requires assertion_prompt. Pins its own rule so a complete-selection run
 # cannot replay an assertion-only receipt and vice versa.
 _COMPLETE_SELECTION_RULE_ENTRY = "extraction-complete-paragraph-selection-v1"
+# Excludes a single terminal period for proven OCR mismatches; requires source-ids.
+_CONTENT_BOUNDS_RULE_ENTRY = "extraction-content-bounds-v1"
 # Bounded input/output for the ID wire: a source offering more sentences than
 # this is not served under this profile (its coverage stays unknown) rather than
 # sending an unbounded id list the model could truncate.
@@ -365,6 +367,7 @@ def _profile_with_options(
     source_ids: bool = False,
     assertion_prompt: bool = False,
     complete_selection: bool = False,
+    extraction_content_bounds: bool = False,
 ) -> ExtractionProfile:
     """Versioned extraction profile for an explicit option combination.
 
@@ -394,6 +397,7 @@ def _profile_with_options(
             source_ids,
             assertion_prompt,
             complete_selection,
+            extraction_content_bounds,
         )
     ):
         raise ValueError("UPSTAGE_PROFILE_OPTION_INVALID")
@@ -405,6 +409,8 @@ def _profile_with_options(
     if complete_selection and not (source_ids and assertion_prompt):
         # Complete-selection refines assertion mode; it requires both source-IDs
         # and the assertion prompt to be on.
+        raise ValueError("UPSTAGE_PROFILE_OPTION_INVALID")
+    if extraction_content_bounds and not source_ids:
         raise ValueError("UPSTAGE_PROFILE_OPTION_INVALID")
     descriptor = [*_RULE_DESCRIPTOR]
     if year_notation:
@@ -419,6 +425,8 @@ def _profile_with_options(
         descriptor.append(_ASSERTION_RULE_ENTRY)
     if complete_selection:
         descriptor.append(_COMPLETE_SELECTION_RULE_ENTRY)
+    if extraction_content_bounds:
+        descriptor.append(_CONTENT_BOUNDS_RULE_ENTRY)
     return ExtractionProfile(
         model_sha256=canonical_hash(
             {"model": model, "provider": "upstage", "transport": "UpstageProbe"}
@@ -452,6 +460,7 @@ class UpstageClaimExtractor:
         extraction_source_ids: bool = False,
         extraction_assertion_prompt: bool = False,
         extraction_complete_selection: bool = False,
+        extraction_content_bounds: bool = False,
     ) -> None:
         if not callable(getattr(probe, "complete", None)):
             raise ValueError("UPSTAGE_PROBE_REQUIRED")
@@ -471,6 +480,10 @@ class UpstageClaimExtractor:
             # The assertion suffix only refines source-ID selection; enabling it
             # without source-IDs (or with a non-bool) fails closed before any call.
             raise ValueError("UPSTAGE_EXTRACTION_ASSERTION_PROMPT_INVALID")
+        if type(extraction_content_bounds) is not bool or (
+            extraction_content_bounds and not extraction_source_ids
+        ):
+            raise ValueError("UPSTAGE_EXTRACTION_CONTENT_BOUNDS_INVALID")
         if type(extraction_complete_selection) is not bool or (
             extraction_complete_selection
             and not (extraction_source_ids and extraction_assertion_prompt)
@@ -486,6 +499,7 @@ class UpstageClaimExtractor:
             source_ids=extraction_source_ids,
             assertion_prompt=extraction_assertion_prompt,
             complete_selection=extraction_complete_selection,
+            extraction_content_bounds=extraction_content_bounds,
         )
         if type(max_tokens) is not int or not 1 <= max_tokens <= 4096:
             raise ValueError("UPSTAGE_MAX_TOKENS_INVALID")
@@ -501,6 +515,7 @@ class UpstageClaimExtractor:
         self._source_ids = extraction_source_ids
         self._assertion_prompt = extraction_assertion_prompt
         self._complete_selection = extraction_complete_selection
+        self._content_bounds = extraction_content_bounds
         self._request_ids: list[tuple[str, str]] = []
 
     def _validate_spans(self, payload: dict, text: str):
@@ -922,7 +937,7 @@ class UpstageClaimExtractor:
             or not isinstance(payload["sentence_ids"], list)
         ):
             raise ValueError("sentence-ids-only response required")
-        allowed = dict(self._sentence_index(text, source_id))
+        allowed = dict(self._sentence_index(text, source_id, self._content_bounds))
         selected = []
         seen: set[str] = set()
         for sentence_id in payload["sentence_ids"]:
@@ -968,7 +983,9 @@ class UpstageClaimExtractor:
         }
 
     @staticmethod
-    def _sentence_index(text: str, source_id: str) -> list[tuple[str, tuple[int, int]]]:
+    def _sentence_index(
+        text: str, source_id: str, extraction_content_bounds: bool = False
+    ) -> list[tuple[str, tuple[int, int]]]:
         """Bounded ``source_id:index`` sentence ids over the packet's own text.
 
         The ids are minted here and the offsets are this process's own, so
@@ -977,13 +994,28 @@ class UpstageClaimExtractor:
         allowed id set is exactly the sent one.
         """
         spans = sentence_spans(text)
+        if extraction_content_bounds:
+            adjusted_spans = []
+            for start, end in spans:
+                if end > start + 1 and text[end - 1] == "." and text[end - 2].isalpha():
+                    end -= 1
+                adjusted_spans.append((start, end))
+            spans = adjusted_spans
         if not spans:
             raise ExtractionOutputError("EXTRACTION_SOURCE_SENTENCES_EMPTY")
         if len(spans) > _MAX_SOURCE_SENTENCES:
             # Keep the source unknown and continue the batch instead of sending an
             # unbounded id list the model could silently truncate.
             raise ExtractionOutputError("EXTRACTION_SOURCE_SENTENCES_UNBOUNDED")
-        return [(f"{source_id}:{index}", span) for index, span in enumerate(spans)]
+        return [
+            (
+                f"{source_id}:{index}:{span[0]}:{span[1]}"
+                if extraction_content_bounds
+                else f"{source_id}:{index}",
+                span,
+            )
+            for index, span in enumerate(spans)
+        ]
 
     def _source_id_wire(
         self, packet: dict, text: str, packet_sha: str, context_graph: Any
@@ -997,7 +1029,9 @@ class UpstageClaimExtractor:
         split, a different context or a different omission set addresses a
         different receipt and can never replay this one.
         """
-        sentence_ids = self._sentence_index(text, packet["untrusted_document_data"]["source_id"])
+        sentence_ids = self._sentence_index(
+            text, packet["untrusted_document_data"]["source_id"], self._content_bounds
+        )
         source_id = packet["untrusted_document_data"]["source_id"]
         data: dict[str, Any] = {
             "source_id": source_id,
