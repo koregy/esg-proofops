@@ -1,3 +1,5 @@
+import { getElementLabel } from "../labels";
+
 type BasisRef = {
   element_id?: string | null;
   source_section?: string;
@@ -187,7 +189,7 @@ export function ReportPreview({ report }: { report: ReportModel }) {
             </section>
           ) : null}
           {claim.unresolved_elements.length ? (
-            <p>미해결 요소: {claim.unresolved_elements.join(", ")}</p>
+            <p>미해결 요소: {claim.unresolved_elements.map(getElementLabel).join(", ")}</p>
           ) : null}
           {claim.basis_refs.length ? (
             <ul aria-label="기준 근거">
