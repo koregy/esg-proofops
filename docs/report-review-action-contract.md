@@ -185,6 +185,23 @@ probe extracted the named company-target indicator in 3/3 goal cases and kept
 3/3 ongoing-management cases, but still misread external risk in 2/3 cases, so
 this change makes no accuracy or fix claim.
 
+### R34 opt-in preliminary actor-role prompt
+
+New local pilot runs may set `--preliminary-actor-role` together with
+`--preliminary-goal-role` and its dependencies. The new
+`upstage-preliminary-source-quotes-actor-role-v1` profile reuses the existing
+`TABLE_SCHEMA` wire shape and the unchanged legacy validator; it differs from
+the goal-role profile only in its pinned prompt (the goal-role prompt plus
+one additive actor-role suffix, rendered before the existing Output JSON
+schema). It adds no wire field, no new schema, and no new grade rule. The
+default remains false, so existing prompt hashes, receipts, and replays are
+unchanged; enabled runs pin a distinct prompt hash and a distinct transport
+version for replay separation. Resume restores the stored flag and rejects
+adding it to a legacy run. Profile/prompt pairs are pinned so neither the
+goal-role prompt nor any older prompt can be sent under the actor-role profile
+and vice versa. Rollback disables the option for new runs and retains pinned
+settings and immutable artifacts for existing runs.
+
 ## 7. Optional tag_elements snapshot (R34-day1 export usability)
 
 Status: additive optional `tag_elements` projection in `report_model_v1`,

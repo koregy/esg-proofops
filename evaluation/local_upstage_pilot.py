@@ -95,6 +95,7 @@ def live_tagging_settings(
     preliminary_table_context: bool = False,
     preliminary_table_role: bool = False,
     preliminary_goal_role: bool = False,
+    preliminary_actor_role: bool = False,
 ) -> dict:
     """Explicit bounded pilot config; grants are registered separately by main."""
     from proofops.application.input_reservation import solar_pro4_capacity_policy
@@ -114,6 +115,7 @@ def live_tagging_settings(
         or type(preliminary_table_context) is not bool
         or type(preliminary_table_role) is not bool
         or type(preliminary_goal_role) is not bool
+        or type(preliminary_actor_role) is not bool
     ):
         raise ValueError("relation/preliminary-context stage must be explicit boolean")
     if preliminary_table_context and not preliminary_context:
@@ -122,6 +124,8 @@ def live_tagging_settings(
         raise ValueError("preliminary table role resolution requires preliminary table context")
     if preliminary_goal_role and not preliminary_table_role:
         raise ValueError("preliminary goal role requires preliminary table role")
+    if preliminary_actor_role and not preliminary_goal_role:
+        raise ValueError("preliminary actor role requires preliminary goal role")
     if type(max_calls) is not int or not 6 <= max_calls <= 2000:
         raise ValueError("live tagging requires 6..2000 bounded calls")
     rubric = yaml.safe_load((ROOT / "config/rubric/elements.yaml").read_text())
@@ -190,7 +194,18 @@ def live_tagging_settings(
         "or grading. Validate this equality for every element before submitting."
     )
     settings = {}
-    if preliminary_goal_role:
+    if preliminary_actor_role:
+        from proofops.application.tagging.preliminary import ACTOR_ROLE_SYSTEM_SUFFIX
+        preliminary_profile = "upstage-preliminary-source-quotes-actor-role-v1"
+        preliminary_prompt = (
+            SYSTEM_PROMPT
+            + CONTEXT_SYSTEM_SUFFIX
+            + TABLE_SYSTEM_SUFFIX
+            + TABLE_ROLE_SYSTEM_SUFFIX
+            + GOAL_ROLE_SYSTEM_SUFFIX
+            + ACTOR_ROLE_SYSTEM_SUFFIX
+        )
+    elif preliminary_goal_role:
         preliminary_profile = "upstage-preliminary-source-quotes-goal-role-v1"
         preliminary_prompt = (
             SYSTEM_PROMPT
@@ -360,6 +375,7 @@ def apply_resume_metadata(args, saved: dict) -> None:
     args.preliminary_table_context = bool(saved.get("preliminary_table_context", False))
     args.preliminary_table_role = bool(saved.get("preliminary_table_role", False))
     args.preliminary_goal_role = bool(saved.get("preliminary_goal_role", False))
+    args.preliminary_actor_role = bool(saved.get("preliminary_actor_role", False))
     args.extraction_year_notation = bool(saved.get("extraction_year_notation", False))
     args.extraction_context = bool(saved.get("extraction_context", False))
     args.extraction_table_context = bool(saved.get("extraction_table_context", False))
@@ -627,6 +643,12 @@ def main():
         "and cannot be added on --resume.",
     )
     parser.add_argument(
+        "--preliminary-actor-role",
+        action="store_true",
+        help="Use R34 actor-role prompt",
+    )
+
+    parser.add_argument(
         "--extraction-source-ids",
         action="store_true",
         help="Opt-in (R14), NEW-run only in effect (pinned on --resume): send each "
@@ -707,6 +729,7 @@ def main():
         requested_preliminary_table = args.preliminary_table_context
         requested_preliminary_role = args.preliminary_table_role
         requested_preliminary_goal_role = args.preliminary_goal_role
+        requested_preliminary_actor_role = args.preliminary_actor_role
         requested_render_resolution = args.claim_span_render_resolution
         requested_bullet_spacing = args.claim_span_bullet_spacing
         requested_typography = args.claim_span_typography
@@ -732,6 +755,8 @@ def main():
             parser.error("--resume cannot add preliminary table role resolution; create a new run")
         if requested_preliminary_goal_role and not args.preliminary_goal_role:
             parser.error("--resume cannot add preliminary goal role; create a new run")
+        if requested_preliminary_actor_role and not args.preliminary_actor_role:
+            parser.error("--resume cannot add preliminary actor role; create a new run")
         if requested_render_resolution and not args.claim_span_render_resolution:
             parser.error("--resume cannot add claim-span render resolution; create a new run")
         if requested_bullet_spacing and not args.claim_span_bullet_spacing:
@@ -884,6 +909,7 @@ def main():
                     preliminary_table_context=args.preliminary_table_context,
                     preliminary_table_role=args.preliminary_table_role,
                     preliminary_goal_role=args.preliminary_goal_role,
+                    preliminary_actor_role=args.preliminary_actor_role,
                 )
             )
             bound = settings["input_reservation_policy"]["reservation_input_tokens"]
@@ -1175,6 +1201,8 @@ def main():
             manifest["preliminary_table_role"] = True
         if args.preliminary_goal_role:
             manifest["preliminary_goal_role"] = True
+        if args.preliminary_actor_role:
+            manifest["preliminary_actor_role"] = True
         if args.verify_selected_cells:
             manifest["verify_selected_cells"] = True
         if args.claim_span_render_resolution:
