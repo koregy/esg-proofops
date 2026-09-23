@@ -126,3 +126,16 @@ needed. Rollback removes the projection and UI only; pinned runs remain valid.
 The execution screen paginates these warnings and uses the existing authorized
 source/ticket/preview endpoints. Empty/error responses never establish complete
 extraction. Source conflicts or invalid geometry can still prevent a preview.
+
+### R34 선행분류 출처 보존
+
+New immutable export snapshots may carry optional `classification_review` with
+`classification_id`, `record_sha256`, `revision`, `origin`, and `track` copied
+from the tenant/run/claim's content-addressed immutable preliminary classification
+record. The mutable head must match that record and its source identity pins.
+`human_classification` and `ai_delegated_classification` remain distinct in
+JSON/CSV/HTML and the preview. This records the classification, not approval of
+a grade or proof that the subsequent tagging job finished. It does not overwrite
+later tag/decision fields. Older snapshots project null. CSV appends the field;
+existing column positions and stored ZIP bytes remain unchanged. No DB migration;
+rollback stops writing the optional projection and retains historical exports.

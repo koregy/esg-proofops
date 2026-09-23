@@ -498,6 +498,23 @@ def build_report_model(
         if quote is not None and (not isinstance(quote, str) or not quote.strip()):
             raise ValueError("claim_quote must be non-empty text or null")
         claim["claim_quote"] = quote
+        classification = record.get("classification_review") if record is not None else None
+        if classification is not None:
+            if (
+                not isinstance(classification, dict)
+                or set(classification)
+                != {"classification_id", "record_sha256", "revision", "origin", "track"}
+                or classification["origin"]
+                not in {"human_classification", "ai_delegated_classification"}
+                or classification["track"] not in {"goal", "performance", "management"}
+                or type(classification["revision"]) is not int
+                or classification["revision"] < 1
+            ):
+                raise ValueError("invalid classification review provenance")
+            _require_uuid("classification_id", classification["classification_id"])
+            _require_sha256("record_sha256", classification["record_sha256"])
+            classification = dict(classification)
+        claim["classification_review"] = classification
         claim["review_action"] = _review_action(claim)
     unfinished_count = sum(item["decision_status"] != "decided" for item in claims)
     unverified_clause_count = sum(
@@ -567,6 +584,7 @@ def render_report(model: Mapping[str, object], output_format: str) -> bytes:
             "replicate_hashes",
             "rule_pack_sha256",
             "claim_quote",
+            "classification_review",
         )
         stream = StringIO(newline="")
         rows = writer(stream)
@@ -611,10 +629,22 @@ def render_report(model: Mapping[str, object], output_format: str) -> bytes:
             else:
                 action_html = "<p>자동 생성된 후속 검토 안내 없음</p>"
             quote = claim.get("claim_quote") or "이전 스냅샷에 주장 문장이 저장되지 않았습니다"
+            classification = claim.get("classification_review")
+            classification_html = ""
+            if classification:
+                origin = (
+                    "AI 위임 분류(사람 검토 아님)"
+                    if classification["origin"] == "ai_delegated_classification"
+                    else "사람 분류 검토"
+                )
+                classification_html = (
+                    f"<p>선행분류 기록: {origin} · {escape(classification['track'])} · "
+                    f"revision {classification['revision']} (등급 승인 아님)</p>"
+                )
             items.append(
                 "<section>"
                 f"<h2>검토 대상 주장</h2><p>{escape(quote)}</p>"
-                f"<p>주장 ID: {escape(claim['claim_id'])}</p>"
+                f"<p>주장 ID: {escape(claim['claim_id'])}</p>{classification_html}"
                 f"<p>판정: {escape(grade_label)} ({escape(claim['decision_status'])})</p>"
                 f"<p>검토: {escape(claim['review_status'])} · "
                 f"tag revision {claim['tag_revision']} · decision revision "

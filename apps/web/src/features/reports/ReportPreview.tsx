@@ -42,6 +42,7 @@ type SafeHarborRecord =
 type ReportClaim = {
   claim_id: string;
   claim_quote?: string | null;
+  classification_review?: { origin: string; track: string; revision: number } | null;
   tag_revision: number;
   decision_revision: number;
   decision_status: string;
@@ -159,6 +160,7 @@ export function ReportPreview({ report }: { report: ReportModel }) {
           <p>
             revision: tag {claim.tag_revision} / decision {claim.decision_revision} · 검토: {claim.review_status}
           </p>
+          {claim.classification_review ? <p>선행분류 기록: {claim.classification_review.origin === "ai_delegated_classification" ? "AI 위임 분류(사람 검토 아님)" : "사람 분류 검토"} · {claim.classification_review.track} · revision {claim.classification_review.revision} (등급 승인 아님)</p> : null}
           <p>규칙 팩: {claim.rule_pack_sha256 ?? "미실행"}</p>
           <p>
             모델: {claim.model_sha256 ?? "미실행"} · 프롬프트: {claim.prompt_sha256 ?? "미실행"} · replicas:{" "}

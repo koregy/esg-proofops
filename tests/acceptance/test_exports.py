@@ -402,3 +402,65 @@ def test_capture_size_limit_rejects_before_snapshot_or_report_publication(tmp_pa
             ]
             == 0
         )
+
+
+def test_export_preserves_ai_classification_origin_before_tagging(tmp_path, monkeypatch):
+    from proofops.adapters.local.export_store import LocalExportStore
+    from proofops.application.reporting import build_report_model, render_report
+
+    from tests.integration.test_manual_classification_reprocess import (
+        _actor,
+        _blocked_setup,
+        _body,
+    )
+
+    service, run_id, runner, now, classification, claim_id = _blocked_setup(tmp_path, monkeypatch)
+    actor = _actor()
+    view, body = _body(classification, run_id, claim_id, actor)
+    accepted = classification.classify_ai_delegated(
+        actor,
+        run_id,
+        claim_id,
+        body,
+        view["etag"],
+        "export-ai-classification-check",
+        delegated_reviewer="test-agent",
+        delegation_authority="Synthetic test only",
+        now=int(now[0]),
+    )
+    store = LocalExportStore(service.store, runner.claims)
+    export_id = store.reserve(
+        actor,
+        run_id,
+        dict(formats=["json", "csv", "html"], allow_partial=True),
+        "export-ai-check",
+        now=now[0],
+    )
+    captured = store.capture(TENANT, export_id)
+    model = build_report_model(captured["manifest"], captured["decisions"])
+    review = model["claims"][0]["classification_review"]
+    assert review["origin"] == "ai_delegated_classification"
+    assert review["classification_id"] == accepted["classification"]["classification_id"]
+    assert model["claims"][0]["decision_status"] == "not_run"
+    assert "AI 위임 분류(사람 검토 아님)" in render_report(model, "html").decode()
+    assert "ai_delegated_classification" in render_report(model, "csv").decode()
+    assert "ai_delegated_classification" in render_report(model, "json").decode()
+    # A changed mutable head cannot relabel the immutable AI record as human.
+    assert store.freeze(TENANT, export_id, captured)
+    with service.store.jobs._transaction() as db:
+        head = service.store.jobs._get(
+            db, TENANT, run_id, "preliminary_classification_head", claim_id
+        )
+        service.store.jobs._put(
+            db,
+            TENANT,
+            run_id,
+            "preliminary_classification_head",
+            claim_id,
+            dict(head, origin="human_classification"),
+        )
+    from proofops.application.exports import ExportRejected
+
+    with pytest.raises(ExportRejected, match="EXPORT_INTEGRITY_FAILED"):
+        store.capture(TENANT, export_id)
+    assert store.frozen(TENANT, export_id)["decisions"][claim_id]["classification_review"] == review

@@ -567,11 +567,13 @@ import { ReportPreview } from COMPONENT;
 import assert from "node:assert/strict";
 const report=REPORT;
 report.claims[0].claim_quote="HTML 근거와 구분되는 검토 주장";
+report.claims[0].classification_review={origin:"ai_delegated_classification",track:"management",revision:1};
 const html=renderToStaticMarkup(React.createElement(ReportPreview,{report}));
 for (const text of ["검토용 부분 리포트","미완료 2건","판독 불가 1쪽","미처리 1쪽",
 "p.34","G3, G4","조항 미확인","보증 범위 밖","세이프하버 미실행",MODEL,PROMPT,
 "규칙 공백으로 미판정", "다음 검토 작업", "기준 조항의 대응",
-"HTML 근거와 구분되는 검토 주장", "이전 스냅샷에 주장 문장이 저장되지 않았습니다"] )
+"HTML 근거와 구분되는 검토 주장", "이전 스냅샷에 주장 문장이 저장되지 않았습니다",
+"AI 위임 분류(사람 검토 아님)"] )
   assert.ok(html.includes(text), text);
 console.log("ReportPreview audit-state checks passed");
 """.replace("REACT", json.dumps(str(root / "apps/web/node_modules/react/index.js")))
@@ -620,4 +622,17 @@ def test_report_preserves_claim_quote_separately_from_evidence_and_escapes_it():
     assert "이전 스냅샷에 주장 문장이 저장되지 않았습니다" in render_report(old, "html").decode()
     records[CLAIMS[0]]["claim_quote"] = {"untrusted": "value"}
     with pytest.raises(ValueError, match="claim_quote"):
+        build_report_model(manifest(), records)
+
+
+def test_classification_review_provenance_rejects_unknown_origin():
+    records = decisions()
+    records[CLAIMS[0]]["classification_review"] = dict(
+        classification_id=CLAIMS[0],
+        record_sha256=HASH,
+        revision=1,
+        origin="approved_by_expert",
+        track="goal",
+    )
+    with pytest.raises(ValueError, match="classification review provenance"):
         build_report_model(manifest(), records)

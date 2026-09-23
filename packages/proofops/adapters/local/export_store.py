@@ -184,6 +184,55 @@ class LocalExportStore:
                     prompt_sha256=None,
                     replicate_hashes=[],
                 )
+                classification_raw = self.jobs._raw(
+                    db, tenant, run_id, "preliminary_classification_head", claim_id
+                )
+                if classification_raw is not None:
+                    classification = json.loads(classification_raw)
+                    immutable = self.jobs._get(
+                        db,
+                        tenant,
+                        run_id,
+                        "preliminary_classification",
+                        classification["classification_id"],
+                    )
+                    if (
+                        classification != immutable
+                        or classification["record_sha256"]
+                        != canonical_hash(
+                            {k: v for k, v in classification.items() if k != "record_sha256"}
+                        )
+                        or tuple(
+                            classification.get(k)
+                            for k in (
+                                "tenant_id",
+                                "run_id",
+                                "claim_id",
+                                "document_version_id",
+                                "parse_manifest_id",
+                                "source_sha256",
+                            )
+                        )
+                        != (
+                            tenant,
+                            run_id,
+                            claim_id,
+                            claim.document_version_id,
+                            claim.parse_manifest_id,
+                            claim.source_sha256,
+                        )
+                    ):
+                        raise ExportRejected("EXPORT_INTEGRITY_FAILED")
+                    record["classification_review"] = {
+                        k: classification[k]
+                        for k in (
+                            "classification_id",
+                            "record_sha256",
+                            "revision",
+                            "origin",
+                            "track",
+                        )
+                    }
                 tag, decision, raw_record = None, None, None
                 if head["tag_revision"]:
                     current = self.claims.current_tag(tenant, run_id, claim_id, connection=db)
