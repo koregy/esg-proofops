@@ -623,8 +623,19 @@ def render_report(model: Mapping[str, object], output_format: str) -> bytes:
         status = "검토용 부분 리포트" if model.get("partial") else "완료 리포트"
         coverage_details = escape(canonical_json(model["coverage"]))
         return (
-            '<!doctype html><html lang="ko"><meta charset="utf-8">'
-            f"<title>감사 리포트</title><body><h1>감사 리포트</h1><p>{status}</p>"
+            '<!doctype html><html lang="ko"><head><meta charset="utf-8">'
+            '<meta name="viewport" content="width=device-width, initial-scale=1">'
+            '<style>body{max-width:960px;margin:32px auto;padding:0 20px;'
+            'font:16px/1.6 system-ui,sans-serif;color:#1e293b;background:#f8fafc}'
+            'section{margin:20px 0;padding:20px;border:1px solid #cbd5e1;'
+            'border-radius:6px;background:white;break-inside:avoid}'
+            'h2{font-size:1.05rem}h2,li,pre{overflow-wrap:anywhere}'
+            'pre{white-space:pre-wrap;font-size:.85rem}'
+            'summary{cursor:pointer;padding:8px 0}li+li{margin-top:8px}'
+            '.review-action{border-left:3px solid #0369a1;padding-left:16px}'
+            '@media print{body{margin:0;background:white}section{border-radius:0}}'
+            '</style>'
+            f"<title>감사 리포트</title></head><body><h1>감사 리포트</h1><p>{status}</p>"
             f"<p>미완료 {model['unfinished_count']}건 · "
             f"미확인 조항 {model['unverified_clause_count']}건</p>"
             f"<details><summary>처리 범위</summary><pre>{coverage_details}</pre></details>"
