@@ -206,3 +206,10 @@ def test_element_prompt_requires_literal_value_quotes_without_changing_wire_sche
     import json
 
     assert json.loads(settings.schema_json)["$defs"]["SourceRef"]["type"] == "object"
+
+
+def test_element_prompt_distinguishes_target_deadline_from_event_date():
+    prompt = live_tagging_settings(6)["tagging_settings"]["system_prompt"]
+    assert "G1 requires a deadline for the claimed goal" in prompt
+    assert "designation, registration, publication or reporting year" in prompt
+    assert "a goal track assignment does not establish a target deadline" in prompt

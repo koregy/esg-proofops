@@ -156,3 +156,11 @@ normalized value needs an identical literal evidence quote, not only its enclosi
 sentence. The existing v3 quote transport and all source/binding/grade guards stay
 unchanged. New runs pin the new prompt hash; resume and classification reprocessing
 use the stored run settings. Historical responses and tag revisions are not reinterpreted.
+
+The same new-run prompt also distinguishes a claimed goal deadline (G1) from
+a designation/registration/publication/reporting year, even when the upstream
+track is goal. Missing goal-deadline support remains unknown. This clarifies
+the existing G1 definition; it neither adds a domain rule nor repairs historical
+classification records. A two-sentence, three-replicate same-Kakao wire comparison
+kept the explicit 2040 deadline and rejected the 2025 designation year in all
+three responses each; this is a bounded prompt result, not corpus accuracy.
