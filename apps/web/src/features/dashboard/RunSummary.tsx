@@ -47,7 +47,7 @@ export function RunSummary({ summary }: { summary: Summary }) {
         </dd>
         <dt>처리 범위</dt>
         <dd>
-          페이지 미처리 {coverage.pages_unprocessed}쪽 · 판독 불가 {coverage.pages_unreadable}쪽
+          페이지 미처리 {coverage.pages_unprocessed}쪽 · 판독 불가 {coverage.pages_unreadable}쪽 (일부 구간 포함)
           {" · "}주장 미처리 {unprocessedRate} (검토 대기는 위에 별도 표시)
         </dd>
         <dt>기준 적용성</dt>
