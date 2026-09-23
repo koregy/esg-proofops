@@ -251,6 +251,8 @@ class LiveTaggingRuntime:
                 include_context=profile == "upstage-preliminary-source-quotes-context-v1",
             )
 
+        packet = self.preliminary_transport.bound_context(packet)
+
         def validate(raw):
             # The table profile recomputes its own quotable source tuple from
             # claim+graph; the legacy validator stays the only path for the two

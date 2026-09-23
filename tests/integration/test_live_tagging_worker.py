@@ -16,10 +16,14 @@ from proofops.domain.provenance import canonical_hash
 from proofops_worker.live_tagging import LiveTaggingRuntime
 
 
-def configured(tmp_path, monkeypatch):
+def configured(tmp_path, monkeypatch, *, context=False):
     from tests.integration.test_upstage_preliminary_transport import configured as transport_setup
     from tests.integration.test_upstage_tagger_preflight import configured as approvals
 
+    if context:
+        from tests.integration.test_upstage_preliminary_transport import (
+            configured_with_context as transport_setup,
+        )
     adapter, probe, calls, _, _, claim, graph = transport_setup(tmp_path, monkeypatch)
     preliminary = replace(
         adapter._settings, binding=replace(adapter._settings.binding, binding_id=str(UUID(int=500)))
@@ -137,6 +141,64 @@ def configured(tmp_path, monkeypatch):
 
     monkeypatch.setattr(probe, "_post", post)
     return runtime, claim, graph, calls, profiles, usage
+
+
+def test_oversize_context_bound_before_replicas_end_to_end(tmp_path, monkeypatch):
+    """R33: an over-cap context packet is tail-bounded before hashing/authorization.
+
+    Drives ``LiveTaggingRuntime.preliminary`` with a context packet inflated past
+    the real 16384-byte wire cap (R32 Kakao shape). All three replicas must
+    dispatch the same bounded wire: numbered sources byte-identical, the dropped
+    tail block recorded in ``omitted_source_ids``, and exactly the bounded hash
+    authorized — with no spend before the fit is proven.
+    """
+    from proofops.application.tagging.preliminary import (
+        preliminary_request as real_request,
+    )
+
+    runtime, claim, graph, calls, _, usage = configured(tmp_path, monkeypatch, context=True)
+    settings = runtime.preliminary_settings
+    inflated = {}
+
+    def oversized(*args, **kwargs):
+        packet = real_request(*args, **kwargs)
+        assert packet["untrusted_document_data"]["context_blocks"]
+        packet["untrusted_document_data"]["context_blocks"][-1]["text"] = "한글 문맥 " * 2000
+        inflated["packet"] = packet
+        return packet
+
+    monkeypatch.setattr("proofops_worker.live_tagging.preliminary_request", oversized)
+    result = runtime.preliminary(claim, graph)
+    assert result is not None and result[0].track == "management"
+    full = inflated["packet"]
+    # The full packet really does not fit: bounding was necessary, not a no-op.
+    with pytest.raises(ValueError, match="PROBE_REQUEST_TOO_LARGE"):
+        runtime.preliminary_transport._probe.request_body(
+            settings.rendered_system,
+            json.dumps(full, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+            request_id="regression-sanity",
+            max_tokens=settings.max_tokens,
+            json_mode=True,
+        )
+    wires = []
+    for record in runtime.preliminary_records[claim.claim_id]:
+        stored = json.loads(
+            (runtime.receipts / "preliminary" / record["request_id"] / "request.json").read_text()
+        )
+        wires.append(json.loads(stored["wire_user_json"]))
+    assert len(wires) == 3 and wires[0] == wires[1] == wires[2]
+    bounded = wires[0]
+    full = json.loads(json.dumps(full))
+    assert (
+        bounded["untrusted_document_data"]["sources"] == full["untrusted_document_data"]["sources"]
+    )
+    tail_id = full["untrusted_document_data"]["context_blocks"][-1]["source_id"]
+    assert tail_id in bounded["untrusted_document_data"]["omitted_source_ids"]
+    assert len(bounded["untrusted_document_data"]["context_blocks"]) < len(
+        full["untrusted_document_data"]["context_blocks"]
+    )
+    assert runtime.allowed_packets == {(claim.claim_id, canonical_hash(bounded))}
+    assert len(calls) == usage["settled_calls"] == 3
 
 
 def test_live_preliminary_uses_three_distinct_receipts_and_recovers_without_calls(

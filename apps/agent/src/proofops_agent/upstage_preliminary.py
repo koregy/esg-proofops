@@ -27,6 +27,7 @@ packet must pin the longer prompt hash, so the two prompts can never be swapped.
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from pathlib import Path
 
 from proofops.adapters.local.upstage import UpstageProbe
@@ -172,6 +173,36 @@ class UpstagePreliminaryTransport(UpstageTaggingTransport):
         from proofops.adapters.local.upstage import UpstageProbe
 
         return UpstageProbe
+
+    def bound_context(self, packet: dict) -> dict:
+        """Fit optional whole context blocks BEFORE packet hashing/authorization.
+
+        Numbered sources are never shortened. Omitted context IDs remain in the
+        frozen packet, so all replicas and receipts describe exactly the same
+        bounded input. An oversized sources-only packet still fails normally.
+        """
+        bounded = deepcopy(packet)
+        data = bounded["untrusted_document_data"]
+        blocks = data.get("context_blocks", [])
+        while blocks:
+            wire = json.dumps(bounded, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            try:
+                self._probe.request_body(
+                    self._settings.rendered_system,
+                    wire,
+                    request_id="context-size-preflight",
+                    max_tokens=self._settings.max_tokens,
+                    json_mode=True,
+                )
+                break
+            except ValueError as error:
+                if str(error) != "PROBE_REQUEST_TOO_LARGE":
+                    # Preserve the normal per-claim authorization/error path.
+                    break
+            removed = blocks.pop()
+            if removed["source_id"] not in data["omitted_source_ids"]:
+                data["omitted_source_ids"].append(removed["source_id"])
+        return bounded
 
     def _wire_request(self, request: dict) -> tuple[str, str, dict[str, dict], Preflight]:
         settings = self._settings
