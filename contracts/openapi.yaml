@@ -6335,10 +6335,108 @@ components:
       - status
       title: NumericCandidateReview
       type: object
+    SubmittedReview:
+      additionalProperties: false
+      properties:
+        schema_version:
+          const: 1
+          title: Schema Version
+          type: integer
+        status:
+          const: reference_only
+          title: Status
+          type: string
+        origin:
+          enum:
+          - data_manager_submission
+          - ai_corrected_submission
+          title: Origin
+          type: string
+        tenant_id:
+          format: uuid
+          title: Tenant Id
+          type: string
+        run_id:
+          format: uuid
+          title: Run Id
+          type: string
+        document_version_id:
+          format: uuid
+          title: Document Version Id
+          type: string
+        claim_id:
+          format: uuid
+          title: Claim Id
+          type: string
+        external_claim_id:
+          title: External Claim Id
+          type: string
+        reference_sha256:
+          pattern: ^[0-9a-f]{64}$
+          title: Reference Sha256
+          type: string
+        source_sha256:
+          pattern: ^[0-9a-f]{64}$
+          title: Source Sha256
+          type: string
+        run_input_sha256:
+          pattern: ^[0-9a-f]{64}$
+          title: Run Input Sha256
+          type: string
+        claim_snapshot_sha256:
+          pattern: ^[0-9a-f]{64}$
+          title: Claim Snapshot Sha256
+          type: string
+        claim_source_quality:
+          title: Claim Source Quality
+          type: string
+        files_sha256:
+          additionalProperties:
+            pattern: ^[0-9a-f]{64}$
+            type: string
+          title: Files Sha256
+          type: object
+        tables:
+          additionalProperties:
+            items:
+              additionalProperties:
+                type: string
+              type: object
+            type: array
+          propertyNames:
+            enum:
+            - claims
+            - elements
+            - numeric
+            - assurance
+          title: Tables
+          type: object
+      required:
+      - schema_version
+      - status
+      - origin
+      - tenant_id
+      - run_id
+      - document_version_id
+      - claim_id
+      - external_claim_id
+      - reference_sha256
+      - source_sha256
+      - run_input_sha256
+      - claim_snapshot_sha256
+      - claim_source_quality
+      - files_sha256
+      - tables
+      title: SubmittedReview
+      type: object
     ClaimDetail:
       type: object
       additionalProperties: false
       properties:
+        submitted_reviews:
+          type: array
+          items:
+            $ref: '#/components/schemas/SubmittedReview'
         reviewed_context:
           anyOf:
           - $ref: '#/components/schemas/ReviewedContext'

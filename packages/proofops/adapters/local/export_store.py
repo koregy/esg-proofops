@@ -282,6 +282,9 @@ class LocalExportStore:
                 revision_records=raw_records,
                 revision_records_encoding=REVISION_RECORDS_V2,
             )
+            submitted = self.claims.submitted_reviews(tenant, run_id, connection=db)
+            if submitted:
+                manifest["submitted_reviews"] = submitted
             return dict(manifest=manifest, decisions=records)
 
     def freeze(self, tenant, export_id, captured):

@@ -105,8 +105,31 @@ type ClaimDetail = {
   rulepack_approved_by?: string | null;
   review_projection?: ReviewProjection | null;
   reviewed_context?: ReviewedContext | null;
+  submitted_reviews?: Array<{
+    reference_sha256: string;
+    external_claim_id: string;
+    origin: "data_manager_submission" | "ai_corrected_submission";
+    claim_source_quality: string;
+    tables: Record<"claims" | "elements" | "numeric" | "assurance", Array<Record<string, string>>>;
+  }>;
 };
 type LoadState = "loading" | "ready" | "pending" | "error";
+
+const submissionFieldLabels: Record<string, string> = {
+  claim_id: "제출 주장 ID", document_id: "제출 문서 ID", annotation_id: "주석 ID",
+  physical_page: "PDF 쪽", quote: "제출 인용문", statement: "주장 내용", track: "주장 유형",
+  topic: "주제", claim_year: "주장 연도", year: "자료 연도", notes: "검토 메모",
+  annotation_status: "제출 파일의 검토 표시 (앱 승인 아님)", annotator: "제출 파일의 작성자",
+  adjudicator: "제출 파일의 확정 검토자", element_id: "입증 항목", state: "제출된 상태",
+  evidence_document_id: "근거 문서 ID", binding_reason: "근거 연결 사유",
+  searched_scope: "검색한 범위", boundary: "조직·사업장 범위", unit: "단위",
+  table_id: "표", row: "행", column: "열", metric: "지표", value_raw: "원문 수치",
+  value_decimal: "계산용 수치", multiplier: "단위 배율", scope2_basis: "Scope 2 산정 기준",
+  footnote_quote: "각주", expected_check: "예상 비교 결과 (검토안)", reason: "판단 사유",
+  expected_status: "예상 보증 연결 (검토안)", provider: "보증 기관", standard: "보증 기준",
+  level: "보증 수준", period_start: "대상 기간 시작", period_end: "대상 기간 끝",
+  entities: "보증 대상 조직", metrics: "보증 대상 지표", exclusions: "제외 사항",
+};
 
 type CommonProps = {
   apiBase?: string;
@@ -398,6 +421,21 @@ function ClaimDetailView({ apiBase = "", csrfToken, tenantKey, session, runId, c
           ? <ReviewedContextSection context={detail.reviewed_context} />
           : null}
         <PreliminaryClassification apiBase={apiBase} runId={runId} claimId={claimId} untagged={untagged} session={session} onSessionInvalid={onSessionInvalid} />
+        {detail.submitted_reviews?.length ? <section aria-labelledby="submitted-reviews-heading">
+          <h3 id="submitted-reviews-heading">제출자료 검토안 · 판정 미반영</h3>
+          <p>제출자료의 상태와 수치는 비교·검토용입니다. 확정 태깅, 원문 검증 결과, 최종 판정 또는 사람 정답 승인을 뜻하지 않습니다.</p>
+          {detail.submitted_reviews.map(reference => <article key={reference.reference_sha256}>
+            <h4>{reference.external_claim_id} · {reference.origin === "ai_corrected_submission" ? "AI가 수정한 제출자료" : "데이터 관리자 제출자료"}</h4>
+            <p>연결 당시 주장 원문 검증: {reference.claim_source_quality === "verified" ? "확인됨 (개별 제출 근거는 별도 검토 필요)" : "보류"}</p>
+            {(["claims", "elements", "numeric", "assurance"] as const).map(name => <details key={name}>
+              <summary>{{ claims: "주장", elements: "입증 요소", numeric: "수치 비교 입력", assurance: "보증 연결" }[name]} ({reference.tables[name].length}행)</summary>
+              {reference.tables[name].length ? reference.tables[name].map((row, index) => <dl key={index}>
+                {Object.entries(row).filter(([, value]) => value !== "").map(([key, value]) => <div key={key}><dt>{submissionFieldLabels[key] ?? key}</dt><dd>{value}</dd></div>)}
+              </dl>) : <p>제출된 행이 없습니다.</p>}
+            </details>)}
+            <details><summary>검토안 식별자</summary><code>{reference.reference_sha256}</code></details>
+          </article>)}
+        </section> : null}
         {projection && projection.schema_version === 1 ? <section aria-labelledby="review-projection-heading"><h3 id="review-projection-heading">모델 태깅 당시 후보 (미확정)</h3>
           <p role="status">모델 태깅 당시의 미확정 기록입니다. 현재 검토 결과는 위의 태깅과 판정에 표시됩니다. 후보를 채택하려면 원문 검증을 통과해야 합니다.</p>
           {projection.blocked_reason ? <p>태깅 당시 보류 사유: {projection.blocked_reason}</p> : null}

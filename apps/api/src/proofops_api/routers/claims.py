@@ -206,6 +206,24 @@ class ReviewedContext(StrictDTO):
     numeric_check: NumericContextCheck
 
 
+class SubmittedReview(StrictDTO):
+    schema_version: Literal[1]
+    status: Literal["reference_only"]
+    origin: Literal["data_manager_submission", "ai_corrected_submission"]
+    tenant_id: UUID
+    run_id: UUID
+    document_version_id: UUID
+    claim_id: UUID
+    external_claim_id: str
+    reference_sha256: Annotated[str, Field(pattern="^[0-9a-f]{64}$")]
+    source_sha256: Annotated[str, Field(pattern="^[0-9a-f]{64}$")]
+    run_input_sha256: Annotated[str, Field(pattern="^[0-9a-f]{64}$")]
+    claim_snapshot_sha256: Annotated[str, Field(pattern="^[0-9a-f]{64}$")]
+    claim_source_quality: str
+    files_sha256: dict[str, Annotated[str, Field(pattern="^[0-9a-f]{64}$")]]
+    tables: dict[Literal["claims", "elements", "numeric", "assurance"], list[dict[str, str]]]
+
+
 class ClaimDetail(StrictDTO):
     claim: ClaimSummary
     source_refs: list[SourceRef]
@@ -219,6 +237,7 @@ class ClaimDetail(StrictDTO):
     rulepack_approved_by: str | None = None
     review_projection: ReviewProjection | None = None
     reviewed_context: ReviewedContext | None = None
+    submitted_reviews: list[SubmittedReview] = Field(default_factory=list)
 
 
 def build_claims_router(claims, auth_store, *, tags=None, assurance=None, clock=time.time):
@@ -518,6 +537,9 @@ def build_claims_router(claims, auth_store, *, tags=None, assurance=None, clock=
                     claim=summary,
                     source_refs=[asdict(ref) for ref in claim.source_refs],
                     elements=[],
+                    submitted_reviews=claims.submitted_reviews(
+                        claim.tenant_id, str(run_id), claim.claim_id
+                    ),
                     assurance=match.to_dict(),
                     replicate_request_ids=[],
                     packet_sha256=None,
@@ -545,6 +567,9 @@ def build_claims_router(claims, auth_store, *, tags=None, assurance=None, clock=
                 claim=summary,
                 source_refs=[asdict(ref) for ref in claim.source_refs],
                 elements=tag["elements"],
+                submitted_reviews=claims.submitted_reviews(
+                    claim.tenant_id, str(run_id), claim.claim_id
+                ),
                 reviewed_context=(tag.get("claim_context_review") or {}).get("projection"),
                 assurance=match.to_dict(),
                 replicate_request_ids=[run.request.request_id for run in inputs.tag_runs],

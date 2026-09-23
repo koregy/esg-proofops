@@ -3,6 +3,7 @@
 from datetime import UTC, datetime
 from hashlib import sha256
 from io import BytesIO
+from itertools import chain
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 from proofops.application.reporting import build_report_model, render_report
@@ -89,9 +90,17 @@ def build_export(snapshot, formats):
     # Deflate keeps the preserved provenance whole while the artifact stays inside the
     # unchanged 32 MiB cap; every ZIP reader handles it and frozen artifacts are untouched.
     with ZipFile(stream, "w", compression=ZIP_DEFLATED) as bundle:
-        for fmt in ("manifest", *formats):
-            name = "manifest.json" if fmt == "manifest" else f"report.{fmt}"
-            content = manifest if fmt == "manifest" else render_report(model, fmt)
+        members = [("manifest.json", manifest)]
+        if snapshot["manifest"].get("submitted_reviews"):
+            members.append(
+                (
+                    "submitted-reviews.json",
+                    canonical_json(snapshot["manifest"]["submitted_reviews"]).encode(),
+                )
+            )
+        for name, content in chain(
+            members, ((f"report.{fmt}", render_report(model, fmt)) for fmt in formats)
+        ):
             # Pre-write guard: every raw member must fit the cap next to the bytes already
             # archived. Deflate can add overhead on incompressible input, so this is not a
             # proof about the archive; the final check below measures the actual ZIP.

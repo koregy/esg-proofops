@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import secrets
+from threading import Lock
 from typing import Any
 
 from fastapi import Request
@@ -12,6 +14,50 @@ from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 MAX_JSON_BODY_BYTES = 65_536
+
+# PDFium is process-global and unsafe even when threads read different documents.
+# Keep this outside pinned verifier modules so their source hashes remain valid.
+_local_pdf_request_lock = Lock()
+_inflight_pdf_requests: set[asyncio.Task[None]] = set()
+
+
+def _finish_pdf_request(task: asyncio.Task[None]) -> None:
+    _inflight_pdf_requests.discard(task)
+    if not task.cancelled():
+        task.exception()  # Retrieve failures even when the HTTP caller disconnected.
+
+
+class LocalPdfRequestMiddleware:
+    """Protect every local API path, including frozen readers and request cleanup.
+
+    ponytail: one HTTP request per process; use isolated PDF worker processes when
+    concurrent service throughput is required. The event loop remains responsive.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        # Nonblocking admission is safe across event loops and cancellation while
+        # queued; a cancelled waiter cannot acquire and accidentally strand the lock.
+        while not _local_pdf_request_lock.acquire(blocking=False):
+            await asyncio.sleep(0.01)
+
+        async def admitted() -> None:
+            try:
+                await self.app(scope, receive, send)
+            finally:
+                _local_pdf_request_lock.release()
+
+        # A disconnected caller cannot cancel a running native C function.
+        # Keep admission until the inner request (including its worker) finishes.
+        task = asyncio.create_task(admitted())
+        _inflight_pdf_requests.add(task)
+        task.add_done_callback(_finish_pdf_request)
+        await asyncio.shield(task)
 
 
 class RequestBodyTooLarge(ValueError):

@@ -792,3 +792,30 @@ R00의 충돌·호환성 경계를 필요한 범위만 정리한 뒤 R01 비교�
 - 수치 엔진 growth/product_reduction 및 명시적으로 검토한 동일 계산조건 각주 연결 지원. 두 실제 사례가 수치상 consistent; 기존 합계 해시 호환성과 원문 변조 거절 검증.
 - 관련 검사 321 passed / 11 skipped; lint/format/mypy/architecture 통과.
 - C01 범위·반올림/보증, 비율형 목표 등 도메인 미정, 정답 확정·권리, 재무 대조 및 다른 기업 평가 범위는 유지. 생산 DB 등록·전체 보고서 자동 실행·최종 등급 완료를 뜻하지 않음.
+
+### R31 · 제출 검토안과 기존 주장 연결 (2026-09-23)
+
+- `scripts/attach_submitted_review.py`로 `claims/elements/numeric/assurance.csv`를 기존 실행의 주장에 연결한다. 같은 PDF 해시·문서와 물리 쪽·원문 인용이 맞고 후보가 하나일 때만 연결한다. 다른 테넌트, 다른 문서, 누락·중복 주장, 모호한 연결은 거절한다.
+- 저장 계약 v1: 기존 `job_records`에 불변 `submission_reference`를 추가한다. CSV별 SHA256, 원본 PDF·run 입력·추출 스냅샷 해시, 외부/앱 주장 ID를 보존한다. 동일 입력 재등록은 중복 저장하지 않으며 새 파일은 별도 검토안으로 남긴다. 최초 추가는 mutation epoch와 감사 기록을 함께 갱신한다.
+- API `ClaimDetail.submitted_reviews`는 이전 실행에서 빈 배열이다. 화면에는 **제출자료 검토안 · 판정 미반영**으로 표시한다. `reviewed`, `present` 등 CSV의 표시는 제출자의 기록이며 앱 승인이나 사람 정답이 아니다. R30 자료의 출처는 `ai_corrected_submission`이다.
+- 새 ZIP은 `submitted-reviews.json`에 당시 검토안을 동결한다. 기존 태깅·판정·과거 ZIP은 변경하지 않는다. 롤백은 새 import를 중단하고 추가 필드/record kind를 읽지 않는 방식이며, 이미 저장된 자료와 출력은 보존한다.
+- 실행 위치: ROOT `.local/kia-submitted-review-20260923/`는 기존 기아 실행의 별도 DB·원본 파일 사본이다. 원 실행은 수정하지 않는다. 실제 PDF를 사용하지만 원 문서 등록의 `local_synthetic=true`를 유지하며, 실기업 정식 등록으로 승격하지 않는다. 실제 검증 산출물은 ROOT `outputs/agent-results/R31-submitted-review/`에 기록한다.
+- 관련 API/출력 회귀 검사 30개, lint/format/type, 웹 build, 계약·아키텍처 검사 통과. 실제 5건 연결·API 조회·ZIP 다운로드 및 해시 대조 통과. 원문 인용은 정식 로더 재생 결과 4건 verified/C01 1건 unverified이며, 이는 제출 요소의 승인이나 최종 등급이 아니다. 5건의 실제 API 응답을 재생하는 브라우저 표시 검사 통과(실제 API와 연결한 화면 전수 재시험을 뜻하지 않음). 전체 보고서 자동 완주, 정식 태깅·등급 생성, 미정 정책 확정, AWS 시험을 뜻하지 않는다.
+
+- 실제 브라우저 병렬 요청에서 API가 SIGSEGV로 종료됨을 발견했다. macOS 충돌 기록은 `libpdfium.dylib/FPDF_LoadPage`를 가리켰다. [PDFium 공식 스레드 제약](https://pypdfium2-team.github.io/pypdfium2/python_api.html#incompatibility-with-threading)에 맞춰 로컬 API의 HTTP 요청을 프로세스 단위로 직렬화했다. 요청 취소 후에도 내부 PDF 작업이 끝날 때까지 보호하며, 고정된 verifier 파일·정책 해시는 바꾸지 않았다. 처리량이 필요하면 PDF 작업을 별도 프로세스로 분리해야 한다.
+- 수정 후 동시 요청·실행 중 취소·오류 후 재요청 회귀 검사와 API 구성/인증/세션 검사 43개 통과. 실제 기아 PDF에 20개 동시 HTTP 요청을 보내 native 진입 최대 1개 및 모두 성공을 확인했다. 이 시험은 전체 재생이 아니라 PDF 페이지 로딩의 충돌 경로를 직접 검증한다.
+- 남은 성능 문제: 최초 원문 재생은 3,152개 렌더링 영역을 대조하며 오래 걸리고, 캐시가 준비된 뒤에도 실제 주장 상세 API 5건은 각각 약 16.4초였다. 직렬화는 동시 호출 충돌 방지이며 속도 개선 완료가 아니다. 수정 후 전체 기아 원문 재생+실 API 연결 브라우저 전수 재시험은 not_run. 최종 태깅·판정도 모두 미실행이다.
+
+재실행 예시(APP에서 실행, `--operator`에는 실제 실행자 식별자를 기록):
+
+```sh
+PROOFOPS_ROOT=/Users/ss020/Dev/ESG_ProofOps
+.venv/bin/python scripts/attach_submitted_review.py \
+  --state-db "$PROOFOPS_ROOT/.local/kia-submitted-review-20260923/state.sqlite3" \
+  --directory "$PROOFOPS_ROOT/outputs/agent-results/R30/수정본" \
+  --tenant-id 195fb7fa-c3b3-4cba-a2e5-265da642d174 \
+  --run-id 9af38bf5-0d3d-47ae-94c4-fe39b04d59f2 \
+  --document-id DOC-034 \
+  --source-sha256 d0d814d98c4aeedbbdb2bf8631b8981ae5cde94dec32aa32c57510420274da1f \
+  --origin ai_corrected_submission --operator local-reviewer
+```
