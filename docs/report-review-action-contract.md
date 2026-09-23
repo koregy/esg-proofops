@@ -112,3 +112,17 @@ Non-null values must be non-empty strings. HTML escaping and CSV formula guards
 apply. This is additive report/snapshot metadata: no route/DTO/table migration.
 Readers that ignore extra keys remain compatible. Reverting capture/projection
 removes the field from future reports; existing snapshots/ZIPs are never rewritten.
+
+### R34 원문 읽기 경고 (read projection)
+
+`GET /v1/runs/{run_id}/quality` retains the existing `QualityIssuePage` shape and
+adds `image_text_not_extracted` (open) for a figure whose parser candidates all
+contain empty/whitespace text. This is a deterministic read-time warning, keyed
+by source UUID and warning version; it is not a mutation of the immutable parser
+quality artifact, coverage counters, decisions, or exports. It does not assert
+that a photograph contains text, that OCR ran, or that evidence is absent.
+Old clients may display the existing free-text `kind`/`reason`; no DB migration is
+needed. Rollback removes the projection and UI only; pinned runs remain valid.
+The execution screen paginates these warnings and uses the existing authorized
+source/ticket/preview endpoints. Empty/error responses never establish complete
+extraction. Source conflicts or invalid geometry can still prevent a preview.

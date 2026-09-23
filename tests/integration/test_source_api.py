@@ -270,3 +270,45 @@ def test_decimal_page_size_accepts_pdfium_rounding_but_rejects_geometry_mismatch
     ):
         with pytest.raises(SourcePreviewFailure):
             render_page_preview(source.getvalue(), 1, wrong)
+
+
+def test_quality_surfaces_unread_image_even_when_page_has_header_text(tmp_path, monkeypatch):
+    from proofops_api.routers import sources
+
+    service, run_id, runner, now, _ = runner_setup(tmp_path, monkeypatch)
+    assert runner.run_once(tenant_id=TENANT, run_id=run_id) == "committed"
+    original = runner.load_graph(tenant_id=TENANT, run_id=run_id)
+    header = next(b for b in original.blocks if b.raw_text)
+    empty_candidates = tuple(
+        replace(c, source=replace(c.source, raw_text="", char_start=0, char_end=0))
+        for c in header.candidates
+    )
+    image = replace(header, source_id=str(uuid4()), kind="figure", candidates=empty_candidates)
+    graph = replace(original, blocks=original.blocks + (image,))
+    before = graph.to_dict()
+    monkeypatch.setattr(sources, "load_run_graph", lambda *a, **kw: graph)
+    http, auth = client(service)
+    http.app.include_router(
+        sources.build_sources_router(
+            service.store, service.uploads, runner.parser, auth, clock=lambda: now[0]
+        )
+    )
+    response = http.get(f"/v1/runs/{run_id}/quality", params={"limit": 100})
+    assert response.status_code == 200
+    validate("QualityIssuePage", response.json())
+    warnings = [i for i in response.json()["items"] if i["kind"] == "image_text_not_extracted"]
+    assert len(warnings) == 1
+    assert warnings[0]["source_ids"] == [image.source_id]
+    assert warnings[0]["page_num"] == header.page_num
+    assert warnings[0]["state"] == "open"  # not proof of unreadability or missing evidence
+    assert graph.to_dict() == before
+    assert warnings == [
+        i
+        for i in http.get(f"/v1/runs/{run_id}/quality", params={"limit": 100}).json()["items"]
+        if i["kind"] == "image_text_not_extracted"
+    ]
+    graph = replace(graph, blocks=original.blocks + (replace(image, candidates=header.candidates),))
+    assert not any(
+        i["kind"] == "image_text_not_extracted"
+        for i in http.get(f"/v1/runs/{run_id}/quality", params={"limit": 100}).json()["items"]
+    )

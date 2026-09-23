@@ -8,7 +8,7 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import Annotated, Literal
 from urllib.parse import urlencode
-from uuid import UUID
+from uuid import UUID, uuid5
 
 from fastapi import APIRouter, Query, Request, Security
 from fastapi.responses import JSONResponse, Response
@@ -299,11 +299,11 @@ def build_sources_router(
             )
             if page["manifest"] != graph.parse_manifest_id:
                 raise RunRejected("INVALID_CURSOR", 400)
-            issues = sorted(graph.issues, key=lambda issue: issue.issue_id)
+            issues = _quality_items(graph)
             after = page["after"] + limit
             return JSONResponse(
                 dict(
-                    items=[issue.to_dict() for issue in issues[page["after"] : after]],
+                    items=issues[page["after"] : after],
                     next_cursor=store._encode_cursor(dict(page, after=after))
                     if after < len(issues)
                     else None,
@@ -337,3 +337,27 @@ def _highlight_allowed(block, issues) -> bool:
         and source_ref.bbox == candidate.bbox
         and all(item.geometry == candidate.geometry for item in block.candidates)
     )
+
+
+def _quality_items(graph):
+    """Read-time warnings; never rewrite the pinned graph or its coverage."""
+    items = {issue.issue_id: issue.to_dict() for issue in graph.issues}
+    for block in graph.blocks:
+        if block.kind == "figure" and not any(s.raw_text.strip() for s in block.sources):
+            issue_id = str(uuid5(UUID(block.source_id), "image-text-not-extracted-v1"))
+            items.setdefault(
+                issue_id,
+                dict(
+                    issue_id=issue_id,
+                    kind="image_text_not_extracted",
+                    page_num=block.page_num,
+                    source_ids=[block.source_id],
+                    state="open",
+                    reason=(
+                        "이미지 영역에서 텍스트가 추출되지 않았습니다. "
+                        "사진일 수도 있으므로 원문을 열어 글·표 누락 여부를 확인하세요. "
+                        "근거 부재나 판독 불가가 확정된 것은 아닙니다."
+                    ),
+                ),
+            )
+    return sorted(items.values(), key=lambda item: item["issue_id"])

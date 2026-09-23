@@ -5,6 +5,7 @@ import { ComparisonWorkspace } from "./features/comparison/ComparisonWorkspace";
 import { ReconciliationWorkspace } from "./features/reconciliation/ReconciliationWorkspace";
 import { RunSummary, type Summary } from "./features/dashboard/RunSummary";
 import { ExportWorkspace } from "./features/reports/ExportWorkspace";
+import { RunQuality } from "./features/runs/RunQuality";
 import { RunForm } from "./features/runs/RunForm";
 import { RunProgress, type RunSnapshot } from "./features/runs/RunProgress";
 import { ApiError, errorMessage, isSessionError, requestJson, type Session } from "./features/session/api";
@@ -193,6 +194,7 @@ function RunHome({ session, tenantKey, initialRun, onSessionInvalid }: { session
     {summaryState === "pending" ? <p role="status">실행 요약은 현재 태깅 스냅샷 뒤에 게시됩니다.</p> : null}
     {summaryState === "error" ? <p role="alert">실행 요약을 불러오지 못했습니다.</p> : null}
     {summary ? <RunSummary summary={summary} /> : null}
+    <RunQuality key={`${tenantKey}:${runId}`} apiBase={API_BASE} runId={runId} csrfToken={session.csrf_token} onSessionInvalid={onSessionInvalid} />
   </section>;
 }
 
