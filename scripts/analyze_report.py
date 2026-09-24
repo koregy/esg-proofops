@@ -337,6 +337,7 @@ def build_pilot_argv(
     claim_span_typography: bool = False,
     live_relations: bool = False,
     preliminary_context: bool = False,
+    preliminary_actor_role: bool = False,
     ai_project_review: bool = False,
     extraction_year_notation: bool = False,
     extraction_context: bool = False,
@@ -392,8 +393,11 @@ def build_pilot_argv(
         ]
     if live_relations:
         argv.append("--live-relations")
-    if preliminary_context:
+    if preliminary_context or preliminary_actor_role:
         argv.append("--preliminary-context")
+    if preliminary_actor_role:
+        argv += ["--preliminary-table-context", "--preliminary-table-role",
+                 "--preliminary-goal-role", "--preliminary-actor-role"]
     if ai_project_review:
         argv.append("--ai-project-review")
     if extraction_year_notation:
@@ -485,7 +489,10 @@ def plan_run(args: argparse.Namespace) -> dict:
     native_quote_typography = bool(getattr(args, "native_quote_typography", False))
     claim_span_typography = bool(getattr(args, "claim_span_typography", False))
     live_relations = bool(getattr(args, "live_relations", False))
-    preliminary_context = bool(getattr(args, "preliminary_context", False))
+    preliminary_actor_role = bool(getattr(args, "preliminary_actor_role", False))
+    preliminary_context = (
+        bool(getattr(args, "preliminary_context", False)) or preliminary_actor_role
+    )
     ai_project_review = bool(getattr(args, "ai_project_review", False))
     extraction_year_notation = bool(getattr(args, "extraction_year_notation", False))
     extraction_context = bool(getattr(args, "extraction_context", False))
@@ -512,6 +519,7 @@ def plan_run(args: argparse.Namespace) -> dict:
         claim_span_typography=claim_span_typography,
         live_relations=live_relations,
         preliminary_context=preliminary_context,
+        preliminary_actor_role=preliminary_actor_role,
         ai_project_review=ai_project_review,
         extraction_year_notation=extraction_year_notation,
         extraction_context=extraction_context,
@@ -539,6 +547,7 @@ def plan_run(args: argparse.Namespace) -> dict:
         "claim_span_typography": claim_span_typography,
         "live_relations": live_relations,
         "preliminary_context": preliminary_context,
+        "preliminary_actor_role": preliminary_actor_role,
         "ai_project_review": ai_project_review,
         "extraction_year_notation": extraction_year_notation,
         "extraction_context": extraction_context,
@@ -587,6 +596,7 @@ def print_plan(plan: dict) -> None:
         "claim_span_typography",
         "live_relations",
         "preliminary_context",
+        "preliminary_actor_role",
         "ai_project_review",
         "extraction_year_notation",
         "extraction_context",
@@ -719,6 +729,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Pass the pilot's --preliminary-context (bounded source-bound context for "
         "preliminary classification; requires the built-in --live-tagging).",
+    )
+    parser.add_argument(
+        "--preliminary-actor-role",
+        action="store_true",
+        help="Use the actor/goal-period classification profile for a NEW run. "
+        "Includes its required context/table/goal options; no rule approval or paid "
+        "call is enabled by this flag. Existing saved runs are unchanged.",
     )
     parser.add_argument(
         "--ai-project-review",

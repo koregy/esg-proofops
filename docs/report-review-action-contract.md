@@ -317,3 +317,14 @@ provider response and other elements remain intact. Repeated years, different so
 candidates, longer digit strings and nonliteral values do not gain references. This
 provides a location, not semantic approval: ordinary source, binding and consensus
 guards still apply. Rollback selects v3 for new runs; persisted runs are never rewritten.
+
+
+### New-report CLI access
+
+`scripts/analyze_report.py --preliminary-actor-role` exposes actor-role-v2 to new
+report plans and passes the required preliminary context/table/goal flags exactly
+once. It remains off by default. The launcher does not enable `--invoke`,
+`--ai-project-review`, rewrite saved runs, or increase the shared cost ceiling.
+New settings use source-quotes-v4; the previous extractor model default is unchanged.
+Existing actor-role/period trials used the explicit R32/R34 settings and do not
+establish the accuracy of every launcher configuration or new report.
