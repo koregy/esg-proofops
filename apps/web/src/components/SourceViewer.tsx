@@ -47,7 +47,7 @@ function numberHeader(response: Response, name: string): number | null {
 function locationLabel(source: SourceRef): string {
   if (source.location_quality === "unlocated") return "위치 없음";
   if (source.location_quality === "unreadable") return "판독 불가";
-  return source.verification_state === "verified" ? "검증된 위치" : "위치 후보";
+  return source.verification_state === "verified" ? "인용문 검증됨" : "위치 후보";
 }
 
 export function SourceViewer({ apiBase = "", csrfToken, runId, sources, openRequest = null, onSessionInvalid }: Props) {
