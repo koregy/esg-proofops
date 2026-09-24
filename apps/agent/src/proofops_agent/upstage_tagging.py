@@ -26,6 +26,7 @@ from proofops_agent.upstage_extraction import UpstageClaimExtractor
 MODEL_PROFILE = "upstage-compact-ids-frozen-unicode-v1"
 COVERAGE_PROFILE = "upstage-compact-coverage-unicode-v2"
 QUOTE_PROFILE = "upstage-compact-source-quotes-v3"
+QUOTE_V4_PROFILE = "upstage-compact-source-quotes-v4"
 
 # The only transport error codes that a locally suppressed, pre-dispatch outcome is
 # allowed to carry. This is an explicit allow-list, never an inference from timing:
@@ -173,7 +174,7 @@ class UpstageTaggingTransport:
             or settings.model_id != probe.model
             or settings.model_profile
             not in (
-                {MODEL_PROFILE, COVERAGE_PROFILE, QUOTE_PROFILE}
+                {MODEL_PROFILE, COVERAGE_PROFILE, QUOTE_PROFILE, QUOTE_V4_PROFILE}
                 if self.MODEL_PROFILE == MODEL_PROFILE
                 else {self.MODEL_PROFILE}
             )
@@ -188,6 +189,8 @@ class UpstageTaggingTransport:
             self.TRANSPORT_VERSION = "compact-coverage-v2"
         elif settings.model_profile == QUOTE_PROFILE:
             self.TRANSPORT_VERSION = "compact-source-quotes-v3"
+        elif settings.model_profile == QUOTE_V4_PROFILE:
+            self.TRANSPORT_VERSION = "compact-source-quotes-v4"
         self._authorize = authorize
         self._probe, self._settings, self._tenant = probe, settings, tenant_id
         self._resume = resume
@@ -301,7 +304,7 @@ class UpstageTaggingTransport:
             or not isinstance(user.get("untrusted_document_data"), dict)
         ):
             raise ValueError("UPSTAGE_TAGGING_PACKET_MISMATCH")
-        if settings.model_profile in (COVERAGE_PROFILE, QUOTE_PROFILE):
+        if settings.model_profile in (COVERAGE_PROFILE, QUOTE_PROFILE, QUOTE_V4_PROFILE):
             data = user["untrusted_document_data"]
             coverage = data.get("search_coverage", {})
             if (
@@ -334,7 +337,7 @@ class UpstageTaggingTransport:
         }
         schema = json.loads(settings.schema_json)
         schema["$defs"]["SourceRef"] = {"type": "string", "pattern": "^e[0-9]+$"}
-        if settings.model_profile == QUOTE_PROFILE:
+        if settings.model_profile in (QUOTE_PROFILE, QUOTE_V4_PROFILE):
             schema["$defs"]["SourceRef"] = {
                 "type": "object",
                 "required": ["id", "quote"],
@@ -363,7 +366,7 @@ class UpstageTaggingTransport:
             "evidence_catalog IDs such as e0. Select IDs; never repeat or alter source text, "
             "coordinates, offsets or verification state. The server restores those exactly."
         )
-        if settings.model_profile == QUOTE_PROFILE:
+        if settings.model_profile in (QUOTE_PROFILE, QUOTE_V4_PROFILE):
             instructions = (
                 "\nTransport contract compact-source-quotes-v3: each evidence_refs item is "
                 '{"id":"e0","quote":"exact source substring"}. Select an evidence_catalog '
@@ -377,7 +380,7 @@ class UpstageTaggingTransport:
                 "Exact quotation does not establish claim attribution or semantic sufficiency."
             )
         wire_system = system.replace(settings.schema_json, canonical_json(schema), 1) + instructions
-        if settings.model_profile in (COVERAGE_PROFILE, QUOTE_PROFILE):
+        if settings.model_profile in (COVERAGE_PROFILE, QUOTE_PROFILE, QUOTE_V4_PROFILE):
             wire_system += (
                 "\nCoverage v2: omitted/unprocessed source counts and list hashes summarize "
                 "unseen identifiers retained by the server. Missing evidence remains unknown; "
@@ -387,7 +390,7 @@ class UpstageTaggingTransport:
         return wire_system, wire_user, refs, authorization
 
     def _restore_ref(self, selection, refs: dict[str, dict]) -> dict:
-        if self._settings.model_profile != QUOTE_PROFILE:
+        if self._settings.model_profile not in (QUOTE_PROFILE, QUOTE_V4_PROFILE):
             return refs[selection]
         if not isinstance(selection, dict) or set(selection) != {"id", "quote"}:
             raise ValueError("invalid source quote selection")
@@ -401,6 +404,48 @@ class UpstageTaggingTransport:
             char_start=original["char_start"] + span["char_start"],
             char_end=original["char_start"] + span["char_end"],
         )
+
+    @staticmethod
+    def _refine_g1_year(element: dict) -> None:
+        """Add a unique literal year only inside an already selected citation."""
+        if element.get("element_id") != "G1" or element.get("state") != "present":
+            return
+        norm_val = element.get("normalized_value")
+        if (
+            not isinstance(norm_val, str)
+            or len(norm_val) != 5
+            or not norm_val.endswith("년")
+            or not all("0" <= ch <= "9" for ch in norm_val[:4])
+            or norm_val[0] == "0"
+        ):
+            return
+        refs = element.get("evidence_refs")
+        if not isinstance(refs, list):
+            return
+        if any(r.get("quote") == norm_val for r in refs):
+            return
+        candidates = []
+        for r in refs:
+            orig = r.get("quote", "")
+            if orig.count(norm_val) > 1:
+                return
+            try:
+                span = UpstageClaimExtractor._locate(norm_val, orig)
+                if span["char_start"] > 0 and orig[span["char_start"] - 1].isdigit():
+                    continue
+                new_ref = r.copy()
+                new_ref["quote"] = norm_val
+                new_ref["char_start"] = r["char_start"] + span["char_start"]
+                new_ref["char_end"] = r["char_start"] + span["char_end"]
+                candidates.append(new_ref)
+            except ValueError:
+                pass
+        unique = []
+        for c in candidates:
+            if c not in unique:
+                unique.append(c)
+        if len(unique) == 1:
+            refs.append(unique[0])
 
     def _invoke(self, request: dict) -> RawTagResponse:
         settings = self._settings
@@ -485,6 +530,8 @@ class UpstageTaggingTransport:
                     if not isinstance(selected, list):
                         raise ValueError("invalid references")
                     element["evidence_refs"] = [self._restore_ref(key, refs) for key in selected]
+                    if settings.model_profile == QUOTE_V4_PROFILE:
+                        self._refine_g1_year(element)
                 expanded = canonical_json(payload)
             except (ValueError, KeyError, TypeError, AttributeError):
                 expanded = None

@@ -304,3 +304,16 @@ is no data/API migration or rewrite of old revisions. Rollback for new runs is
 to select the v1 profile/prompt again while retaining v2 readers for stored
 receipts. Trial evidence covers selected Samsung/Kakao cases, not general
 accuracy; the historical methodology footnote remains classification-uncertain.
+
+
+### Source quote transport v4: bounded G1 literal year
+
+New local pilot settings use `upstage-compact-source-quotes-v4`; existing manifests
+retain their pinned v1/v2/v3 settings. The v3 model wire instructions remain unchanged;
+the receipt transport version is `compact-source-quotes-v4`. Only a present G1 value
+of four ASCII digits followed by 년 may gain one exact subspan reference inside a
+model-selected citation. Original qualifiers, references, source identity, verification,
+provider response and other elements remain intact. Repeated years, different source
+candidates, longer digit strings and nonliteral values do not gain references. This
+provides a location, not semantic approval: ordinary source, binding and consensus
+guards still apply. Rollback selects v3 for new runs; persisted runs are never rewritten.

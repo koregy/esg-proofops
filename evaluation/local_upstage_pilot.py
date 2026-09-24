@@ -243,7 +243,7 @@ def live_tagging_settings(
         ),
         (
             "tagging",
-            "upstage-compact-source-quotes-v3",
+            "upstage-compact-source-quotes-v4",
             element_prompt,
             (ROOT / "contracts/jsonschema/llm_tags.schema.json").read_text(),
             4096,

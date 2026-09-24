@@ -393,6 +393,7 @@ class RunService:
                 "upstage-compact-ids-frozen-unicode-v1",
                 "upstage-compact-coverage-unicode-v2",
                 "upstage-compact-source-quotes-v3",
+                "upstage-compact-source-quotes-v4",
             }:
                 raise RunRejected("CONFIG_GATE_BLOCKED")
             if relation is not None and (

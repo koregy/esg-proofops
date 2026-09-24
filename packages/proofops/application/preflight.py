@@ -538,6 +538,7 @@ def check_local_upstage_tagger(
             "upstage-compact-ids-frozen-unicode-v1",
             "upstage-compact-coverage-unicode-v2",
             "upstage-compact-source-quotes-v3",
+            "upstage-compact-source-quotes-v4",
         }
         or (
             settings.model_profile == "upstage-preliminary-source-quotes-v1"

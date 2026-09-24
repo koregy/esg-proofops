@@ -37,7 +37,7 @@ def test_live_pilot_settings_have_independent_real_profiles():
     assert preliminary.binding.synthetic is tagging.binding.synthetic is False
     assert preliminary.model_id == tagging.model_id == "solar-pro4"
     assert preliminary.model_profile == "upstage-preliminary-source-quotes-v1"
-    assert tagging.model_profile == "upstage-compact-source-quotes-v3"
+    assert tagging.model_profile == "upstage-compact-source-quotes-v4"
     assert set(result) == {"preliminary_settings", "tagging_settings", "input_reservation_policy"}
 
 
@@ -143,7 +143,7 @@ def test_preliminary_context_pilot_settings_are_opt_in_with_distinct_profile_and
     assert preliminary["model_profile"] == "upstage-preliminary-source-quotes-context-v1"
     assert preliminary["system_prompt"] == SYSTEM_PROMPT + CONTEXT_SYSTEM_SUFFIX
     # Everything else (tagging profile, binding independence) stays unaffected.
-    assert result["tagging_settings"]["model_profile"] == "upstage-compact-source-quotes-v3"
+    assert result["tagging_settings"]["model_profile"] == "upstage-compact-source-quotes-v4"
     assert (
         preliminary["binding"]["binding_id"] != result["tagging_settings"]["binding"]["binding_id"]
     )
@@ -202,7 +202,7 @@ def test_element_prompt_requires_literal_value_quotes_without_changing_wire_sche
     )
     assert "at least one selected quote MUST be exactly that value" in settings.system_prompt
     assert "citing the whole sentence alone is invalid" in settings.system_prompt
-    assert settings.model_profile == "upstage-compact-source-quotes-v3"
+    assert settings.model_profile == "upstage-compact-source-quotes-v4"
     import json
 
     assert json.loads(settings.schema_json)["$defs"]["SourceRef"]["type"] == "object"
