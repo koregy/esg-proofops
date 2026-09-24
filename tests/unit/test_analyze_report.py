@@ -556,3 +556,17 @@ def test_actor_role_option_reaches_current_profile_without_paid_defaults(pdf, tm
     )
     assert settings['preliminary_settings']['model_profile'].endswith('actor-role-v2')
     assert settings['tagging_settings']['model_profile'].endswith('source-quotes-v4')
+
+
+def test_direct_script_dry_plan_from_outside_checkout(pdf, tmp_path):
+    import subprocess
+
+    state = tmp_path / 'direct-run'
+    result = subprocess.run([
+        sys.executable, str(Path(ar.__file__).resolve()), '--pdf', str(pdf),
+        '--pages', '1', '--report-year', '2024', '--period-start', '2024-01-01',
+        '--period-end', '2024-12-31', '--state', str(state), '--preliminary-actor-role',
+    ], cwd=tmp_path, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert 'DRY PLAN' in result.stdout and '--preliminary-actor-role' in result.stdout
+    assert not state.exists()

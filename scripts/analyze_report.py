@@ -55,6 +55,9 @@ from uuid import uuid4
 
 # scripts/ -> TEAM checkout (owns evaluation.local_upstage_pilot).
 TEAM_ROOT = Path(__file__).resolve().parents[1]
+# Direct script launch puts scripts/, not the checkout, on the import path.
+if str(TEAM_ROOT) not in sys.path:
+    sys.path.insert(0, str(TEAM_ROOT))
 # Published root command lives two levels up; the default report-runs area and the
 # shared Upstage budget ledger both live under that root.
 PROJECT_ROOT = TEAM_ROOT.parent.parent
