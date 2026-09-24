@@ -403,7 +403,7 @@ function ClaimDetailView({ apiBase = "", csrfToken, tenantKey, session, runId, c
   return <section aria-labelledby="claim-heading">
     <h1 id="claim-heading">주장 상세</h1>
     <p><Link to={`/runs/${runId}/claims`}>주장 목록으로</Link></p>
-    {untagged ? <p role="status">태깅 결과가 게시되지 않은 주장입니다. 처리 대기뿐 아니라 원문 검증 문제로 보류된 경우도 포함합니다. 아래에서 원문을 확인할 수 있으며, 태깅 편집은 태그가 게시된 뒤에 가능합니다.</p> : null}
+    {untagged ? <p role="status">태깅 결과가 게시되지 않은 주장입니다. 처리 대기, 원문 검증 또는 주장 분류가 보류된 경우가 포함됩니다. 아래에서 원문을 확인할 수 있으며, 태깅 편집은 태그가 게시된 뒤에 가능합니다.</p> : null}
     <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 3fr) minmax(280px, 2fr)", gap: 24 }}>
       <SourceViewer key={`${tenantKey}:${runId}:${claimId}`} apiBase={apiBase} csrfToken={csrfToken} runId={runId} sources={detail.source_refs} openRequest={sourceOpen} onSessionInvalid={onSessionInvalid} />
       <section aria-labelledby="evidence-heading"><h2 id="evidence-heading">태깅과 판정</h2>
@@ -414,7 +414,7 @@ function ClaimDetailView({ apiBase = "", csrfToken, tenantKey, session, runId, c
         {detail.rulepack_approved_by?.startsWith("ai-delegated-review:")
           ? <p role="status">이 판정에 쓰인 규칙집은 AI 프로젝트 검토(사람 전문가 승인 아님)로 활성화되었습니다.</p>
           : null}
-        <h3>요소</h3>{elements.length === 0 ? <p>{untagged ? "태깅 전이므로 표시할 요소가 없습니다. 태그가 게시되면 여기에 표시됩니다." : "표시할 요소가 없습니다."}</p> : <ul>{elements.map(element => <li key={element.element_id}>
+        <h3>요소</h3>{elements.length === 0 ? <p>{untagged ? "게시된 요소가 없습니다. 원문 검증 또는 분류가 보류된 경우 추가 검토가 필요합니다." : "표시할 요소가 없습니다."}</p> : <ul>{elements.map(element => <li key={element.element_id}>
           {getElementLabel(element.element_id)}: {elementStateText[element.state]} · 근거 {element.evidence_refs.length}개
           {element.normalized_value !== null ? <p>값: {element.normalized_value}</p> : null}
           {element.evidence_refs.length ? <details data-element-evidence={element.element_id}>
