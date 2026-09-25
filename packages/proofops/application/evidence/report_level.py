@@ -18,6 +18,8 @@ from proofops.domain.values import SourceRef
 
 # M3: claim page -> GRI Index row (disclosure + page list) -> disclosure listed in a
 # third-party assurance statement that names its standard on the same page.
+# The index heading may also be separate whole blocks "Index" and "GRI" or
+# "GRI Standards" on the row's page, after NFC/whitespace normalization, ignoring case.
 GRI_ASSURED_PAGE_V1 = "GRI_ASSURED_PAGE_V1"
 # M2: the report's own "보고 범위" statement, only for claims that state no scope.
 REPORT_SCOPE_V1 = "REPORT_SCOPE_V1"
@@ -87,8 +89,12 @@ def _gri_assured_page(refs, claim_refs, page_texts, credited_from) -> bool:
     row = _INDEX_ROW.match(_text(index.quote))
     if row is None or int(next(iter(labels))) not in _pages(row["pages"]):
         return False
+    index_page_blocks = {_text(text).casefold() for text in page_texts.get(index.page_num, ())}
     return (
-        _on_page(index, page_texts, _INDEX_HEADING)
+        (
+            _on_page(index, page_texts, _INDEX_HEADING)
+            or ("index" in index_page_blocks and bool(index_page_blocks & {"gri", "gri standards"}))
+        )
         and _covers(_text(coverage.quote), row["code"])
         and bool(_STANDARD.search(_text(standard.quote)))
         and standard.page_num == coverage.page_num

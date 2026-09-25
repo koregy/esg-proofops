@@ -178,3 +178,26 @@ def test_unknown_policy_or_element_is_rejected():
     )
     assert check_report_level("M3", REPORT_SCOPE_V1, (INDEX, COVERAGE, STANDARD), **kwargs) is False
     assert check_report_level("M3", "OTHER_V1", (INDEX, COVERAGE, STANDARD), **kwargs) is False
+
+
+@pytest.mark.parametrize(
+    "heading_blocks,other_page_blocks,expected",
+    [
+        (["GRI", "Index"], [], True),
+        (["Index", "GRI Standards"], [], True),
+        ([" \tiNdEx\n", " gri\n\tSTANDARDS "], [], True),
+        (["Index"], [], False),
+        (["GRI"], [], False),
+        (["GRI Standards"], [], False),
+        (["GRI", "See the Index for details"], [], False),
+        (["Index", "Prepared using GRI Standards"], [], False),
+        (["GRI"], ["Index"], False),
+        (["Index"], ["GRI Standards"], False),
+        ([], ["GRI", "Index"], False),
+    ],
+)
+def test_m3_split_index_heading_requires_whole_blocks_on_index_page(
+    heading_blocks, other_page_blocks, expected
+):
+    pages = {**PAGES, 230: heading_blocks + PAGES[230][1:], 229: other_page_blocks}
+    assert m3((INDEX, COVERAGE, STANDARD), pages=pages) is expected

@@ -390,12 +390,13 @@ def test_re_review_replay_success_and_tamper_rejected(tmp_path):
     service = ws[1]
 
     mock_receipt = {
-        "schema": "claim_source_attestation_v1",
+        "schema": "context_source_attestation_v1",
         "records": [
             {"ref": asdict(idx), "status": "verified"},
             {"ref": asdict(cov), "status": "verified"},
             {"ref": asdict(std), "status": "verified"},
         ],
+        "receipts": {"table": {"artifact_sha256": "table_hash_123"}},
         "artifact_sha256": "mock_hash_123",
     }
 
@@ -432,7 +433,7 @@ def test_re_review_replay_success_and_tamper_rejected(tmp_path):
     assert second["review"]["revision"] == 3
 
     before = service.store.history(TENANT, RUN, ws[3]["claim_id"])
-    mock_receipt["artifact_sha256"] = "changed_pdf_attestation"
+    mock_receipt["receipts"]["table"]["artifact_sha256"] = "changed_table_attestation"
     third_body = dict(body, base_tag_revision=second["new_tag_revision"])
     with pytest.raises(ReviewRejected, match="REPORT_LEVEL_SOURCE_REPLAY_MISMATCH"):
         service.resolve_review(
@@ -452,12 +453,13 @@ def test_rescore_replays_report_level_receipt_and_rejects_tamper(tmp_path, monke
     service = ws[1]
 
     mock_receipt = {
-        "schema": "claim_source_attestation_v1",
+        "schema": "context_source_attestation_v1",
         "records": [
             {"ref": asdict(idx), "status": "verified"},
             {"ref": asdict(cov), "status": "verified"},
             {"ref": asdict(std), "status": "verified"},
         ],
+        "receipts": {"table": {"artifact_sha256": "table_hash_123"}},
         "artifact_sha256": "mock_hash_123",
     }
 
@@ -522,7 +524,9 @@ def test_rescore_replays_report_level_receipt_and_rejects_tamper(tmp_path, monke
     rescore_result = rescore_service.create_rescore(actor, RUN, rescore_body, str(uuid4()))
     assert ws[3]["claim_id"] in rescore_result
 
-    tag["report_level_review"][0]["source_receipt"]["artifact_sha256"] = "tampered_rescore"
+    tag["report_level_review"][0]["source_receipt"]["receipts"]["table"]["artifact_sha256"] = (
+        "tampered_rescore"
+    )
 
     with pytest.raises(RescoreRejected, match="RESCORE_SOURCE_REJECTED"):
         rescore_service.create_rescore(actor, RUN, rescore_body, str(uuid4()))

@@ -11,7 +11,6 @@ from pdfminer.pdftypes import resolve1
 
 from proofops.adapters.local import claim_source_verification as claim_verifier
 from proofops.adapters.local.native_glyph_geometry import native_word_ink_geometry
-from proofops.adapters.local.selected_cell_table_verification import _rendered_cell
 from proofops.adapters.local.source_verification import _rendered_text
 from proofops.application import claims as claim_validation
 from proofops.application.evidence.citations import _normalized, verify_source_ref
@@ -30,9 +29,6 @@ def table_span_policy():
         verifier_sha256=sha256(Path(__file__).read_bytes()).hexdigest(),
         quote_guard_sha256=sha256(Path(claim_verifier.__file__).read_bytes()).hexdigest(),
         claim_validation_sha256=sha256(Path(claim_validation.__file__).read_bytes()).hexdigest(),
-        cell_reader_sha256=sha256(
-            local.joinpath("selected_cell_table_verification.py").read_bytes()
-        ).hexdigest(),
         glyph_geometry_sha256=sha256(
             local.joinpath("native_glyph_geometry.py").read_bytes()
         ).hexdigest(),
@@ -62,87 +58,253 @@ def _inside(inner, outer):
     )
 
 
-def _quote_crop_box(reading, quote):
-    text = reading["native_text"]
-    start = text.find(quote)
-    if start < 0 or text.find(quote, start + 1) >= 0:
+def _selected_box(block):
+    return block.candidates[block.winner].bbox if _has_winner(block) else None
+
+
+def _matches_raw_text(text, raw_text):
+    return isinstance(text, str) and _normalized(text) == _normalized(raw_text)
+
+
+def _candidate_table_matches(graph, candidate, table_id):
+    if candidate.table_native_id is None:
+        return True
+    for batch in graph.candidates:
+        if candidate not in batch.blocks:
+            continue
+        table_candidates = [
+            item
+            for item in batch.blocks
+            if item.kind == "table" and item.source.source_native_id == candidate.table_native_id
+        ]
+        owners = [
+            block.source_id
+            for block in graph.blocks
+            if block.kind == "table" and any(item in block.candidates for item in table_candidates)
+        ]
+        return len(table_candidates) == 1 and owners == [table_id]
+    return False
+
+
+def _table_layout(graph, target):
+    """Return a unique table/row/column layout or refuse ambiguous geometry."""
+    blocks = {block.source_id: block for block in graph.blocks}
+    parents = {}
+    children = {}
+    for edge in graph.edges:
+        if edge.relation == "table_parent":
+            parents.setdefault(edge.source_id, []).append(edge.target_id)
+            children.setdefault(edge.target_id, []).append(edge.source_id)
+    if target.kind == "table_row":
+        row = target
+    elif target.kind == "table_cell":
+        row_ids = [
+            source_id
+            for source_id in parents.get(target.source_id, ())
+            if blocks.get(source_id) and blocks[source_id].kind == "table_row"
+        ]
+        if len(row_ids) != 1:
+            return None
+        row = blocks[row_ids[0]]
+    else:
         return None
-    end = start + len(quote)
-    words = [
-        word for word in reading["words"] if word["char_start"] < end and word["char_end"] > start
+    table_ids = [
+        source_id
+        for source_id in parents.get(row.source_id, ())
+        if blocks.get(source_id) and blocks[source_id].kind == "table"
     ]
-    if not words:
+    if len(table_ids) != 1:
         return None
-    box = reading["bbox"]
-    return (
-        max(box[0], min(word["bbox"][0] for word in words) - 1),
-        max(box[1], min(word["bbox"][1] for word in words) - 1),
-        min(box[2], max(word["bbox"][2] for word in words) + 1),
-        min(box[3], max(word["bbox"][3] for word in words) + 1),
-    )
+    table_id = table_ids[0]
+    table = blocks.get(table_id)
+    if (
+        table is None
+        or not _has_winner(table)
+        or table.quality not in {"verified", "unverified"}
+        or not _candidate_bound(graph, table.candidates[table.winner])
+    ):
+        return None
+    table_box = _selected_box(table)
+    if (
+        table.page_num != row.page_num
+        or table.candidates[table.winner].source.physical_page != row.page_num
+        or table_box is None
+    ):
+        return None
+    if not _candidate_table_matches(graph, row.candidates[row.winner], table_id):
+        return None
+    direct_tables = [
+        source_id
+        for source_id in parents.get(target.source_id, ())
+        if blocks.get(source_id) and blocks[source_id].kind == "table"
+    ]
+    if direct_tables and (len(direct_tables) != 1 or direct_tables[0] != table_id):
+        return None
 
+    row_ids = [
+        edge.source_id
+        for edge in graph.edges
+        if edge.relation == "table_parent"
+        and edge.target_id == table_id
+        and blocks.get(edge.source_id) is not None
+        and blocks[edge.source_id].kind == "table_row"
+    ]
+    if row.source_id not in row_ids or len(set(row_ids)) != len(row_ids):
+        return None
+    table_rows = [
+        blocks[source_id] for source_id in row_ids if blocks[source_id].page_num == row.page_num
+    ]
+    if any(
+        not _has_winner(item)
+        or item.quality not in {"verified", "unverified"}
+        or item.page_num != row.page_num
+        or item.candidates[item.winner].source.physical_page != row.page_num
+        or (row_box := _selected_box(item)) is None
+        or not _inside(row_box, table_box)
+        for item in table_rows
+    ):
+        return None
 
-def _occurrences(text, quote):
-    count, start = 0, 0
-    while quote and (found := text.find(quote, start)) >= 0:
-        count += 1
-        start = found + 1
-    return count
+    rows = {}
+    all_cells = []
+    for item in table_rows:
+        source_ids = children.get(item.source_id, ())
+        cells = [blocks.get(source_id) for source_id in source_ids]
+        if (
+            not cells
+            or len(cells) > _MAX_ROW_CELLS
+            or len(set(source_ids)) != len(source_ids)
+            or any(cell is None for cell in cells)
+        ):
+            return None
+        if any(
+            [
+                parent
+                for parent in parents.get(cell.source_id, ())
+                if blocks.get(parent) and blocks[parent].kind == "table_row"
+            ]
+            != [item.source_id]
+            or [
+                parent
+                for parent in parents.get(cell.source_id, ())
+                if blocks.get(parent) and blocks[parent].kind == "table"
+            ]
+            not in ([], [table_id])
+            for cell in cells
+        ):
+            return None
+        box = _selected_box(item)
+        if any(
+            cell.kind != "table_cell"
+            or not _has_winner(cell)
+            or cell.quality not in {"verified", "unverified"}
+            or cell.page_num != item.page_num
+            or not _candidate_bound(graph, cell.candidates[cell.winner])
+            or not _candidate_table_matches(graph, cell.candidates[cell.winner], table_id)
+            or (cell_box := _selected_box(cell)) is None
+            or not _inside(cell_box, box)
+            or not (
+                cell.candidates[cell.winner].row_span is None
+                or type(cell.candidates[cell.winner].row_span) is int
+                and cell.candidates[cell.winner].row_span == 1
+            )
+            or not (
+                cell.candidates[cell.winner].column_span is None
+                or type(cell.candidates[cell.winner].column_span) is int
+                and cell.candidates[cell.winner].column_span == 1
+            )
+            for cell in cells
+        ):
+            return None
+        numbers = [cell.candidates[cell.winner].row_number for cell in cells]
+        row_number = item.candidates[item.winner].row_number
+        if row_number is not None:
+            if type(row_number) is not int or any(
+                n is not None and n != row_number for n in numbers
+            ):
+                return None
+            identity = ("index", row_number)
+        elif all(type(number) is int for number in numbers) and len(set(numbers)) == 1:
+            identity = ("index", numbers[0])
+        elif all(number is None for number in numbers):
+            identity = None
+        else:
+            return None
+        columns = [cell.candidates[cell.winner].column_number for cell in cells]
+        if any(type(column) is not int for column in columns) or len(set(columns)) != len(columns):
+            return None
+        ordered = sorted(zip(columns, cells, strict=True), key=lambda entry: entry[0])
+        if any(
+            _selected_box(left)[2] > _selected_box(right)[0] + 0.001
+            for (_, left), (_, right) in zip(ordered, ordered[1:])
+        ):
+            return None
+        rows[item.source_id] = dict(
+            block=item, box=box, identity=identity, cells=[c for _, c in ordered]
+        )
+        all_cells.extend(cells)
 
+    ordered_rows = sorted(rows.values(), key=lambda entry: entry["box"][1])
+    if any(
+        left["box"][3] > right["box"][1] + 0.001
+        for left, right in zip(ordered_rows, ordered_rows[1:])
+    ):
+        return None
+    if all(entry["identity"] is None for entry in ordered_rows):
+        for index, entry in enumerate(ordered_rows):
+            entry["identity"] = ("geometry", index)
+    elif any(entry["identity"] is None for entry in ordered_rows):
+        return None
+    identities = [entry["identity"] for entry in ordered_rows]
+    if len(set(identities)) != len(identities):
+        return None
+    if identities[0][0] == "index" and any(
+        left[1] >= right[1] for left, right in zip(identities, identities[1:])
+    ):
+        return None
 
-def _tight_render(page, reading, quote):
-    original = reading["rendered"]
-    if _occurrences(original.get("text", ""), quote):
-        return
-    box = _quote_crop_box(reading, quote)
-    if box is None:
-        return
-    focused = _rendered_cell(page, box)
-    reading["rendered_attempts"] = [original, focused]
-    reading["rendered_bbox"] = box
-    reading["rendered"] = focused
+    for index, cell in enumerate(all_cells):
+        box = _selected_box(cell)
+        if any(
+            min(box[2], other[2]) > max(box[0], other[0]) + 0.001
+            and min(box[3], other[3]) > max(box[1], other[1]) + 0.001
+            for other in (_selected_box(item) for item in all_cells[index + 1 :])
+        ):
+            return None
+    column_centers = {}
+    for cell in all_cells:
+        column = cell.candidates[cell.winner].column_number
+        box = _selected_box(cell)
+        column_centers.setdefault(column, []).append((box[0] + box[2]) / 2)
+    ordered_columns = [
+        (column, min(centers), max(centers)) for column, centers in sorted(column_centers.items())
+    ]
+    if any(
+        left[2] >= right[1] - 0.001 for left, right in zip(ordered_columns, ordered_columns[1:])
+    ):
+        return None
+
+    table_cell_ids = {
+        source_id
+        for source_id in children.get(table_id, ())
+        if blocks.get(source_id) is not None
+        and blocks[source_id].kind == "table_cell"
+        and blocks[source_id].page_num == row.page_num
+    }
+    if table_cell_ids - {cell.source_id for cell in all_cells}:
+        return None
+
+    return dict(table_id=table_id, rows=rows)
 
 
 def _row_cells(graph, row):
-    blocks = {block.source_id: block for block in graph.blocks}
-    source_ids = [
-        edge.source_id
-        for edge in graph.edges
-        if edge.relation == "table_parent" and edge.target_id == row.source_id
-    ]
-    cells = [blocks.get(source_id) for source_id in source_ids]
-    if not cells or len(cells) > _MAX_ROW_CELLS or any(cell is None for cell in cells):
+    layout = _table_layout(graph, row)
+    if layout is None or row.source_id not in layout["rows"]:
         return None
-    if any(
-        cell.kind != "table_cell"
-        or not _has_winner(cell)
-        or cell.quality not in {"verified", "unverified"}
-        or cell.page_num != row.page_num
-        or cell.bbox is None
-        or not _inside(cell.bbox, row.bbox)
-        or not _candidate_bound(graph, cell.candidates[cell.winner])
-        for cell in cells
-    ):
+    cells = layout["rows"][row.source_id]["cells"]
+    if "\t".join(cell.raw_text for cell in cells) != row.raw_text:
         return None
-    columns = [cell.candidates[cell.winner].column_number for cell in cells]
-    if any(type(column) is not int for column in columns) or len(set(columns)) != len(columns):
-        return None
-    ordered = sorted(zip(columns, cells, strict=True), key=lambda item: item[0])
-    row_candidate = row.candidates[row.winner]
-    if row_candidate.row_number is not None and any(
-        cell.candidates[cell.winner].row_number != row_candidate.row_number for _, cell in ordered
-    ):
-        return None
-    if "\t".join(cell.raw_text for _, cell in ordered) != row.raw_text:
-        return None
-    parents = [
-        edge.target_id
-        for edge in graph.edges
-        if edge.relation == "table_parent" and edge.source_id == row.source_id
-    ]
-    if len(parents) != 1 or blocks.get(parents[0]) is None or blocks[parents[0]].kind != "table":
-        return None
-    return [cell for _, cell in ordered]
+    return cells
 
 
 def _row_segments(row, cells, ref):
@@ -282,7 +444,7 @@ def attest_table_spans(graph, source_pdf_bytes, refs, *, tenant_id):
                 if block is not None and block.kind not in _TABLE_KINDS:
                     record["reason"] = "unsupported_block_kind"
                 continue
-            box = block.bbox
+            box = _selected_box(block)
             if box is None:
                 record["reason"] = "geometry_unsupported"
                 continue
@@ -296,8 +458,11 @@ def attest_table_spans(graph, source_pdf_bytes, refs, *, tenant_id):
                 continue
             if block.source_id not in readings:
                 if block.kind == "table_cell":
-                    readings[block.source_id] = _page_reading(
-                        source_pdf_bytes, document, block, glyphs
+                    layout = _table_layout(graph, block)
+                    readings[block.source_id] = (
+                        dict(status="unresolved", reason="cell_structure_unresolved")
+                        if layout is None
+                        else _page_reading(source_pdf_bytes, document, block, glyphs)
                     )
                 else:
                     cells = _row_cells(graph, block)
@@ -321,13 +486,16 @@ def attest_table_spans(graph, source_pdf_bytes, refs, *, tenant_id):
             if block.kind == "table_cell":
                 if reading["status"] != "read":
                     record["reason"] = reading["reason"]
+                elif not _matches_raw_text(reading["native_text"], block.raw_text):
+                    record["reason"] = "native_cell_text_mismatch"
+                elif reading["rendered"].get("status") != "read" or not _matches_raw_text(
+                    reading["rendered"].get("text"), block.raw_text
+                ):
+                    record["reason"] = "rendered_cell_text_mismatch"
                 elif not claim_verifier._unique_quote(reading["native_text"], quote):
                     record["reason"] = "native_quote_unresolved"
                 else:
-                    _tight_render(document.pages[block.page_num - 1], reading, quote)
-                    rendered_ok = claim_verifier._unique_quote(
-                        reading["rendered"].get("text", ""), quote
-                    )
+                    rendered_ok = claim_verifier._unique_quote(reading["rendered"]["text"], quote)
                     record.update(
                         status="verified" if rendered_ok else "unresolved",
                         reason=None if rendered_ok else "rendered_quote_unresolved",
@@ -345,11 +513,21 @@ def attest_table_spans(graph, source_pdf_bytes, refs, *, tenant_id):
                 record["reason"] = "cell_reading_unresolved"
                 record["reading_sha256"] = canonical_hash(reading)
                 continue
-            page = document.pages[block.page_num - 1]
-            for cell, part in segments:
-                _tight_render(page, by_id[cell.source_id], _normalized(part))
-            if any(by_id[cell.source_id]["rendered"].get("status") != "read" for cell in cells):
-                record["reason"] = "cell_reading_unresolved"
+            if any(
+                not _matches_raw_text(by_id[cell.source_id]["native_text"], cell.raw_text)
+                for cell in cells
+            ):
+                record["reason"] = "native_cell_text_mismatch"
+                record["reading_sha256"] = canonical_hash(reading)
+                continue
+            if any(
+                by_id[cell.source_id]["rendered"].get("status") != "read"
+                or not _matches_raw_text(
+                    by_id[cell.source_id]["rendered"].get("text"), cell.raw_text
+                )
+                for cell in cells
+            ):
+                record["reason"] = "rendered_cell_text_mismatch"
                 record["reading_sha256"] = canonical_hash(reading)
                 continue
             native_row = " ".join(by_id[cell.source_id]["native_text"] for cell in cells)

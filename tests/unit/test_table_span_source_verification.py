@@ -21,6 +21,16 @@ def crop_ocr(page, box, **kwargs):
     return dict(status="read", text=page.crop(box).extract_text() or "", image_sha256="a" * 64)
 
 
+def _replace_batch(source, graph, transform):
+    batch = graph.candidates[0]
+    changed = replace(
+        batch,
+        source_sha256=sha256(source).hexdigest(),
+        blocks=tuple(transform(block) for block in batch.blocks),
+    )
+    return fuse_candidates((changed,), tenant_id=TENANT)
+
+
 def test_table_cell_and_row_quote_are_attested_inside_their_geometry(monkeypatch):
     from proofops.adapters.local import table_span_source_verification as verifier
 
@@ -64,11 +74,6 @@ def test_wrong_text_other_column_duplicate_and_token_cut_stay_unresolved(monkeyp
     other_column = ref_for(cell(other_column_graph, "2024"), "2024")
     monkeypatch.setattr(
         verifier,
-        "_rendered_cell",
-        lambda *a, **k: dict(status="read", text="2025", image_sha256="b" * 64),
-    )
-    monkeypatch.setattr(
-        verifier,
         "_rendered_text",
         lambda *a, **k: dict(status="read", text="2025", image_sha256="b" * 64),
     )
@@ -92,7 +97,186 @@ def test_wrong_text_other_column_duplicate_and_token_cut_stay_unresolved(monkeyp
     ] == ["unresolved"] * 4
 
 
-def test_unique_native_quote_gets_a_tight_cell_crop_retry(monkeypatch):
+def test_oversized_cell_bbox_cannot_attest_only_its_matching_subspan(monkeypatch):
+    from proofops.adapters.local import table_span_source_verification as verifier
+
+    source, graph = fixture()
+
+    def widen(block):
+        if block.source.source_native_id == "C01":
+            return replace(block, source=replace(block.source, native_bbox=(120, 740, 320, 770)))
+        return block
+
+    graph = _replace_batch(source, graph, widen)
+    monkeypatch.setattr(verifier, "_rendered_text", crop_ocr)
+    value = next(
+        block
+        for block in graph.blocks
+        if block.kind == "table_cell"
+        and any(item.source.source_native_id == "C01" for item in block.candidates)
+    )
+
+    receipt = verifier.attest_table_spans(
+        graph, source, (ref_for(value, "2024"),), tenant_id=TENANT
+    )
+
+    assert receipt["records"][0]["status"] == "unresolved"
+
+
+def test_table_bbox_disjoint_from_row_cannot_attest_cell_or_row(monkeypatch):
+    from proofops.adapters.local import table_span_source_verification as verifier
+
+    source, graph = fixture()
+    graph = _replace_batch(
+        source,
+        graph,
+        lambda block: replace(block, source=replace(block.source, native_bbox=(330, 710, 550, 770)))
+        if block.source.source_native_id == "T"
+        else block,
+    )
+    monkeypatch.setattr(verifier, "_rendered_text", crop_ocr)
+    value = cell(graph, "2024")
+    row = next(
+        block
+        for block in graph.blocks
+        if block.kind == "table_row" and block.raw_text.startswith("Year")
+    )
+
+    receipt = verifier.attest_table_spans(
+        graph,
+        source,
+        (ref_for(value, "2024"), ref_for(row, "2024")),
+        tenant_id=TENANT,
+    )
+
+    assert [record["status"] for record in receipt["records"]] == ["unresolved", "unresolved"]
+
+
+def test_cell_bbox_in_another_column_cannot_attest_same_text(monkeypatch):
+    from proofops.adapters.local import table_span_source_verification as verifier
+
+    source, graph = fixture()
+    assert source.count(b"(2025)") == 1
+    source = source.replace(b"(2025)", b"(2024)")
+    row_text = "Year\t2024\t2024"
+    table_text = row_text + "\nMWh\t25\t79"
+
+    def move_to_other_column(block):
+        native_id = block.source.source_native_id
+        if native_id == "C01":
+            other = next(
+                item for item in graph.candidates[0].blocks if item.source.source_native_id == "C02"
+            )
+            return replace(
+                block,
+                context=("different declared slot",),
+                source=replace(block.source, native_bbox=other.source.native_bbox),
+            )
+        if native_id == "C02":
+            return replace(block, source=replace(block.source, raw_text="2024"))
+        if native_id == "R0":
+            return replace(block, source=replace(block.source, raw_text=row_text))
+        if native_id == "T":
+            return replace(block, source=replace(block.source, raw_text=table_text))
+        return block
+
+    graph = _replace_batch(source, graph, move_to_other_column)
+    monkeypatch.setattr(verifier, "_rendered_text", crop_ocr)
+    value = next(
+        block
+        for block in graph.blocks
+        if block.kind == "table_cell"
+        and any(item.source.source_native_id == "C01" for item in block.candidates)
+    )
+
+    receipt = verifier.attest_table_spans(
+        graph, source, (ref_for(value, "2024"),), tenant_id=TENANT
+    )
+
+    assert receipt["records"][0]["status"] == "unresolved"
+
+
+def test_cell_bbox_in_another_row_cannot_attest_same_text(monkeypatch):
+    from proofops.adapters.local import table_span_source_verification as verifier
+
+    source, graph = fixture()
+    row_text = "Year\t25\t2025"
+    table_text = row_text + "\nMWh\t25\t79"
+
+    def move_to_other_row(block):
+        native_id = block.source.source_native_id
+        if native_id == "C01":
+            other = next(
+                item for item in graph.candidates[0].blocks if item.source.source_native_id == "C11"
+            )
+            return replace(
+                block,
+                context=("different declared slot",),
+                source=replace(
+                    block.source,
+                    native_bbox=other.source.native_bbox,
+                    raw_text="25",
+                    char_end=block.source.char_start + 2,
+                ),
+            )
+        if native_id == "R0":
+            return replace(
+                block,
+                source=replace(
+                    block.source,
+                    raw_text=row_text,
+                    char_end=block.source.char_start + len(row_text),
+                ),
+            )
+        if native_id == "T":
+            return replace(
+                block,
+                source=replace(
+                    block.source,
+                    raw_text=table_text,
+                    char_end=block.source.char_start + len(table_text),
+                ),
+            )
+        return block
+
+    graph = _replace_batch(source, graph, move_to_other_row)
+    monkeypatch.setattr(verifier, "_rendered_text", crop_ocr)
+    value = next(
+        block
+        for block in graph.blocks
+        if block.kind == "table_cell"
+        and any(item.source.source_native_id == "C01" for item in block.candidates)
+    )
+
+    receipt = verifier.attest_table_spans(graph, source, (ref_for(value, "25"),), tenant_id=TENANT)
+
+    assert receipt["records"][0]["status"] == "unresolved"
+
+
+def test_row_without_index_rejects_a_child_with_a_conflicting_row_index(monkeypatch):
+    from proofops.adapters.local import table_span_source_verification as verifier
+
+    source, graph = fixture()
+
+    def mismatch_child(block):
+        if block.source.source_native_id == "C01":
+            return replace(block, row_number=1)
+        return block
+
+    graph = _replace_batch(source, graph, mismatch_child)
+    monkeypatch.setattr(verifier, "_rendered_text", crop_ocr)
+    row = next(
+        block
+        for block in graph.blocks
+        if block.kind == "table_row" and block.raw_text.startswith("Year")
+    )
+
+    receipt = verifier.attest_table_spans(graph, source, (ref_for(row, "2024"),), tenant_id=TENANT)
+
+    assert receipt["records"][0]["status"] == "unresolved"
+
+
+def test_partial_rendered_cell_cannot_be_replaced_with_quote_crop(monkeypatch):
     from proofops.adapters.local import table_span_source_verification as verifier
 
     source, graph = fixture()
@@ -103,19 +287,10 @@ def test_unique_native_quote_gets_a_tight_cell_crop_retry(monkeypatch):
         "_rendered_text",
         lambda *a, **k: dict(status="read", text="table columns out of order"),
     )
-    seen = []
-
-    def focused(page, box):
-        seen.append(box)
-        return dict(status="read", text="2024")
-
-    monkeypatch.setattr(verifier, "_rendered_cell", focused)
     receipt = verifier.attest_table_spans(graph, source, (ref,), tenant_id=TENANT)
 
-    assert receipt["records"][0]["status"] == "verified"
-    assert len(seen) == 1
-    assert value.bbox[0] <= seen[0][0] < seen[0][2] <= value.bbox[2]
-    assert value.bbox[1] <= seen[0][1] < seen[0][3] <= value.bbox[3]
+    assert receipt["records"][0]["status"] == "unresolved"
+    assert receipt["records"][0]["reason"] == "rendered_cell_text_mismatch"
 
 
 def test_missing_geometry_and_non_table_block_stay_unresolved(monkeypatch):

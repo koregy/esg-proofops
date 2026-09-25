@@ -208,10 +208,17 @@ class LocalTagStore:
         self.claims = LocalClaimStore(store, uploads, parser)
 
     def verify_context_sources(self, inputs, refs):
-        """Source-only supplementary paragraph attestations; never mutate frozen inputs."""
+        """Source-only supplementary span attestations; never mutate frozen inputs."""
         from dataclasses import replace
 
-        from proofops.adapters.local.claim_source_verification import attest_claim_spans
+        from proofops.adapters.local.claim_source_verification import (
+            attest_claim_spans,
+            claim_source_policy,
+        )
+        from proofops.adapters.local.table_span_source_verification import (
+            attest_table_spans,
+            table_span_policy,
+        )
         from proofops.application.evidence.span_citations import (
             span_verified_graph,
             verify_source_ref,
@@ -223,14 +230,65 @@ class LocalTagStore:
         source = self.uploads.read_original(claim.tenant_id, claim.document_version_id)
         if sha256(source).hexdigest() != graph.source_sha256:
             raise ValueError("CONTEXT_SOURCE_MISMATCH")
+        kinds = {block.source_id: block.kind for block in graph.blocks}
+        if any(
+            kinds.get(ref.source_id) not in {"paragraph", "table_cell", "table_row"} for ref in refs
+        ):
+            raise ValueError("CONTEXT_SOURCE_REJECTED")
         unresolved = tuple(
             r
             for r in refs
             if verify_source_ref(r, graph, tenant_id=claim.tenant_id).verification_state
             != "verified"
         )
-        receipt = attest_claim_spans(graph, source, unresolved, tenant_id=claim.tenant_id)
-        if any(r["status"] != "verified" for r in receipt["records"]):
+        paragraphs = tuple(ref for ref in unresolved if kinds[ref.source_id] == "paragraph")
+        tables = tuple(ref for ref in unresolved if kinds[ref.source_id] != "paragraph")
+        if tables:
+            paragraph_receipt = (
+                attest_claim_spans(graph, source, paragraphs, tenant_id=claim.tenant_id)
+                if paragraphs
+                else None
+            )
+            table_receipt = attest_table_spans(graph, source, tables, tenant_id=claim.tenant_id)
+            if (
+                (paragraph_receipt and len(paragraph_receipt["records"]) != len(paragraphs))
+                or len(table_receipt["records"]) != len(tables)
+                or any(
+                    record["status"] != "verified"
+                    for item in (paragraph_receipt, table_receipt)
+                    if item
+                    for record in item["records"]
+                )
+            ):
+                raise ValueError("CONTEXT_SOURCE_REJECTED")
+            receipts = {"paragraph": paragraph_receipt, "table": table_receipt}
+            records = {
+                kind: iter(item["records"] if item else ()) for kind, item in receipts.items()
+            }
+            ordered = [
+                next(records["paragraph" if kinds[ref.source_id] == "paragraph" else "table"])
+                for ref in unresolved
+            ]
+            receipt = dict(
+                schema="context_source_attestation_v1",
+                tenant_id=claim.tenant_id,
+                document_version_id=graph.document_version_id,
+                parse_manifest_id=graph.parse_manifest_id,
+                source_sha256=graph.source_sha256,
+                policy_hashes={
+                    "paragraph": canonical_hash(claim_source_policy()),
+                    "table": canonical_hash(table_span_policy()),
+                },
+                receipts=receipts,
+                records=ordered,
+            )
+            receipt["artifact_sha256"] = canonical_hash(receipt)
+        else:
+            # Keep R38 paragraph-only receipts byte-for-byte compatible on replay.
+            receipt = attest_claim_spans(graph, source, unresolved, tenant_id=claim.tenant_id)
+        if len(receipt["records"]) != len(unresolved) or any(
+            record["status"] != "verified" for record in receipt["records"]
+        ):
             raise ValueError("CONTEXT_SOURCE_REJECTED")
         scoped = span_verified_graph(
             graph,
