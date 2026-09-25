@@ -24,7 +24,7 @@ from tests.acceptance.test_rulepack_api import _headers, _seed_auth
 from tests.acceptance.test_tagging import consensus, execute, setup
 
 
-def workspace(tmp_path, *, role="reviewer"):
+def workspace(tmp_path, *, role="reviewer", prepare_inputs=None):
     try:
         from proofops.adapters.local.review_store import LocalSQLiteReviewStore
         from proofops.application.reviews import ReviewInputs, ReviewService
@@ -63,6 +63,8 @@ def workspace(tmp_path, *, role="reviewer"):
             local_synthetic=True,
         ),
     )
+    if prepare_inputs is not None:
+        inputs = prepare_inputs(inputs)
     jobs = LocalSQLiteJobStore(tmp_path / "state.sqlite")
     jobs.create_run(TENANT, RUN, inputs.original.document_version_id)
     store = LocalSQLiteReviewStore(jobs)

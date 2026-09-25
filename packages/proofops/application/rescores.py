@@ -8,6 +8,7 @@ the existing pure engine remains the sole producer of grades and labels.
 from dataclasses import asdict, dataclass
 from typing import Literal
 
+from proofops.application.evidence.report_level import POLICIES as REPORT_LEVEL_POLICIES
 from proofops.domain.audit import AuditConflict
 from proofops.domain.errors import DomainValidationError
 from proofops.domain.provenance import canonical_hash
@@ -144,8 +145,9 @@ class RescoreRejected(Exception):
 class RescoreService:
     """Prepare with verified original inputs, then atomically CAS every decision."""
 
-    def __init__(self, store, *, load_inputs):
+    def __init__(self, store, *, load_inputs, verify_context_sources=None):
         self.store, self.load_inputs = store, load_inputs
+        self.verify_context_sources = verify_context_sources
 
     def create_rescore(self, actor, run_id, body, idempotency_key, if_match=None):
         import re
@@ -241,10 +243,59 @@ class RescoreService:
                     )
                 ):
                     raise RescoreRejected("RESCORE_INPUT_MISMATCH")
+                report_graphs = {}
+                seen_report_elements = set()
+                for receipt in tag.get("report_level_review", ()):
+                    element_id = receipt["element_id"]
+                    policy = receipt["policy"]
+                    element = next(
+                        (e for e in tag["elements"] if e["element_id"] == element_id), None
+                    )
+
+                    if (
+                        self.verify_context_sources is None
+                        or element_id in seen_report_elements
+                        or REPORT_LEVEL_POLICIES.get(element_id) != policy
+                        or element is None
+                        or element["state"] != "present"
+                        or element["reason_code"] != policy
+                        or element["credited_from"] != receipt["credited_from"]
+                    ):
+                        raise RescoreRejected("RESCORE_SOURCE_REJECTED")
+                    refs = tuple(_source_ref_from_dict(ref) for ref in receipt["refs"])
+                    if not 1 <= len(refs) <= 6:
+                        raise RescoreRejected("RESCORE_SOURCE_REJECTED")
+                    verified_refs = tuple(
+                        replace(ref, verification_state="verified") for ref in refs
+                    )
+                    if (
+                        tuple(_source_ref_from_dict(ref) for ref in element["evidence_refs"])
+                        != verified_refs
+                    ):
+                        raise RescoreRejected("RESCORE_SOURCE_REJECTED")
+                    seen_report_elements.add(element_id)
+                    try:
+                        graph, replayed = self.verify_context_sources(inputs, refs)
+                    except (KeyError, TypeError, ValueError) as exc:
+                        raise RescoreRejected("RESCORE_SOURCE_REJECTED") from exc
+                    if canonical_hash(replayed) != canonical_hash(receipt["source_receipt"]):
+                        raise RescoreRejected("RESCORE_SOURCE_REJECTED")
+                    for name in MAPPINGS[tags.track][element_id]:
+                        fact = next((f for f in tags.facts if f.name == name), None)
+                        if (
+                            fact is None
+                            or fact.state != "present"
+                            or fact.source_scope != "global_bound"
+                            or fact.evidence_refs != verified_refs
+                        ):
+                            raise RescoreRejected("RESCORE_SOURCE_REJECTED")
+                        report_graphs[name] = graph
                 for fact in tags.facts:
                     for ref in fact.evidence_refs:
                         verified = verify_source_ref(
-                            ref, inputs.original, tenant_id=actor.tenant_id
+                            ref,
+                            report_graphs.get(fact.name, inputs.original),
+                            tenant_id=actor.tenant_id,
                         )
                         if verified != ref or verified.verification_state != "verified":
                             raise RescoreRejected("RESCORE_SOURCE_REJECTED")

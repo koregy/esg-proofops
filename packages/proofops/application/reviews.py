@@ -882,6 +882,12 @@ class ReviewService:
                         "carried_from", prior_provenance
                     )
             checked_elements = []
+            report_level_receipts = []
+            prior_report_level = (
+                {item["element_id"]: item for item in initial.get("report_level_review", ())}
+                if reopen
+                else {}
+            )
             page_texts: dict[int, list[str]] | None = None
             for element in elements:
                 if element.element_id == "P6" and context_receipt is not None:
@@ -897,12 +903,86 @@ class ReviewService:
                     )
                 names = MAPPINGS[body["track"]][element.element_id]
                 previous = [facts.get(name) for name in names]
+                report_level = (
+                    element.state == "present"
+                    and element.reason_code is not None
+                    and REPORT_LEVEL_POLICIES.get(element.element_id) == element.reason_code
+                )
+                graph = inputs.original
+                source_receipt = None
+                if report_level:
+                    if self.verify_context_sources is None:
+                        raise ReviewRejected("REPORT_LEVEL_SOURCE_REJECTED")
+                    attestation_refs = element.evidence_refs
+                    prior = prior_report_level.get(element.element_id)
+                    prior_element = next(
+                        (
+                            item
+                            for item in initial["elements"]
+                            if item["element_id"] == element.element_id
+                        ),
+                        None,
+                    )
+                    carried = (
+                        prior is not None
+                        and prior_element is not None
+                        and prior_element["state"] == element.state
+                        and prior_element["reason_code"] == element.reason_code
+                        and prior_element["credited_from"] == element.credited_from
+                        and tuple(
+                            replace(_source_ref_from_dict(ref), verification_state="candidate")
+                            for ref in prior_element["evidence_refs"]
+                        )
+                        == tuple(
+                            replace(ref, verification_state="candidate")
+                            for ref in element.evidence_refs
+                        )
+                    )
+                    if carried:
+                        try:
+                            prior_refs = tuple(_source_ref_from_dict(ref) for ref in prior["refs"])
+                        except (KeyError, TypeError, ValueError) as exc:
+                            raise ReviewRejected(
+                                "REPORT_LEVEL_SOURCE_REPLAY_MISMATCH", 409
+                            ) from exc
+                        if (
+                            prior.get("policy") != element.reason_code
+                            or prior.get("credited_from") != element.credited_from
+                            or tuple(
+                                replace(ref, verification_state="candidate") for ref in prior_refs
+                            )
+                            != tuple(
+                                replace(ref, verification_state="candidate")
+                                for ref in element.evidence_refs
+                            )
+                        ):
+                            raise ReviewRejected("REPORT_LEVEL_SOURCE_REPLAY_MISMATCH", 409)
+                        attestation_refs = prior_refs
+                    try:
+                        graph, source_receipt = self.verify_context_sources(
+                            inputs, attestation_refs
+                        )
+                    except (ValueError, KeyError, TypeError) as exc:
+                        raise ReviewRejected("REPORT_LEVEL_SOURCE_REJECTED") from exc
                 refs = tuple(
-                    verify_source_ref(ref, inputs.original, tenant_id=actor.tenant_id)
+                    verify_source_ref(ref, graph, tenant_id=actor.tenant_id)
                     for ref in element.evidence_refs
                 )
                 if any(ref.verification_state != "verified" for ref in refs):
                     raise ReviewRejected("SOURCE_REJECTED")
+                if report_level:
+                    receipt = dict(
+                        element_id=element.element_id,
+                        policy=element.reason_code,
+                        refs=[asdict(ref) for ref in attestation_refs],
+                        credited_from=element.credited_from,
+                        source_receipt=source_receipt,
+                    )
+                    if carried and canonical_hash(prior.get("source_receipt")) != canonical_hash(
+                        source_receipt
+                    ):
+                        raise ReviewRejected("REPORT_LEVEL_SOURCE_REPLAY_MISMATCH", 409)
+                    report_level_receipts.append(receipt)
                 if element.state in ("absent", "not_applicable"):
                     if not all(
                         f
@@ -937,7 +1017,10 @@ class ReviewService:
                             element.element_id,
                             element.reason_code,
                             refs,
-                            claim_refs=inputs.context.claim.source_refs,
+                            claim_refs=tuple(
+                                verify_source_ref(ref, inputs.original, tenant_id=actor.tenant_id)
+                                for ref in inputs.context.claim.source_refs
+                            ),
                             claim_quote=inputs.context.claim.quote,
                             page_texts=page_texts,
                             credited_from=element.credited_from,
@@ -1077,6 +1160,8 @@ class ReviewService:
                 tag["category_review"] = category_receipt
             if context_receipt is not None:
                 tag["claim_context_review"] = context_receipt
+            if report_level_receipts:
+                tag["report_level_review"] = report_level_receipts
             if extra_tag:
                 tag.update(extra_tag)
             return tag, dict(
