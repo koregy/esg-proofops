@@ -670,11 +670,12 @@ def test_tag_elements_round_trip_values_states_and_exact_quotes():
     assert decided["evidence_grade"] == "E1" and decided["label"] == "INCOMPLETE"
     assert blocked["tag_elements"] == []
     assert not_run["tag_elements"] is None
-    assert json.loads(render_report(model, "json"))["claims"][0]["tag_elements"] == decided[
-        "tag_elements"
-    ]
+    assert (
+        json.loads(render_report(model, "json"))["claims"][0]["tag_elements"]
+        == decided["tag_elements"]
+    )
     rows = list(reader(StringIO(render_report(model, "csv").decode())))
-    assert rows[0][-1] == "tag_elements"
+    assert rows[0][-2:] == ["tag_elements", "grade_range"]
     assert json.loads(rows[1][rows[0].index("tag_elements")]) == decided["tag_elements"]
     assert rows[3][rows[0].index("tag_elements")] == "null"
     html = render_report(model, "html").decode()
@@ -739,7 +740,7 @@ def test_tag_elements_fail_closed(change):
 def test_tag_elements_escape_html_and_guard_csv_formulas():
     records = decisions()
     records[CLAIMS[0]]["tag_elements"] = [
-        _tag_element("G1", "present", "=HYPERLINK(\"bad\")", "<script>alert(1)</script>")
+        _tag_element("G1", "present", '=HYPERLINK("bad")', "<script>alert(1)</script>")
     ]
     model = build_report_model(manifest(), records)
     html = render_report(model, "html").decode()
@@ -747,9 +748,9 @@ def test_tag_elements_escape_html_and_guard_csv_formulas():
     rows = list(reader(StringIO(render_report(model, "csv").decode())))
     cell = rows[1][rows[0].index("tag_elements")]
     assert "<script>" in cell
-    assert json.loads(cell[1:] if cell.startswith("'") else cell)[0][
-        "normalized_value"
-    ].startswith("=")
+    assert json.loads(cell[1:] if cell.startswith("'") else cell)[0]["normalized_value"].startswith(
+        "="
+    )
 
 
 def test_tag_elements_separates_present_and_review_candidates():
@@ -789,3 +790,54 @@ def test_tag_elements_separates_present_and_review_candidates():
     assert candidate_idx < g2_idx < g4_idx < other_idx
     assert other_idx < g6_idx
     assert other_idx < html.find("<li>G5 · ")
+
+
+def _range_snapshot(**range_fields):
+    data = decisions()
+    claim = data[CLAIMS[1]]
+    claim.update(decision_status="blocked_evidence", gap_ids=[], unresolved_elements=["M2", "M3"])
+    claim.update(range_fields)
+    return data
+
+
+def test_grade_range_is_reported_separately_from_grade_in_all_formats():
+    model = build_report_model(
+        manifest(),
+        _range_snapshot(grade_floor="E1", grade_ceiling="E3", grade_open_elements=["M2", "M3"]),
+    )
+    blocked = model["claims"][1]
+    assert blocked["evidence_grade"] is None and blocked["label"] is None
+    assert blocked["grade_range"] == dict(floor="E1", ceiling="E3", open_elements=["M2", "M3"])
+    rows = list(reader(StringIO(render_report(model, "csv").decode())))
+    assert rows[0][-1] == "grade_range"
+    assert json.loads(rows[2][-1])["floor"] == "E1"
+    html = render_report(model, "html").decode()
+    assert "가능 등급 범위: E1 ~ E3 (확정 등급 아님)" in html
+    assert "M2 · 적용범위 (조직경계·사업장)" in html
+
+
+def test_old_snapshot_and_decided_claims_have_null_grade_range():
+    model = build_report_model(manifest(), decisions())
+    assert [claim["grade_range"] for claim in model["claims"]] == [None, None, None]
+    assert "가능 등급 범위" not in render_report(model, "html").decode()
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        dict(grade_floor="E3", grade_ceiling="E1", grade_open_elements=["M2"]),
+        dict(grade_floor="E1", grade_ceiling="E9", grade_open_elements=["M2"]),
+        dict(grade_floor="E1", grade_ceiling="E3", grade_open_elements=[]),
+        dict(grade_floor="E1", grade_ceiling=None, grade_open_elements=["M2"]),
+    ],
+)
+def test_grade_range_fails_closed(fields):
+    with pytest.raises(ValueError):
+        build_report_model(manifest(), _range_snapshot(**fields))
+
+
+def test_decided_claim_cannot_carry_grade_range():
+    data = decisions()
+    data[CLAIMS[0]].update(grade_floor="E1", grade_ceiling="E3", grade_open_elements=["G3"])
+    with pytest.raises(ValueError, match="grade range"):
+        build_report_model(manifest(), data)

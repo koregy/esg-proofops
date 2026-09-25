@@ -76,6 +76,27 @@ def _strings(value: object, name: str) -> list[str]:
     return list(value)
 
 
+def _grade_range(record: Mapping[str, object], status: object) -> dict[str, Any] | None:
+    """Reachable ladder grades from engine v3+; absent on older snapshots."""
+    floor, ceiling = record.get("grade_floor"), record.get("grade_ceiling")
+    open_elements = record.get("grade_open_elements") or []
+    if floor is None and ceiling is None and not open_elements:
+        return None
+    if (
+        status != "blocked_evidence"
+        or floor not in _LABELS
+        or ceiling not in _LABELS
+        or str(floor) > str(ceiling)
+        or not open_elements
+    ):
+        raise ValueError("grade range must be an ordered range on an evidence-blocked claim")
+    return dict(
+        floor=floor,
+        ceiling=ceiling,
+        open_elements=_strings(open_elements, "grade_open_elements"),
+    )
+
+
 def _basis_refs(value: object) -> list[dict[str, Any]]:
     if not isinstance(value, list | tuple):
         raise ValueError("basis_refs must be an array")
@@ -155,9 +176,7 @@ def _tag_elements(
             _copy(item.get("evidence_refs")), document_version_id, parse_manifest_id
         )
         if element.state == "present":
-            if not refs or any(
-                ref.get("verification_state") != "verified" for ref in refs
-            ):
+            if not refs or any(ref.get("verification_state") != "verified" for ref in refs):
                 raise ValueError("source-less/unverified present is prohibited")
         result.append(
             {
@@ -369,6 +388,7 @@ def _unfinished(
         "decision_status": "not_run",
         "evidence_grade": None,
         "label": None,
+        "grade_range": None,
         "review_status": "needs_review",
         "missing_elements": [],
         "unresolved_elements": [],
@@ -402,9 +422,7 @@ def _unfinished(
     ):
         raise ValueError("unfinished claim does not match the pinned revision")
     sources = _source_refs(record.get("source_refs"), document_version_id, parse_manifest_id)
-    tag_elements = _tag_elements(
-        record.get("tag_elements"), document_version_id, parse_manifest_id
-    )
+    tag_elements = _tag_elements(record.get("tag_elements"), document_version_id, parse_manifest_id)
     if tag_revision == 0 and tag_elements:
         raise ValueError("untagged claim cannot carry tag elements")
     return (
@@ -553,6 +571,7 @@ def build_report_model(
                 "decision_status": status,
                 "evidence_grade": grade,
                 "label": label,
+                "grade_range": _grade_range(record, status),
                 "review_status": review,
                 "missing_elements": missing,
                 "unresolved_elements": unresolved,
@@ -675,6 +694,7 @@ def render_report(model: Mapping[str, object], output_format: str) -> bytes:
             "claim_quote",
             "classification_review",
             "tag_elements",
+            "grade_range",
         )
         stream = StringIO(newline="")
         rows = writer(stream)
@@ -706,6 +726,15 @@ def render_report(model: Mapping[str, object], output_format: str) -> bytes:
                 f"{claim['evidence_grade']} / {claim['label']}"
                 if claim["evidence_grade"] is not None
                 else "미판정"
+            )
+            grade_range = claim.get("grade_range")
+            range_html = (
+                f"<p>가능 등급 범위: {escape(grade_range['floor'])} ~ "
+                f"{escape(grade_range['ceiling'])} (확정 등급 아님) · "
+                "확인하면 범위가 좁혀지는 요소: "
+                f"{escape(', '.join(map(_element_label, grade_range['open_elements'])))}</p>"
+                if grade_range
+                else ""
             )
             audit_details = escape(canonical_json(claim))
             empty_result = "미평가" if claim["decision_status"] == "not_run" else "없음"
@@ -786,6 +815,7 @@ def render_report(model: Mapping[str, object], output_format: str) -> bytes:
                 f"<h2>검토 대상 주장</h2><p>{escape(quote)}</p>"
                 f"<p>주장 ID: {escape(claim['claim_id'])}</p>{classification_html}"
                 f"<p>판정: {escape(grade_label)} ({escape(claim['decision_status'])})</p>"
+                f"{range_html}"
                 f"<p>검토: {escape(claim['review_status'])} · "
                 f"tag revision {claim['tag_revision']} · decision revision "
                 f"{claim['decision_revision']}</p>"

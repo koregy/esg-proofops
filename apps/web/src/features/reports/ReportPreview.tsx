@@ -58,6 +58,7 @@ type ReportClaim = {
   decision_status: string;
   evidence_grade: string | null;
   label: string | null;
+  grade_range?: { floor: string; ceiling: string; open_elements: string[] } | null;
   review_status: string;
   missing_elements: string[];
   unresolved_elements: string[];
@@ -167,6 +168,12 @@ export function ReportPreview({ report }: { report: ReportModel }) {
               ? `${claim.evidence_grade} / ${claim.label}`
               : decisionText[claim.decision_status] ?? claim.decision_status}
           </p>
+          {claim.grade_range ? (
+            <p>
+              가능 등급 범위: {claim.grade_range.floor} ~ {claim.grade_range.ceiling} (확정 등급 아님) · 확인하면
+              범위가 좁혀지는 요소: {claim.grade_range.open_elements.map(getElementLabel).join(", ")}
+            </p>
+          ) : null}
           <p>
             revision: tag {claim.tag_revision} / decision {claim.decision_revision} · 검토: {claim.review_status}
           </p>

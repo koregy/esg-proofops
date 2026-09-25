@@ -6088,6 +6088,37 @@ components:
           type: array
           items:
             type: string
+        grade_range:
+          description: Reachable ladder grades while ladder evidence is unresolved
+            (engine v3+). Not a grade or label; null when decided or when a separate
+            path/rule gap blocks. Absent on decisions stored before engine v3.
+          anyOf:
+          - type: object
+            additionalProperties: false
+            properties:
+              floor:
+                type: string
+                enum:
+                - E0
+                - E1
+                - E2
+                - E3
+              ceiling:
+                type: string
+                enum:
+                - E0
+                - E1
+                - E2
+                - E3
+              open_elements:
+                type: array
+                items:
+                  type: string
+            required:
+            - floor
+            - ceiling
+            - open_elements
+          - type: 'null'
       required:
       - decision_revision
       - tag_revision
@@ -6102,6 +6133,14 @@ components:
       - semantic_hash
       - gap_ids
       allOf:
+      - if:
+          properties:
+            decision_status:
+              const: decided
+        then:
+          properties:
+            grade_range:
+              type: 'null'
       - if:
           properties:
             decision_status:

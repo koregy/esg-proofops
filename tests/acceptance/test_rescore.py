@@ -209,7 +209,17 @@ def test_missing_confirmed_revision_returns_retag_required():
 
 # Durable fixture records are explicitly synthetic. They use the real review
 # source graph, original packet, pure evaluator, SQLite and HTTP authorization.
-def rescore_workspace(tmp_path, *, role="reviewer", ontology=None, confirmed=True, pin=None):
+def rescore_workspace(
+    tmp_path,
+    *,
+    role="reviewer",
+    ontology=None,
+    confirmed=True,
+    pin=None,
+    track=None,
+    origin="local-synthetic-fixture",
+    real=False,
+):
     import json
     from uuid import uuid4
 
@@ -231,6 +241,18 @@ def rescore_workspace(tmp_path, *, role="reviewer", ontology=None, confirmed=Tru
     ws = workspace(tmp_path)
     assert post(ws).status_code == 200
     review_inputs = ws[2]
+    if real:
+        # Same pinned inputs as a non-synthetic run decided under an approved pack.
+        review_inputs = replace(
+            review_inputs,
+            rule_context=replace(review_inputs.rule_context, local_synthetic=False),
+            rulepack=replace(
+                review_inputs.rulepack,
+                status="active",
+                approved_by="user:owner",
+                approved_at="2026-09-25T00:00:00Z",
+            ),
+        )
     tenant, run, claim = (
         review_inputs.rule_context.tenant_id,
         review_inputs.run_id,
@@ -265,12 +287,33 @@ def rescore_workspace(tmp_path, *, role="reviewer", ontology=None, confirmed=Tru
     )
     if pin is not None:
         saved = replace(saved, **{pin: "e" * 64})
+    if track is not None:
+        # A track correction brings the new track's facts; unconfirmed ones stay unknown.
+        from proofops.domain.rules.engine import MAPPINGS
+
+        elements = review_inputs.rulepack.file_content("rubric/elements.yaml")["elements"]
+        wanted = {n for names in MAPPINGS[track].values() for n in names} | {
+            e["trigger"] for e in elements if e.get("trigger") and e["id"][0] == track[0].upper()
+        }
+        have = {fact.name for fact in saved.facts}
+        saved = replace(
+            saved,
+            track=track,
+            facts=saved.facts
+            + tuple(ConfirmedFact(name, "unknown") for name in sorted(wanted - have)),
+        )
     context = replace(review_inputs.rule_context, decision_revision=2)
     decision = evaluate(saved, context, review_inputs.rulepack)
+    if real:
+        from proofops.domain.provenance import canonical_hash
+
+        tag = {k: v for k, v in tag.items() if k != "inputs"} | {
+            "input_snapshot_sha256": canonical_hash(review_inputs.snapshot())
+        }
     tag = tag | {
         "tag_revision": 3,
         "confirmed_tags": asdict(saved) if confirmed else None,
-        "origin": "local-synthetic-fixture",
+        "origin": origin,
         "execution_profile": "local-synthetic-only",
     }
     with runs.jobs._transaction() as db:
@@ -665,3 +708,55 @@ def test_mounted_rescore_metadata_matches_fixed_operation_contract(tmp_path):
         assert mounted["x-minimum-role"] == contract["role"]
         assert mounted["x-idempotency-required"] == contract["idempotency"]
         assert str(contract["success"]) in mounted["responses"]
+
+
+def _unapproved_target(ws, monkeypatch):
+    capture = ws["service"].store.capture
+
+    def unapproved(*args, **kwargs):
+        captured = capture(*args, **kwargs)
+        if "target_pack" in captured:
+            captured["target_pack"] = captured["target_pack"] | dict(
+                approved_by=None, approved_at=None
+            )
+        return captured
+
+    monkeypatch.setattr(ws["service"].store, "capture", unapproved)
+    return ws
+
+
+def test_real_run_rescore_is_allowed_only_under_an_approved_active_target(tmp_path):
+    ws = rescore_workspace(tmp_path, real=True)
+    response = rescore_post(ws)
+    assert response.status_code == 202, response.text
+    after = ws["review"].store.history(ws["tenant"], ws["run"], ws["claim"])
+    decision = after["decisions"][-1]["decision"]
+    assert decision["rule_pack_sha256"] == ws["target"].sha256
+    assert decision["local_synthetic"] is False
+
+
+def test_real_run_rescore_rejects_unapproved_target_without_writing(tmp_path, monkeypatch):
+    ws = _unapproved_target(rescore_workspace(tmp_path, real=True), monkeypatch)
+    before = records(ws)
+    response = rescore_post(ws)
+    assert response.status_code == 409, response.text
+    assert response.json()["error"]["code"] == "RULEPACK_APPROVAL_REQUIRED"
+    assert records(ws) == before
+
+
+@pytest.mark.parametrize("origin", ["human", "ai_delegated"])
+def test_reviewed_track_correction_is_rescored_under_the_reviewed_track(tmp_path, origin):
+    ws = rescore_workspace(tmp_path, track="goal", origin=origin)
+    response = rescore_post(ws)
+    assert response.status_code == 202, response.text
+    after = ws["review"].store.history(ws["tenant"], ws["run"], ws["claim"])
+    assert after["decisions"][-1]["decision"]["rule_pack_sha256"] == ws["target"].sha256
+
+
+def test_unreviewed_tag_cannot_change_track_through_rescore(tmp_path):
+    ws = rescore_workspace(tmp_path, track="goal")
+    before = records(ws)
+    response = rescore_post(ws)
+    assert response.status_code == 409, response.text
+    assert response.json()["error"]["code"] == "RESCORE_INPUT_MISMATCH"
+    assert records(ws) == before

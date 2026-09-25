@@ -76,3 +76,76 @@ A가 접근 가능한 공유 저장소 기준(마지막 확인 commit ff61f41)�
 그대로 기록하고 `review_origin=ai_project_interpretation`을 유지한다(법·회계 전문가
 승인으로 위장하지 않음). D의 원문·사례 제공은 여전히 유효하지만, 없다는 이유로 조정자의
 채택 자체가 막히지는 않는다.
+
+## 7. 사용자 도메인 결정 — 2026-09-25 (규칙집 `proofops-domain-v2.0-impl2`)
+
+사용자(프로젝트 책임자)가 채팅에서 직접 결정했다. AI 위임 해석이 아니라 사용자 결정이다.
+
+- **A-1 승인:** 원문 §4.4 트랙별 등급 사다리를 그대로 채점 규칙으로 쓴다. 범위는 시연·내부 검토용이며
+  법적 효력, 조항 번호 검증, 고객 공시 승인이 아니다. GAP-001/002/004~010은 그대로 미해결이다.
+- **A-2 (GAP-003 해소, 선택지 가):** 등급은 §4.4 사다리 요소만으로 계산한다. §4.5의 추가 요소
+  (G7·G8·P5·P6·M4·M5·M6)는 등급을 바꾸지 않고 `missing_elements`/`unresolved_elements`에 남긴다.
+  추가 요소가 미확정이면 `review_status=needs_review`다. 감점 규칙을 만들지 않았다.
+
+구현: 트랙 rubric의 `additional_rubric_gap: GAP-003` → `additional_element_policy:
+report_without_grade_effect`, manifest `unresolved_gap_ids`에서 GAP-003 제거, 규칙집 파일 10개
+`version`을 impl2·`effective_date`를 2026-09-25로 변경. 엔진은 정책 키가 없는 규칙집(impl1)에서
+기존 차단 동작을 그대로 유지하므로 기존 run에 고정된 impl1 판정은 재현성이 유지된다. 알 수 없는
+정책 값은 fail-closed다.
+
+호환성·롤백: API/DB 형태 변경 없음, migration 없음. 기존 태깅·판정 revision과 보고서는 불변이다.
+새 규칙집은 새 run 또는 명시적 재채점에만 적용된다. 롤백은 config를 impl1로 되돌리면 되고,
+이미 impl2로 만든 판정 revision은 보존된다.
+
+실제 효과(읽기 전용 측정): 원문 검토 태그가 있는 NAVER 29·KB 4 주장 head를 impl1/impl2로 다시
+평가했다. 저장된 판정과 impl1 재평가는 33/33 일치했고, impl2에서도 등급은 0건 그대로다. 막는 원인은
+추가 요소가 아니라 사다리 요소의 unknown이다(관리체계 22건은 M2·M3 unknown으로 E1~E3 가능).
+absent는 검색 범위 검증이 있어야만 인정되므로, 등급 산출에는 다음 단계(가능 등급 범위 표시 또는
+문서 전역 근거 탐색의 부재 확인)가 필요하다.
+
+## 8. 사용자 결정 B — 가능 등급 범위 (2026-09-25, 엔진 `explicit-ladders-exceptions-3`)
+
+사다리 요소가 unknown이라 `blocked_evidence`인 주장에, 엔진이 이미 열거하던 도달 가능 등급의
+최소·최대를 `grade_range = {floor, ceiling, open_elements}`로 노출한다. 등급·라벨이 아니며
+`evidence_grade`/`label`은 계속 null이다. unknown을 absent로 바꾸지 않는다.
+
+- 노출 조건: 상태가 `blocked_evidence`이고 가능 등급이 둘 이상이며 모든 조합이 사다리 분기와
+  일치할 때만. 세이프하버·제품 변형 등 별도 경로(GAP-001/006/007), 사다리 분기가 없는 조합,
+  impl1의 GAP-003 차단에서는 null(후보 비공개 유지). `decided`이면 null.
+- `open_elements`: 범위를 좁히는 unresolved 사다리 요소만. 추가 요소(M4 등)는 포함하지 않는다.
+- API 계약: `Decision.grade_range`를 선택(optional) nullable 필드로 추가(openapi.yaml, api_models
+  schema 동일). required 목록 변경 없음, `decided`이면 null 강제. 엔진 v3 이전에 저장된 판정은
+  저장된 API 응답 그대로 필드가 없다(재작성 없음). 웹 타입도 optional.
+- 저장: 판정 revision JSON에 `grade_floor`/`grade_ceiling`/`grade_open_elements`가 추가된다.
+  migration 없음. 기존 레코드는 기본값으로 로드된다(rescore의 `Decision(**stored)` 포함).
+- 보고서: JSON `claims[].grade_range`, CSV 마지막 열 `grade_range`(기존 열 위치 불변), HTML·React
+  미리보기에 "가능 등급 범위: E1 ~ E3 (확정 등급 아님)". 이전 스냅샷은 null.
+- 롤백: 엔진 v2 코드로 되돌리면 새 판정에 범위가 생기지 않는다. 이미 저장된 v3 판정 revision과
+  보고서는 보존한다. 스키마의 optional 필드는 남겨도 이전 응답과 호환된다.
+
+실측(읽기 전용, 저장된 검토 태그): NAVER 29·KB 4 = 33 주장 중 27건에 범위가 생긴다.
+E1~E3 23건, E2~E3 3건, E0~E3 1건. 나머지 6건은 별도 세이프하버 경로 2건과 사다리 분기 공백 조합
+4건으로 null이다. 실제 저장 경로(재채점)는 기존 run이 비합성(real) run이고, 기존 rescore가
+`local_synthetic` run만 허용하므로 아직 쓰지 않았다(별도 결정 필요).
+
+## 9. 사용자 결정 — 실제 run 재채점 허용 (2026-09-25)
+
+`RescoreService`는 기존에 `local_synthetic` run만 재채점했다. 이제 비합성(real) run도 **대상 규칙집이
+active이고 approved_by/approved_at이 기록된 경우에만** 재채점한다. 아니면 `409 RULEPACK_APPROVAL_REQUIRED`
+이며 아무것도 쓰지 않는다. 원문 인용 재검증, 입력 snapshot/tag 핀, 테넌트·문서 identity, CAS, 불변
+revision 검사는 그대로다. 트랙 비교는 검토 revision(origin human/ai_delegated)이면 그 revision에
+기록된 트랙을 쓰고, 미검토 태그는 여전히 원래 packet 트랙과 같아야 한다(§4.2 재분류 경로).
+API/DB 형태 변경·migration 없음. 롤백은 조건을 이전처럼 `local_synthetic` 전용으로 되돌리면 되고,
+이미 기록된 재채점 판정과 receipt는 보존한다.
+
+실제 적용 결과(NAVER 검토 DB 사본 `.local/r37-naver-grade-range`, 원본 불변): impl2를 사용자 승인으로
+등록·활성화한 뒤 실제 HTTP 재채점을 호출했다. 입력 검사는 통과했으나 29건 모두 `RETAG_REQUIRED`로
+거절됐고 쓰기는 없었다. 원래 태깅이 규칙이 참조하는 사실을 수집하지 않았기 때문이다(관리체계 23건:
+governance_claim·compensation_link_claim·willingness_only, 목표 5건: offset_or_carbon_neutral_claim·
+science_based_claim, 성과 1건: reduction_or_improvement_claim). 수집되지 않은 사실을 unknown으로 간주하지
+않는 기존 가드(`test_uncollected_fact_is_not_manufactured_as_unknown_or_absent`)는 유지했다. 특히
+`willingness_only`는 규칙 파일에만 있고 이를 생산하는 태깅 프롬프트·스키마·검토 경로가 없다.
+
+후속(같은 날, 사용자 결정 1번): 적용성 검토가 관리체계 사다리의 `willingness_only`도 원자 주장 단위로
+받도록 확장했다(해당 사다리 분기가 있는 track만, track 변경 시 제거). NAVER 29건을 위임 AI 재검토로
+기록한 뒤 실제 run 재채점이 성공했다. 결과는 ROOT `outputs/agent-results/R37-grade-range/REPORT.md`.

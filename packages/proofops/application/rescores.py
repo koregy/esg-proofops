@@ -21,6 +21,8 @@ from proofops.domain.rules.engine import (
     evaluate,
 )
 
+REVIEWED_TAG_ORIGINS = ("human", "ai_delegated")
+
 
 @dataclass(frozen=True, slots=True)
 class RetagRequired:
@@ -173,6 +175,11 @@ class RescoreService:
         if "response" in captured:
             return captured["response"]
         target = RulePackSnapshot(**captured["target_pack"])
+        # Real (non-synthetic) runs may be rescored only into an active pack with a
+        # recorded approver; synthetic runs keep the original local-only behaviour.
+        target_approved = bool(
+            target.status == "active" and target.approved_by and target.approved_at
+        )
         prepared = {}
         for claim_id, current in captured["claims"].items():
             raw = current["tag"].get("confirmed_tags")
@@ -194,9 +201,10 @@ class RescoreService:
                     or inputs.context.claim.claim_id != claim_id
                     or inputs.rulepack.sha256 != captured["run_snapshot"]["rulepack"]["sha256"]
                     or inputs.original.document_version_id != captured["run"]["document_version_id"]
-                    or not inputs.rule_context.local_synthetic
                 ):
                     raise RescoreRejected("RESCORE_INPUT_MISMATCH")
+                if not inputs.rule_context.local_synthetic and not target_approved:
+                    raise RescoreRejected("RULEPACK_APPROVAL_REQUIRED")
                 tags = ConfirmedTags(
                     **(
                         raw
@@ -225,7 +233,12 @@ class RescoreService:
                     or tags.prompt_sha256 != first.prompt_sha256
                     or tags.replicate_hashes != inputs.consensus.replicate_hashes
                     or tags.product_variant != first.product_variant
-                    or tags.track != inputs.packet.to_dict()["track"]
+                    # A review revision may correct the track (original §4.2); an
+                    # unreviewed tag must still match its original packet.
+                    or (
+                        tags.track != inputs.packet.to_dict()["track"]
+                        and tag.get("origin") not in REVIEWED_TAG_ORIGINS
+                    )
                 ):
                     raise RescoreRejected("RESCORE_INPUT_MISMATCH")
                 for fact in tags.facts:

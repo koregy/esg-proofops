@@ -29,7 +29,10 @@ type Decision = {
   rule_pack_sha256: string;
   semantic_hash: string;
   gap_ids: string[];
+  // Engine v3+: reachable ladder grades while evidence is unresolved; not a grade.
+  grade_range?: { floor: Grade; ceiling: Grade; open_elements: string[] } | null;
 };
+type Grade = "E0" | "E1" | "E2" | "E3";
 type ClaimSummary = {
   claim_id: string;
   page_num: number;
@@ -235,7 +238,11 @@ const OUTSIDE_REVIEWED_SECTION = "outside_reviewed_section";
 
 function decisionText(decision: Decision | null): string {
   if (!decision) return "판정 미확정 · 상세 확인";
-  if (decision.decision_status !== "decided") return pendingDecisionText[decision.decision_status];
+  if (decision.decision_status !== "decided") {
+    const range = decision.grade_range;
+    const pending = pendingDecisionText[decision.decision_status];
+    return range ? `${pending} · 가능 범위 ${range.floor}~${range.ceiling}` : pending;
+  }
   return `${decision.evidence_grade} · ${decision.label}${decision.sublabel ? ` (${decision.sublabel})` : ""}`;
 }
 
@@ -481,7 +488,7 @@ function ClaimDetailView({ apiBase = "", csrfToken, tenantKey, session, runId, c
       <SourceViewer key={`${tenantKey}:${runId}:${claimId}`} apiBase={apiBase} csrfToken={csrfToken} runId={runId} sources={detail.source_refs} openRequest={sourceOpen} onSessionInvalid={onSessionInvalid} />
       <section aria-labelledby="evidence-heading"><h2 id="evidence-heading">태깅과 판정</h2>
         <PartialClaimSummary decision={decision} elements={elements} rawCandidates={projection?.raw_candidates ?? []} projection={projection} onSourceOpen={source => setSourceOpen(current => ({ source, nonce: (current?.nonce ?? 0) + 1 }))} />
-        <p>{detail.claim.quote}</p><p>트랙: {track ? trackText[track] : "미분류"}</p><p>판정: <StatusBadge label={decisionText(decision)} tone={decisionTone(decision)} /></p>
+        <p>{detail.claim.quote}</p><p>트랙: {track ? trackText[track] : "미분류"}</p><p>판정: <StatusBadge label={decisionText(decision)} tone={decisionTone(decision)} /></p>{decision?.grade_range ? <p>가능 등급 범위: {decision.grade_range.floor} ~ {decision.grade_range.ceiling} (확정 등급 아님) · 확인하면 범위가 좁혀지는 요소: {decision.grade_range.open_elements.map(getElementLabel).join(", ")}</p> : null}
         {decision?.review_status ? <p>검토 상태: <StatusBadge label={reviewStatusText[decision.review_status]} tone={decision.review_status === "human_confirmed" ? "success" : "warning"} /></p> : null}
         {decision?.gap_ids.length ? <p>규칙 판정 보류(다음 규칙 항목이 갈리거나 정의되지 않음): {decision.gap_ids.join(", ")}</p> : null}
         {decision?.missing_elements.length ? <p>아직 충족이 확인되지 않은 요소: {decision.missing_elements.map(getElementLabel).join(", ")}</p> : null}

@@ -104,6 +104,25 @@ class RunCreate(_StrictDTO):
         return self
 
 
+class GradeRange(_StrictDTO):
+    """Reachable ladder grades while evidence is unresolved; never a grade (engine v3+)."""
+
+    floor: Literal["E0", "E1", "E2", "E3"]
+    ceiling: Literal["E0", "E1", "E2", "E3"]
+    open_elements: tuple[str, ...]
+
+    @field_validator("open_elements", mode="before")
+    @classmethod
+    def _coerce_lists(cls, value: Any) -> Any:
+        return _coerce_tuple(value)
+
+    @model_validator(mode="after")
+    def _check_order(self) -> GradeRange:
+        if self.floor > self.ceiling or not self.open_elements:
+            raise ValueError("grade_range needs floor <= ceiling and open elements")
+        return self
+
+
 class Decision(_StrictDTO):
     decision_revision: int
     tag_revision: int
@@ -121,6 +140,7 @@ class Decision(_StrictDTO):
     rule_pack_sha256: str
     semantic_hash: str
     gap_ids: tuple[str, ...] = ()
+    grade_range: GradeRange | None = None
 
     @field_validator("missing_elements", "rule_ids", "gap_ids", mode="before")
     @classmethod
@@ -150,6 +170,8 @@ class Decision(_StrictDTO):
             "E3": "SUBSTANTIATED",
         }
         if self.decision_status == "decided":
+            if self.grade_range is not None:
+                raise ValueError("decided decisions carry a grade, not a grade_range")
             if self.evidence_grade is None or self.label is None:
                 raise ValueError("decided requires evidence_grade and label")
             if grade_to_label[self.evidence_grade] != self.label:

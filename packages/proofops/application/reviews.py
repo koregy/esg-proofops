@@ -256,6 +256,11 @@ def _review_applicability(inputs: ReviewInputs, track: str, review: Any):
             "compensation_link_claim",
         }
     }
+    # The management §4.4 E0 branch ("의지 표현만") is also a whole-claim judgment;
+    # accept it only where the pinned track ladder actually uses it.
+    branches = inputs.rulepack.file_content(f"rubric/{track}.yaml")["branches"]
+    if any("willingness_only" in branch.get("when", {}) for branch in branches):
+        allowed.add("willingness_only")
     facts, seen = [], set()
     for trigger in review["triggers"]:
         if not isinstance(trigger, dict) or set(trigger) != {"name", "value", "reason"}:
@@ -795,7 +800,7 @@ class ReviewService:
             trigger_names = {e["trigger"] for e in definitions.values() if e.get("trigger")}
             # A changed track requires fresh applicability, never inherited trigger tags.
             if body["track"] != inputs.packet.to_dict()["track"]:
-                previous_names |= trigger_names
+                previous_names |= trigger_names | {"willingness_only"}
             # A category correction and a category checklist attestation cannot
             # coexist in one revision: the checklist documents the very category
             # being removed. Fail closed for a freshly supplied AND for a carried

@@ -1,5 +1,5 @@
-version: proofops-domain-v2.0-impl1
-effective_date: '2026-09-08'
+version: proofops-domain-v2.0-impl2
+effective_date: '2026-09-25'
 source_document_sha256: 0f9d7e3495d1bc6330ee4ffd2bb644ce8189c89e91dd5f9ae4c720b9ffaebc6a
 status: draft
 scope: source-derived implementation baseline; clause/legal approval not completed
@@ -16,10 +16,10 @@ files:
 - crosswalk.yaml
 - sasb/industry_map.yaml
 activation_policy: validated_draft_for_explicit_ladder_demo_only; approved_basis_and_account_gates_required_for_customer_claims
+domain_decisions: 2026-09-25 user approved the source §4.4 ladders for demo/internal review only (not legal, clause or customer approval) and resolved GAP-003 as report_without_grade_effect; see docs/R00_DOMAIN_DECISIONS.md §4
 unresolved_gap_ids:
 - GAP-001
 - GAP-002
-- GAP-003
 - GAP-004
 - GAP-005
 - GAP-006

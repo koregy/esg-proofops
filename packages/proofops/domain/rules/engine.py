@@ -29,7 +29,10 @@ from proofops.domain.values import (
     _require_uuid,
 )
 
-ENGINE_VERSION = "explicit-ladders-exceptions-2"
+ENGINE_VERSION = "explicit-ladders-exceptions-3"
+# User decision 2026-09-25 resolving GAP-003: the §4.4 ladder alone sets the
+# grade; §4.5 additional elements stay in missing/unresolved and review status.
+ADDITIONAL_REPORT_ONLY = "report_without_grade_effect"
 MAPPINGS = {
     "goal": goal.ELEMENTS,
     "performance": performance.ELEMENTS,
@@ -164,9 +167,23 @@ class Decision:
     basis_refs: tuple[str, ...]
     input_tags_sha256: str
     local_synthetic: bool
+    # Reachable ladder grades while evidence is unresolved; never a grade or label.
+    # Defaults keep decisions stored before engine v3 loadable.
+    grade_floor: str | None = None
+    grade_ceiling: str | None = None
+    grade_open_elements: tuple[str, ...] = ()
 
     def to_api_dict(self) -> dict[str, Any]:
         """Explicit v1 projection; internal candidate/provenance stay in the revision."""
+        grade_range = (
+            dict(
+                floor=self.grade_floor,
+                ceiling=self.grade_ceiling,
+                open_elements=list(self.grade_open_elements),
+            )
+            if self.grade_floor is not None
+            else None
+        )
         fields = (
             "decision_revision",
             "tag_revision",
@@ -184,7 +201,7 @@ class Decision:
         return {
             key: list(value) if isinstance(value := getattr(self, key), tuple) else value
             for key in fields
-        }
+        } | {"grade_range": grade_range}
 
 
 def _hash(value: Any) -> str:
@@ -294,6 +311,10 @@ def evaluate(tags: ConfirmedTags, context: RuleContext, pack: RulePackSnapshot) 
             additional.append(element)
 
     rubric = pack.file_content(f"rubric/{tags.track}.yaml")
+    # Packs without a policy keep the frozen impl1 GAP-003 blocking behaviour.
+    additional_policy = rubric.get("additional_element_policy")
+    if additional_policy not in (None, ADDITIONAL_REPORT_ONLY):
+        raise DomainValidationError("unsupported additional element policy")
     branches = rubric["branches"]
     names = {
         name
@@ -326,7 +347,7 @@ def evaluate(tags: ConfirmedTags, context: RuleContext, pack: RulePackSnapshot) 
     elif grade_candidate is None:
         status = "blocked_rule_gap"
         gaps.append("GAP-007")
-    if additional:
+    if additional and additional_policy is None:
         status = (
             "blocked_evidence" if any(e in unresolved for e in additional) else "blocked_rule_gap"
         )
@@ -342,6 +363,20 @@ def evaluate(tags: ConfirmedTags, context: RuleContext, pack: RulePackSnapshot) 
         status = "blocked_rule_gap"
         gaps.extend(effect.gap_ids)
     grade = (effect.override_grade or grade_candidate) if status == "decided" else None
+    # Only ladder unknowns may widen the range: separate task paths, rule gaps and the
+    # legacy GAP-003 block keep their candidate private.
+    has_range = (
+        status == "blocked_evidence"
+        and len(grades) > 1
+        and None not in grades
+        and not (additional and additional_policy is None)
+        and not effect.unresolved_elements
+        and not effect.gap_ids
+    )
+    reachable = {grade for grade in grades if grade is not None}
+    ladder_elements = {
+        element for element, fact_names in elements.items() if set(fact_names) & names
+    }
     bases.append(
         canonical_json(
             {
@@ -384,6 +419,9 @@ def evaluate(tags: ConfirmedTags, context: RuleContext, pack: RulePackSnapshot) 
         tuple(bases),
         _hash(asdict(tags)),
         context.local_synthetic,
+        min(reachable) if has_range else None,
+        max(reachable) if has_range else None,
+        tuple(e for e in unresolved if e in ladder_elements) if has_range else (),
     )
     return replace(
         decision,
