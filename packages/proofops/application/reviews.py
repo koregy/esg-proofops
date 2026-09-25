@@ -20,6 +20,8 @@ from uuid import NAMESPACE_URL, uuid5
 
 from proofops.application.authorization import AuthContext
 from proofops.application.evidence.binding import ClaimContext, accept_binding, relation_tags_for
+from proofops.application.evidence.report_level import POLICIES as REPORT_LEVEL_POLICIES
+from proofops.application.evidence.report_level import check_report_level
 from proofops.application.evidence.retrieval import EvidencePacket
 from proofops.application.evidence.span_citations import verify_source_ref
 from proofops.application.ingest.graph_fusion import CanonicalDocumentGraph
@@ -880,6 +882,7 @@ class ReviewService:
                         "carried_from", prior_provenance
                     )
             checked_elements = []
+            page_texts: dict[int, list[str]] | None = None
             for element in elements:
                 if element.element_id == "P6" and context_receipt is not None:
                     # The caller cannot choose the computed state. No accepted
@@ -921,6 +924,26 @@ class ReviewService:
                         ):
                             raise ReviewRejected("DETERMINISTIC_CHECK_REQUIRED")
                         scope = previous[0].source_scope
+                    elif (
+                        element.reason_code is not None
+                        and REPORT_LEVEL_POLICIES.get(element.element_id) == element.reason_code
+                    ):
+                        # User-approved report-level chain (§6 2-4); literal checks only.
+                        if page_texts is None:
+                            page_texts = {}
+                            for block in inputs.original.blocks:
+                                page_texts.setdefault(block.page_num, []).append(block.raw_text)
+                        if not check_report_level(
+                            element.element_id,
+                            element.reason_code,
+                            refs,
+                            claim_refs=inputs.context.claim.source_refs,
+                            claim_quote=inputs.context.claim.quote,
+                            page_texts=page_texts,
+                            credited_from=element.credited_from,
+                        ):
+                            raise ReviewRejected("REPORT_LEVEL_BINDING_REJECTED")
+                        scope = "global_bound"
                     else:
                         scopes = []
                         for ref in refs:
