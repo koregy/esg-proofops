@@ -6,7 +6,7 @@ api.upstage.ai POST /v1/document-digitization multipart with pinned model
 document-parse-260128, mode, ocr=auto, coordinates=true,
 output_formats=[text,html]. No retries/redirects, bounded response, sanitized
 errors. Pricing 2026-09-12 standard 0.01/page enhanced 0.03/page +10% VAT.
-Rates rechecked 2026-09-18 at https://www.upstage.ai/pricing/api; expiry 2026-09-25.
+Rates rechecked 2026-09-25 at https://www.upstage.ai/pricing/api; expiry 2026-10-02.
 No quality approval or graph conversion.
 """
 
@@ -20,7 +20,7 @@ import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from proofops.adapters.local.upstage import UpstageProbe
+from proofops.adapters.local.upstage import PRICE_RECHECK_AT, UpstageProbe
 from proofops.domain.provenance import canonical_hash
 
 PARSE_MODEL_PINNED = "document-parse-260128"
@@ -122,7 +122,7 @@ class UpstageParseProbe(UpstageProbe):
             connection.close()
 
     def parse(self, pdf_bytes: bytes, *, request_id: str, mode: str) -> dict:
-        if datetime.now(UTC) >= datetime(2026, 9, 25, tzinfo=UTC):
+        if datetime.now(UTC) >= PRICE_RECHECK_AT:
             raise ValueError("PRICE_RECHECK_REQUIRED")
         if (
             not isinstance(request_id, str)

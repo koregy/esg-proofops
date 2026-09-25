@@ -1,7 +1,7 @@
 """Opt-in one-page document extraction; existing USD10 ledger, no automatic retries.
 
 Protocol/model: https://console.upstage.ai/docs/capabilities/extract/universal-extraction
-Price: https://www.upstage.ai/pricing/api rechecked 2026-09-18 (rates unchanged).
+Price: https://www.upstage.ai/pricing/api rechecked 2026-09-25 (rates unchanged).
 Enhanced USD0.06/page
 plus 10% VAT. Settlement uses the submitted one-page count at the requested mode
 rate, not token pricing or a claimed provider invoice. No production activation.
@@ -17,6 +17,7 @@ from hashlib import sha256
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 
+from proofops.adapters.local.upstage import PRICE_RECHECK_AT
 from proofops.adapters.local.upstage_parse import UpstageParseProbe
 from proofops.domain.provenance import canonical_hash
 
@@ -73,7 +74,7 @@ class UpstageExtractProbe(UpstageParseProbe):
             media_type = "image/png"
         elif self._validate_pdf(pdf_bytes) != 1:
             raise ValueError("INVALID_PROBE_REQUEST")
-        if datetime.now(UTC) >= datetime(2026, 9, 25, tzinfo=UTC):
+        if datetime.now(UTC) >= PRICE_RECHECK_AT:
             raise ValueError("PRICE_RECHECK_REQUIRED")
         if (
             not isinstance(request_id, str)
