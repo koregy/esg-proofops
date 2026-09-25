@@ -283,3 +283,91 @@ def test_local_login_link_mints_fresh_session_after_expiry(monkeypatch):
     assert all(
         flag in second.headers["set-cookie"] for flag in ("Secure", "HttpOnly", "SameSite=strict")
     )
+
+
+def test_live_pilot_settings_capacity_refresh_opt_in():
+    default = live_tagging_settings(12)
+    assert default["input_reservation_policy"]["captured_at"] == "2026-09-18T16:53:00Z"
+    assert default["input_reservation_policy"]["expires_at"] == "2026-09-25T00:00:00Z"
+
+    opted = live_tagging_settings(12, capacity_refresh=True)
+    assert opted["input_reservation_policy"]["captured_at"] == "2026-09-25T10:57:00Z"
+    assert opted["input_reservation_policy"]["expires_at"] == "2026-10-02T00:00:00Z"
+
+    for invalid in ("yes", 1, None, 0):
+        with pytest.raises(ValueError):
+            live_tagging_settings(12, capacity_refresh=invalid)
+
+
+def test_new_local_approval_profiles_use_bounded_24h_lifetime(tmp_path, monkeypatch):
+    import json
+    import sqlite3
+    import sys
+    from datetime import datetime, timedelta
+
+    from pypdf import PdfWriter
+
+    from evaluation import local_upstage_pilot as pilot
+
+    pdf_path = tmp_path / "sample.pdf"
+    writer = PdfWriter()
+    writer.add_blank_page(width=72, height=72)
+    with pdf_path.open("wb") as stream:
+        writer.write(stream)
+
+    state = tmp_path / "pilot-state"
+    argv = [
+        "pilot",
+        "--pdf",
+        str(pdf_path),
+        "--state",
+        str(state),
+        "--pages",
+        "1",
+        "--report-year",
+        "2025",
+        "--period-start",
+        "2024-01-01",
+        "--period-end",
+        "2024-12-31",
+    ]
+    monkeypatch.setattr(sys, "argv", argv)
+    exit_code = pilot.main()
+    assert exit_code == 0
+
+    # Inspect registered profiles in state.sqlite3
+    db_path = state / "state.sqlite3"
+    assert db_path.exists()
+    conn = sqlite3.connect(str(db_path))
+    row = conn.execute("SELECT value FROM registry_state WHERE key = 'state'").fetchone()
+    conn.close()
+
+    assert row is not None
+    data = json.loads(row[0])
+    options = data["options"]
+    assert len(options) > 0
+    checked_profiles = 0
+    for opt in options:
+        artifact = opt.get("artifact") or {}
+        if "approved_at" in artifact and "expires_at" in artifact:
+            approved_dt = datetime.fromisoformat(artifact["approved_at"].replace("Z", "+00:00"))
+            expires_dt = datetime.fromisoformat(artifact["expires_at"].replace("Z", "+00:00"))
+            # Bounded 24h lifetime from creation instant
+            diff = expires_dt - approved_dt
+            assert diff == timedelta(
+                hours=24
+            ), f"Expected 24h difference, got {diff} on {opt.get('kind')}/{opt.get('id')}"
+            checked_profiles += 1
+
+    assert checked_profiles >= 3  # rights, runtime, consent (+ tagger runtime)
+
+    # Resume must never renew stored/resumed profiles
+    resume_argv = ["pilot", "--state", str(state), "--resume"]
+    monkeypatch.setattr(sys, "argv", resume_argv)
+    exit_code_resume = pilot.main()
+    assert exit_code_resume == 0
+
+    conn = sqlite3.connect(str(db_path))
+    resumed_row = conn.execute("SELECT value FROM registry_state WHERE key = 'state'").fetchone()
+    conn.close()
+    assert resumed_row == row  # Exact match, untouched

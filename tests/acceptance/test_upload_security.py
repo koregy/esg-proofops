@@ -495,7 +495,7 @@ def test_indirect_uri_action_accepted_regardless_of_xref_scan_order(tmp_path, ac
 
 
 @pytest.mark.parametrize("action_first", [True, False])
-@pytest.mark.parametrize("action_kind", ["print", "uri"])
+@pytest.mark.parametrize("action_kind", ["print", "uri", "find"])
 @pytest.mark.parametrize(
     "trigger",
     ["gesture", "open", "additional", "javascript_next", "D", "U", "Fo", "PO", "shared_widget"],
@@ -517,6 +517,8 @@ def test_gesture_actions_require_click_and_safe_chain(tmp_path, action_first, ac
         action[NameObject("/S")] = NameObject("/URI")
         del action[NameObject("/N")]
         action[NameObject("/URI")] = TextStringObject("https://example.invalid")
+    elif action_kind == "find":
+        action[NameObject("/N")] = NameObject("/Find")
     if trigger == "javascript_next":
         action[NameObject("/Next")] = DictionaryObject(
             {

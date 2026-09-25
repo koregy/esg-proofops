@@ -15,7 +15,7 @@ import socket
 import sys
 import time
 from dataclasses import asdict
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
 from typing import cast
@@ -96,6 +96,7 @@ def live_tagging_settings(
     preliminary_table_role: bool = False,
     preliminary_goal_role: bool = False,
     preliminary_actor_role: bool = False,
+    capacity_refresh: bool = False,
 ) -> dict:
     """Explicit bounded pilot config; grants are registered separately by main."""
     from proofops.application.input_reservation import solar_pro4_capacity_policy
@@ -116,6 +117,7 @@ def live_tagging_settings(
         or type(preliminary_table_role) is not bool
         or type(preliminary_goal_role) is not bool
         or type(preliminary_actor_role) is not bool
+        or type(capacity_refresh) is not bool
     ):
         raise ValueError("relation/preliminary-context stage must be explicit boolean")
     if preliminary_table_context and not preliminary_context:
@@ -273,7 +275,7 @@ def live_tagging_settings(
                 max_tokens=output,
             )
         )
-    settings["input_reservation_policy"] = solar_pro4_capacity_policy()
+    settings["input_reservation_policy"] = solar_pro4_capacity_policy(refreshed=capacity_refresh)
     return settings
 
 
@@ -381,6 +383,7 @@ def apply_resume_metadata(args, saved: dict) -> None:
     args.preliminary_table_role = bool(saved.get("preliminary_table_role", False))
     args.preliminary_goal_role = bool(saved.get("preliminary_goal_role", False))
     args.preliminary_actor_role = bool(saved.get("preliminary_actor_role", False))
+    args.capacity_refresh = bool(saved.get("capacity_refresh", False))
     args.extraction_year_notation = bool(saved.get("extraction_year_notation", False))
     args.extraction_context = bool(saved.get("extraction_context", False))
     args.extraction_table_context = bool(saved.get("extraction_table_context", False))
@@ -653,6 +656,13 @@ def main():
         action="store_true",
         help="Use R34 actor-role prompt",
     )
+    parser.add_argument(
+        "--capacity-policy-refresh",
+        dest="capacity_refresh",
+        action="store_true",
+        help="Opt-in: use refreshed 2026-09-25 capacity reservation policy revision "
+        "(expires 2026-10-02).",
+    )
 
     parser.add_argument(
         "--extraction-source-ids",
@@ -743,6 +753,7 @@ def main():
         requested_preliminary_role = args.preliminary_table_role
         requested_preliminary_goal_role = args.preliminary_goal_role
         requested_preliminary_actor_role = args.preliminary_actor_role
+        requested_capacity_refresh = getattr(args, "capacity_refresh", False)
         requested_render_resolution = args.claim_span_render_resolution
         requested_bullet_spacing = args.claim_span_bullet_spacing
         requested_typography = args.claim_span_typography
@@ -772,6 +783,8 @@ def main():
             parser.error("--resume cannot add preliminary goal role; create a new run")
         if requested_preliminary_actor_role and not args.preliminary_actor_role:
             parser.error("--resume cannot add preliminary actor role; create a new run")
+        if requested_capacity_refresh and not args.capacity_refresh:
+            parser.error("--resume cannot add capacity refresh; create a new run")
         if requested_render_resolution and not args.claim_span_render_resolution:
             parser.error("--resume cannot add claim-span render resolution; create a new run")
         if requested_bullet_spacing and not args.claim_span_bullet_spacing:
@@ -935,6 +948,7 @@ def main():
                     preliminary_table_role=args.preliminary_table_role,
                     preliminary_goal_role=args.preliminary_goal_role,
                     preliminary_actor_role=args.preliminary_actor_role,
+                    capacity_refresh=getattr(args, "capacity_refresh", False),
                 )
             )
             bound = settings["input_reservation_policy"]["reservation_input_tokens"]
@@ -998,7 +1012,9 @@ def main():
         return response.json()
 
     if not manifest_path.exists():
-        approved_at = datetime.now(UTC).isoformat()
+        now_dt = datetime.now(UTC)
+        approved_at = now_dt.isoformat()
+        expires_at = (now_dt + timedelta(hours=24)).isoformat()
         rights, runtime, consent, pack_id = (str(uuid4()) for _ in range(4))
         common = dict(
             tenant_id=tenant,
@@ -1008,7 +1024,7 @@ def main():
             approved_at=approved_at,
             purpose="local_test",
             provider="upstage",
-            expires_at="2026-09-25T00:00:00Z",
+            expires_at=expires_at,
         )
         profiles = [
             (
@@ -1252,10 +1268,14 @@ def main():
             manifest["extraction_complete_selection"] = True
         if args.extraction_content_bounds:
             manifest["extraction_content_bounds"] = True
+        if args.capacity_refresh:
+            manifest["capacity_refresh"] = True
         with manifest_path.open("x") as stream:
             json.dump(manifest, stream, ensure_ascii=False, indent=2)
     else:
         manifest = json.loads(manifest_path.read_text())
+        if manifest.get("capacity_refresh", False) != getattr(args, "capacity_refresh", False):
+            raise ValueError("pilot capacity refresh policy changed; create a new state directory")
         if args.extraction_total_calls is not None and (
             manifest.get("extraction_total_calls") != args.extraction_total_calls
         ):

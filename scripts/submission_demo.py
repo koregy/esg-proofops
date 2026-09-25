@@ -212,6 +212,15 @@ def summarize_outcome(
                 "rule blockers. Reopening alone does not process pending work."
             )
     lines.append(f"  reopen (read-only, same results): {_resume_command(demo_state, port)}")
+    lines.append("  [Reviewer Next Actions / 검토 가이드]")
+    lines.append(
+        "  1. Claims (주장 목록): /runs/<run_id>/claims - 추출된 주장과 규칙 판정 상태 확인"
+    )
+    lines.append("  2. Source Evidence (원문 근거): 주장 상세의 '원문 보기'로 원문 쪽수·발췌 확인")
+    lines.append(
+        "  3. Export (보고서 내보내기): /runs/<run_id>/report - "
+        "검토용 부분 결과(JSON/CSV/HTML) 내보내기"
+    )
     return lines
 
 
@@ -254,6 +263,11 @@ def main() -> int:
     print(f"demo state (writable copy): {demo_state}", flush=True)
     print(f"run_id: {manifest.get('run_id')}", flush=True)
     print(f"pipeline: {json.dumps(summary, ensure_ascii=False)}", flush=True)
+    print(
+        "zero automatic paid invocation: live model calls (--invoke) are strictly disabled; "
+        "replaying saved seed results.",
+        flush=True,
+    )
     if not manifest.get("live_tagging"):
         print(
             "note: this run is extraction-only; claims show tag_status=untagged "
@@ -284,6 +298,15 @@ def main() -> int:
             f"{demo_state / 'browser.json'}.",
             flush=True,
         )
+        print("Reviewer steps:", flush=True)
+        print(
+            "  1. Claims (주장): Review extracted claims and rulepack evaluation state", flush=True
+        )
+        print(
+            "  2. Original Source (원문 보기): Open claim detail and inspect source quote/page",
+            flush=True,
+        )
+        print("  3. Export (보고서): Download partial review report in JSON/CSV/HTML", flush=True)
         # Serve is an interactive, long-lived blocking server: stream its stdout
         # straight through so the login URL and logs appear live. We do not
         # capture/parse here.

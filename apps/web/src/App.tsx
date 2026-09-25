@@ -18,6 +18,12 @@ const LOCAL_SYNTHETIC = import.meta.env.VITE_LOCAL_SYNTHETIC === "true";
 const emptySelection: UploadSelection = { companyId: "", rightsProfileId: "", consentProfileId: "", runtimeBindingId: "" };
 const emptyOptions: RuntimeOptions = { rights_profiles: [], consent_profiles: [], runtime_bindings: [], rule_packs: [], enabled_modes: [] };
 
+type LocalSubmission = {
+  worker_enabled: boolean;
+  candidate_rule_pack_id: string | null;
+  selected_pages: number[];
+};
+
 export function App() {
   return <BrowserRouter><SessionApp /></BrowserRouter>;
 }
@@ -34,6 +40,8 @@ function SessionApp() {
   const [readyVersion, setReadyVersion] = useState<ReadyDocumentVersion | null>(null);
   const [createdRun, setCreatedRun] = useState<RunSnapshot | null>(null);
   const [dataRevision, setDataRevision] = useState(0);
+  const [isSavedDemo, setIsSavedDemo] = useState(false);
+  const [demoRunId, setDemoRunId] = useState<string | null>(null);
   const tenantSwitchInFlight = useRef(false);
 
   const loadSession = useCallback(() => {
@@ -52,7 +60,39 @@ function SessionApp() {
 
   useEffect(() => loadSession(), [loadSession]);
 
+  useEffect(() => {
+    setIsSavedDemo(false); setDemoRunId(null);
+    if (!session || !session.tenant_id) return;
+    const controller = new AbortController();
+    requestJson<LocalSubmission>(`${API_BASE}/local/submission`, { signal: controller.signal })
+      .then(async (localInfo) => {
+        if (controller.signal.aborted) return;
+        const saved = localInfo.worker_enabled === false;
+        setIsSavedDemo(saved);
+        if (saved) {
+          try {
+            const runsPage = await requestJson<{ items: Array<{ run_id: string }> }>(
+              `${API_BASE}/v1/runs?limit=1`,
+              { signal: controller.signal }
+            );
+            if (!controller.signal.aborted && runsPage.items && runsPage.items.length > 0) {
+              setDemoRunId(runsPage.items[0].run_id);
+            }
+          } catch {
+            // ignore non-fatal error
+          }
+        }
+      })
+      .catch(() => {
+        if (controller.signal.aborted) return;
+        setIsSavedDemo(false);
+        setDemoRunId(null);
+      });
+    return () => controller.abort();
+  }, [session]);
+
   const clearTenantData = useCallback(() => {
+    setIsSavedDemo(false); setDemoRunId(null);
     setSelection(emptySelection); setOptions(emptyOptions); setReadyVersion(null); setCreatedRun(null);
     setDataRevision(current => current + 1);
   }, []);
@@ -91,7 +131,13 @@ function SessionApp() {
     {sessionStatus === "error" ? <section aria-labelledby="session-error-heading"><h1 id="session-error-heading">세션 확인 실패</h1><p role="alert">{sessionError}</p><button type="button" onClick={loadSession} style={{ minHeight: 44 }}>다시 확인</button></section> : null}
     {sessionStatus === "ready" && session ? <>
       <section aria-labelledby="tenant-heading"><h2 id="tenant-heading">작업 공간</h2>
-        {session.tenant_id ? <p>선택됨: <code>{session.tenant_id}</code> · 권한: {session.role ?? "없음"}</p> : <p role="status">선택된 테넌트가 없습니다.</p>}
+        {isSavedDemo ? (
+          <p>선택됨: <strong>시연 작업 공간</strong> · 권한: {session.role ?? "viewer"} <small style={{ color: "#666" }}>(식별자: <code>{session.tenant_id}</code>)</small></p>
+        ) : session.tenant_id ? (
+          <p>선택됨: <code>{session.tenant_id}</code> · 권한: {session.role ?? "없음"}</p>
+        ) : (
+          <p role="status">선택된 테넌트가 없습니다.</p>
+        )}
         <details open={!session.tenant_id}>
           <summary>{session.tenant_id ? "작업 공간 변경" : "작업 공간 선택"}</summary>
         <form onSubmit={switchTenant} aria-label="작업 테넌트 선택" style={{ display: "flex", alignItems: "end", gap: 8, flexWrap: "wrap" }}>
@@ -102,17 +148,18 @@ function SessionApp() {
         {sessionError ? <p role="alert">{sessionError}</p> : null}
       </section>
       {session.tenant_id ? <Routes>
-        <Route path="/" element={<Navigate to="/documents/new" replace />} />
+        <Route path="/" element={<Navigate to={isSavedDemo && demoRunId ? `/runs/${demoRunId}/claims` : "/documents/new"} replace />} />
         <Route path="/documents/new" element={<DocumentFlow session={session} selection={selection} options={options} readyVersion={readyVersion} canEdit={canEdit} canRun={canRun}
           setSelection={setSelection} setOptions={setOptions} setReadyVersion={version => { setReadyVersion(version); setCreatedRun(null); }}
-          onSessionInvalid={invalidateSession} onRunCreated={run => { setCreatedRun(run); navigate(`/runs/${run.run_id}`); }} />} />
-        <Route path="/runs/:runId" element={<RunHome session={session} tenantKey={session.tenant_id} initialRun={createdRun} onSessionInvalid={invalidateSession} />} />
-        <Route path="/runs/:runId/claims" element={<RunClaims session={session} onSessionInvalid={invalidateSession} onDataChanged={changed} />} />
-        <Route path="/runs/:runId/claims/:claimId" element={<RunClaims session={session} onSessionInvalid={invalidateSession} onDataChanged={changed} />} />
-        <Route path="/runs/:runId/claims/:claimId/reconciliation" element={<RunReconciliation session={session} onSessionInvalid={invalidateSession} />} />
-        <Route path="/runs/:runId/reviews" element={<RunReviews key={`reviews:${dataRevision}`} session={session} onSessionInvalid={invalidateSession} onDataChanged={changed} />} />
-        <Route path="/runs/:runId/report" element={<RunReport session={session} onSessionInvalid={invalidateSession} />} />
-        <Route path="/runs/:runId/comparison" element={<RunComparison session={session} onSessionInvalid={invalidateSession} />} />
+          onSessionInvalid={invalidateSession} onRunCreated={run => { setCreatedRun(run); navigate(`/runs/${run.run_id}`); }}
+          isSavedDemo={isSavedDemo} demoRunId={demoRunId} />} />
+        <Route path="/runs/:runId" element={<RunHome session={session} tenantKey={session.tenant_id} initialRun={createdRun} onSessionInvalid={invalidateSession} isSavedDemo={isSavedDemo} />} />
+        <Route path="/runs/:runId/claims" element={<RunClaims session={session} onSessionInvalid={invalidateSession} onDataChanged={changed} isSavedDemo={isSavedDemo} />} />
+        <Route path="/runs/:runId/claims/:claimId" element={<RunClaims session={session} onSessionInvalid={invalidateSession} onDataChanged={changed} isSavedDemo={isSavedDemo} />} />
+        <Route path="/runs/:runId/claims/:claimId/reconciliation" element={<RunReconciliation session={session} onSessionInvalid={invalidateSession} isSavedDemo={isSavedDemo} />} />
+        <Route path="/runs/:runId/reviews" element={<RunReviews key={`reviews:${dataRevision}`} session={session} onSessionInvalid={invalidateSession} onDataChanged={changed} isSavedDemo={isSavedDemo} />} />
+        <Route path="/runs/:runId/report" element={<RunReport session={session} onSessionInvalid={invalidateSession} isSavedDemo={isSavedDemo} />} />
+        <Route path="/runs/:runId/comparison" element={<RunComparison session={session} onSessionInvalid={invalidateSession} isSavedDemo={isSavedDemo} />} />
         <Route path="*" element={<section><h1>화면을 찾을 수 없습니다</h1><p><Link to="/documents/new">새 문서 등록으로 이동</Link></p></section>} />
       </Routes> : null}
     </> : null}
@@ -131,10 +178,27 @@ type DocumentFlowProps = {
   setReadyVersion: (value: ReadyDocumentVersion | null) => void;
   onSessionInvalid: () => void;
   onRunCreated: (run: RunSnapshot) => void;
+  isSavedDemo?: boolean;
+  demoRunId?: string | null;
 };
 
-function DocumentFlow(props: DocumentFlowProps) {
-  return <section><h1>새 문서 등록</h1><p>공시 PDF를 등록하고 서버 검증이 끝난 실제 문서 버전으로 분석을 시작합니다.</p>
+export function DocumentFlow(props: DocumentFlowProps) {
+  return <section>
+    <h1>새 문서 등록</h1>
+    {props.isSavedDemo && props.demoRunId ? (
+      <aside aria-label="저장된 시연 안내" style={{ background: "#eef6ff", border: "1px solid #b8daff", borderRadius: 6, padding: "12px 16px", margin: "12px 0" }}>
+        <p style={{ margin: "0 0 8px", color: "#004085", fontSize: "0.95em" }}>
+          현재 <strong>저장된 시연 모드</strong>로 구동 중입니다. 유료 모델 호출 없이 이미 저장된 시연 결과를 바로 확인하실 수 있습니다.
+        </p>
+        <p style={{ margin: 0 }}>
+          <Link to={`/runs/${props.demoRunId}/claims`} style={{ fontWeight: "bold", color: "#0d6efd" }}>
+            👉 저장된 시연 주장 및 원문 보기 바로가기
+          </Link>
+        </p>
+      </aside>
+    ) : (
+      <p>공시 PDF를 등록하고 서버 검증이 끝난 실제 문서 버전으로 분석을 시작합니다.</p>
+    )}
     {!props.canEdit ? <p role="alert">현재 {props.session.role ?? "미지정"} 권한으로는 기업 또는 문서를 등록할 수 없습니다.</p> : null}
     <CompanySelector apiBase={API_BASE} csrfToken={props.session.csrf_token} tenantKey={props.session.tenant_id!} value={props.selection} canCreate={props.canEdit}
       onChange={props.setSelection} onOptionsChange={props.setOptions} onSessionInvalid={props.onSessionInvalid} />
@@ -145,14 +209,42 @@ function DocumentFlow(props: DocumentFlowProps) {
   </section>;
 }
 
-function RunNav({ runId }: { runId: string }) {
-  return <nav aria-label="실행 화면"><ul style={{ display: "flex", gap: 16, listStyle: "none", padding: 0 }}>
-    <li><Link to="/documents/new">새 분석</Link></li><li><Link to={`/runs/${runId}`}>진행</Link></li><li><Link to={`/runs/${runId}/claims`}>주장</Link></li><li><Link to={`/runs/${runId}/reviews`}>검토 큐</Link></li><li><Link to={`/runs/${runId}/report`}>보고서</Link></li>
-    <li><Link to={`/runs/${runId}/comparison`}>연도 비교</Link></li>
-  </ul></nav>;
+export function RunNav({ runId, isSavedDemo }: { runId: string; isSavedDemo?: boolean }) {
+  return (
+    <header style={{ marginBottom: 16 }}>
+      {isSavedDemo ? (
+        <aside aria-label="시연 모드 안내" style={{ background: "#e8f4fd", border: "1px solid #b6d4fe", borderRadius: 6, padding: "8px 14px", marginBottom: 12, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+          <div>
+            <strong style={{ color: "#084298" }}>[저장된 시연 모드]</strong>
+            <span style={{ marginLeft: 6, color: "#333", fontSize: "0.9em" }}>
+              새 분석 없이 저장된 검토 초안을 봅니다. 최종 판정이나 사람 검토 완료를 뜻하지 않습니다.
+            </span>
+          </div>
+          <nav aria-label="시연 가이드" style={{ fontSize: "0.85em", color: "#495057" }}>
+            <span>시연 순서: </span>
+            <Link to={`/runs/${runId}/claims`} style={{ color: "#0d6efd", fontWeight: "bold" }}>1. 주장 확인</Link>
+            <span> → </span>
+            <span style={{ color: "#555" }}>2. 원문 보기(상세)</span>
+            <span> → </span>
+            <Link to={`/runs/${runId}/report`} style={{ color: "#0d6efd", fontWeight: "bold" }}>3. 보고서 내보내기</Link>
+          </nav>
+        </aside>
+      ) : null}
+      <nav aria-label="실행 화면">
+        <ul style={{ display: "flex", gap: 16, listStyle: "none", padding: 0, margin: 0, flexWrap: "wrap" }}>
+          <li><Link to="/documents/new">새 분석</Link></li>
+          <li><Link to={`/runs/${runId}`}>진행</Link></li>
+          <li><Link to={`/runs/${runId}/claims`}>주장</Link></li>
+          <li><Link to={`/runs/${runId}/reviews`}>검토 큐</Link></li>
+          <li><Link to={`/runs/${runId}/report`}>보고서</Link></li>
+          <li><Link to={`/runs/${runId}/comparison`}>연도 비교</Link></li>
+        </ul>
+      </nav>
+    </header>
+  );
 }
 
-function RunHome({ session, tenantKey, initialRun, onSessionInvalid }: { session: Session; tenantKey: string; initialRun: RunSnapshot | null; onSessionInvalid: () => void }) {
+function RunHome({ session, tenantKey, initialRun, onSessionInvalid, isSavedDemo }: { session: Session; tenantKey: string; initialRun: RunSnapshot | null; onSessionInvalid: () => void; isSavedDemo?: boolean }) {
   const { runId = "" } = useParams();
   const [run, setRun] = useState<RunSnapshot | null>(() => initialRun?.run_id === runId ? initialRun : null);
   const [state, setState] = useState<"loading" | "ready" | "pending" | "error">(run ? "ready" : "loading");
@@ -188,7 +280,9 @@ function RunHome({ session, tenantKey, initialRun, onSessionInvalid }: { session
     });
     return () => controller.abort();
   }, [onSessionInvalid, runId, summaryEpoch, tenantKey]);
-  return <section><h1>분석 실행</h1><RunNav runId={runId} />
+  return <section>
+    <h1>분석 실행</h1>
+    <RunNav runId={runId} isSavedDemo={isSavedDemo} />
     {state === "loading" ? <p role="status">실행 상태를 불러오는 중입니다.</p> : null}
     {state === "pending" ? <p role="status">실행 산출물이 아직 준비되지 않았습니다.</p> : null}
     {state === "error" ? <p role="alert">{message}</p> : null}
@@ -201,34 +295,44 @@ function RunHome({ session, tenantKey, initialRun, onSessionInvalid }: { session
   </section>;
 }
 
-function RunClaims({ session, onSessionInvalid, onDataChanged }: { session: Session; onSessionInvalid: () => void; onDataChanged: () => void }) {
+function RunClaims({ session, onSessionInvalid, onDataChanged, isSavedDemo }: { session: Session; onSessionInvalid: () => void; onDataChanged: () => void; isSavedDemo?: boolean }) {
   const { runId = "", claimId } = useParams();
-  return <><RunNav runId={runId} />{claimId ? <p><Link to={`/runs/${runId}/claims/${claimId}/reconciliation`}>공시 원문 대조 · C1–C4 검토</Link></p> : null}<ClaimWorkspace apiBase={API_BASE} csrfToken={session.csrf_token} tenantKey={session.tenant_id!} session={session} runId={runId} claimId={claimId}
-    onSessionInvalid={onSessionInvalid} onDataChanged={onDataChanged} /></>;
+  return <>
+    <RunNav runId={runId} isSavedDemo={isSavedDemo} />
+    {claimId ? <p><Link to={`/runs/${runId}/claims/${claimId}/reconciliation`}>공시 원문 대조 · C1–C4 검토</Link></p> : null}
+    <ClaimWorkspace apiBase={API_BASE} csrfToken={session.csrf_token} tenantKey={session.tenant_id!} session={session} runId={runId} claimId={claimId}
+      onSessionInvalid={onSessionInvalid} onDataChanged={onDataChanged} />
+  </>;
 }
 
-function RunReconciliation({ session, onSessionInvalid }: { session: Session; onSessionInvalid: () => void }) {
+function RunReconciliation({ session, onSessionInvalid, isSavedDemo }: { session: Session; onSessionInvalid: () => void; isSavedDemo?: boolean }) {
   const { runId = "", claimId = "" } = useParams();
-  return <><RunNav runId={runId} /><p><Link to={`/runs/${runId}/claims/${claimId}`}>주장 상세로 돌아가기</Link></p>
+  return <>
+    <RunNav runId={runId} isSavedDemo={isSavedDemo} />
+    <p><Link to={`/runs/${runId}/claims/${claimId}`}>주장 상세로 돌아가기</Link></p>
     <ReconciliationWorkspace key={`${session.tenant_id}:${runId}:${claimId}`} apiBase={API_BASE}
-      runId={runId} claimId={claimId} session={session} onSessionInvalid={onSessionInvalid} /></>;
+      runId={runId} claimId={claimId} session={session} onSessionInvalid={onSessionInvalid} />
+  </>;
 }
 
-function RunReport({ session, onSessionInvalid }: { session: Session; onSessionInvalid: () => void }) {
+function RunReport({ session, onSessionInvalid, isSavedDemo }: { session: Session; onSessionInvalid: () => void; isSavedDemo?: boolean }) {
   const { runId = "" } = useParams();
-  return <><RunNav runId={runId} /><ExportWorkspace key={`${session.tenant_id}:${runId}`} apiBase={API_BASE}
-    csrfToken={session.csrf_token} tenantKey={session.tenant_id!} runId={runId} onSessionInvalid={onSessionInvalid} /></>;
+  return <>
+    <RunNav runId={runId} isSavedDemo={isSavedDemo} />
+    <ExportWorkspace key={`${session.tenant_id}:${runId}`} apiBase={API_BASE}
+      csrfToken={session.csrf_token} tenantKey={session.tenant_id!} runId={runId} onSessionInvalid={onSessionInvalid} />
+  </>;
 }
 
-function RunComparison({ session, onSessionInvalid }: { session: Session; onSessionInvalid: () => void }) {
+function RunComparison({ session, onSessionInvalid, isSavedDemo }: { session: Session; onSessionInvalid: () => void; isSavedDemo?: boolean }) {
   const { runId = "" } = useParams();
-  return <><RunNav runId={runId} /><ComparisonWorkspace key={`${session.tenant_id}:${runId}`} apiBase={API_BASE}
+  return <><RunNav runId={runId} isSavedDemo={isSavedDemo} /><ComparisonWorkspace key={`${session.tenant_id}:${runId}`} apiBase={API_BASE}
     csrfToken={session.csrf_token} tenantKey={session.tenant_id!} runId={runId}
     canCompare={session.role === "editor" || session.role === "admin"} onSessionInvalid={onSessionInvalid} /></>;
 }
 
-function RunReviews({ session, onSessionInvalid, onDataChanged }: { session: Session; onSessionInvalid: () => void; onDataChanged: () => void }) {
+function RunReviews({ session, onSessionInvalid, onDataChanged, isSavedDemo }: { session: Session; onSessionInvalid: () => void; onDataChanged: () => void; isSavedDemo?: boolean }) {
   const { runId = "" } = useParams();
-  return <><RunNav runId={runId} /><ReviewQueueWorkspace apiBase={API_BASE} csrfToken={session.csrf_token} tenantKey={session.tenant_id!} session={session} runId={runId}
+  return <><RunNav runId={runId} isSavedDemo={isSavedDemo} /><ReviewQueueWorkspace apiBase={API_BASE} csrfToken={session.csrf_token} tenantKey={session.tenant_id!} session={session} runId={runId}
     onSessionInvalid={onSessionInvalid} onDataChanged={onDataChanged} localSynthetic={LOCAL_SYNTHETIC} /></>;
 }
