@@ -407,10 +407,10 @@ class UpstageProbe:
         max_tokens: int = 1024,
         json_mode: bool = False,
     ):
-        # Pricing verified at https://www.upstage.ai/pricing/api on 2026-09-18 by coordinator:
+        # Pricing reverified at https://www.upstage.ai/pricing/api on 2026-09-25:
         # Pro3 $0.15/$0.60, Pro4 $0.30/$1.20 per M tokens (conservative, promotions ignored).
-        # Guard extended from 2026-09-16 to 2026-09-25.
-        if datetime.now(UTC) >= datetime(2026, 9, 25, tzinfo=UTC):
+        # Recheck in one week; historical price IDs/rates and ledger policy stay unchanged.
+        if datetime.now(UTC) >= datetime(2026, 10, 2, tzinfo=UTC):
             raise ValueError("PRICE_RECHECK_REQUIRED")
 
         if (

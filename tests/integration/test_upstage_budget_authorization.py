@@ -237,8 +237,8 @@ def test_invalid_reason_is_rejected(tmp_path, reason):
 # ---------------------------------------------------------------------------
 
 
-def test_expiry_guard_blocks_complete_after_sep25(tmp_path, monkeypatch):
-    """PRICE_RECHECK_REQUIRED must fire when datetime.now() >= 2026-09-25."""
+def test_expiry_guard_blocks_complete_at_oct2(tmp_path, monkeypatch):
+    """PRICE_RECHECK_REQUIRED must fire when datetime.now() >= 2026-10-02."""
     from datetime import UTC, datetime
 
     client = upstage.UpstageProbe("test-secret", tmp_path / "budget.sqlite3")
@@ -247,7 +247,7 @@ def test_expiry_guard_blocks_complete_after_sep25(tmp_path, monkeypatch):
     class ExpiredDateTime(datetime):
         @classmethod
         def now(cls, tz=None):
-            return datetime(2026, 9, 25, tzinfo=UTC)
+            return datetime(2026, 10, 2, tzinfo=UTC)
 
     monkeypatch.setattr(upstage, "datetime", ExpiredDateTime)
     with pytest.raises(ValueError, match="PRICE_RECHECK_REQUIRED"):
@@ -263,7 +263,7 @@ def test_expiry_guard_does_not_block_authorize_additional_budget(tmp_path, monke
     class ExpiredDateTime(datetime):
         @classmethod
         def now(cls, tz=None):
-            return datetime(2026, 9, 25, tzinfo=UTC)
+            return datetime(2026, 10, 2, tzinfo=UTC)
 
     monkeypatch.setattr(upstage, "datetime", ExpiredDateTime)
     client = upstage.UpstageProbe("test-secret", tmp_path / "budget.sqlite3")
@@ -362,3 +362,17 @@ def test_reserve_rejects_tampered_policy_body(tmp_path, monkeypatch):
         client.summary()
     with sqlite3.connect(path) as db:
         assert db.execute("SELECT COUNT(*) FROM probe_calls").fetchone()[0] == 0
+
+
+def test_rechecked_price_allows_sep25_request_without_spending(tmp_path, monkeypatch):
+    from datetime import UTC, datetime
+
+    class RecheckedClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 9, 25, 12, tzinfo=UTC)
+
+    monkeypatch.setattr(upstage, "datetime", RecheckedClock)
+    client = upstage.UpstageProbe("offline-key", tmp_path / "budget.sqlite3")
+    client.request_body("JSON", "{}", request_id="price-rechecked")
+    assert client.summary()["calls"] == 0
