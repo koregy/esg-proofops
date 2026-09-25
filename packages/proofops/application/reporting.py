@@ -725,23 +725,46 @@ def render_report(model: Mapping[str, object], output_format: str) -> bytes:
             elif not tag_elements:
                 tag_html = "<p>태그된 요소 없음(미태깅)</p>"
             else:
-                parts = []
+                present_parts = []
+                candidate_parts = []
+                other_parts = []
                 for element in tag_elements:
                     value = element.get("normalized_value")
-                    value_text = (
-                        escape(value) if isinstance(value, str) else "기록 없음"
+                    value_text = escape(value) if isinstance(value, str) else "기록 없음"
+                    evidence_refs = element.get("evidence_refs", [])
+                    quotes = (
+                        "".join(
+                            f"<li>p.{ref['page_num']}: {escape(ref['quote'])}</li>"
+                            for ref in evidence_refs
+                        )
+                        or "<li>인용 없음</li>"
                     )
-                    quotes = "".join(
-                        f"<li>p.{ref['page_num']}: {escape(ref['quote'])}</li>"
-                        for ref in element.get("evidence_refs", [])
-                    ) or "<li>인용 없음</li>"
-                    parts.append(
+                    item_html = (
                         f"<li>{escape(_element_label(element['element_id']))}: "
                         f"{escape(_ELEMENT_STATES.get(element['state'], element['state']))}"
                         f" ({escape(element['state'])}) · 값: {value_text}"
                         f"<ul>{quotes}</ul></li>"
                     )
-                tag_html = "<h3>태그 요소</h3><ul>" + "".join(parts) + "</ul>"
+                    if element["state"] == "present":
+                        present_parts.append(item_html)
+                    elif element["state"] in ("unknown", "conflict") and evidence_refs:
+                        candidate_parts.append(item_html)
+                    else:
+                        other_parts.append(item_html)
+
+                tag_html = ""
+                if present_parts:
+                    tag_html += (
+                        "<h3>추출된 항목 (present)</h3><ul>" + "".join(present_parts) + "</ul>"
+                    )
+                if candidate_parts:
+                    tag_html += (
+                        "<h3>미해결 태그 요소 검토 후보</h3><ul>"
+                        + "".join(candidate_parts)
+                        + "</ul>"
+                    )
+                if other_parts:
+                    tag_html += "<h3>기타 태그 요소</h3><ul>" + "".join(other_parts) + "</ul>"
             classification = claim.get("classification_review")
             classification_html = ""
             if classification:

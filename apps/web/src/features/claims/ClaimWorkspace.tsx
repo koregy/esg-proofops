@@ -278,6 +278,78 @@ export function ReviewedContextSection({ context }: { context: ReviewedContext }
   </section>;
 }
 
+function RawCandidatesList({ candidates, onSourceOpen }: { candidates: ReviewCandidate[]; onSourceOpen: (source: SourceRef) => void }) {
+  if (candidates.length === 0) return <p>표시할 근거 후보가 아직 없습니다.</p>;
+  return <ul>{candidates.map((cand, index) => <li key={`${cand.source_ref.source_id}:${index}`}>
+    <p><strong>원문 {cand.source_ref.page_num}쪽</strong> · {cand.status === "unverified" ? "미검증 근거 후보" : "검토 후보 · 항목 연결 미확정"}{cand.reason && cand.status !== "unverified" ? ` (${cand.reason})` : ""}</p>
+    <p>{cand.source_ref.quote}</p>
+    <button type="button" onClick={() => onSourceOpen(cand.source_ref)}>원문 {cand.source_ref.page_num}쪽 보기</button>
+  </li>)}</ul>;
+}
+
+export function PartialClaimSummary({
+  decision,
+  elements,
+  rawCandidates,
+  projection,
+  onSourceOpen,
+}: {
+  decision: Decision | null;
+  elements: ReviewElement[];
+  rawCandidates: ReviewCandidate[];
+  projection?: ReviewProjection | null;
+  onSourceOpen: (source: SourceRef) => void;
+}) {
+  const isHeld = !decision || decision.decision_status === "blocked_evidence" || decision.decision_status === "blocked_rule_gap" || decision.decision_status === "not_run";
+  if (!isHeld) return null;
+
+  const presentElements = elements.filter(e => e.state === "present");
+  const missingLabels = decision?.missing_elements?.map(getElementLabel) ?? [];
+
+  const reason = "현재까지 추출된 내용입니다. 최종 판정이나 사람 검토 완료를 뜻하지 않습니다.";
+  const action = projection?.blocked_action || "검토 후보의 원문과 항목 연결을 확인해 주세요. 확인되지 않은 항목은 미확정 상태로 유지됩니다.";
+
+  const elementCandidates: ReviewCandidate[] = elements
+    .filter(e => e.state === "unknown" || e.state === "conflict")
+    .flatMap(e => e.evidence_refs.map(ref => ({
+      source_ref: ref,
+      status: "unconfirmed",
+      reason: `${getElementLabel(e.element_id)} 후보 (${elementStateText[e.state]})`
+    })));
+
+
+  return (
+    <section aria-labelledby="partial-summary-heading" style={{ padding: "16px", background: "#f8f9fa", border: "1px solid #dee2e6", marginBottom: "24px", borderRadius: "4px" }}>
+      <h3 id="partial-summary-heading">검토 초안</h3>
+      <p role="status">
+        <strong>상태 및 조치:</strong> {reason}
+        {missingLabels.length > 0 ? ` 누락된 입증 요소(${missingLabels.join(", ")})를 보완하기 위해 ` : " "}
+        {action}
+      </p>
+
+      <h4>추출된 항목 (present)</h4>
+      {presentElements.length > 0 ? (
+        <ul>
+          {presentElements.map(e => (
+            <li key={e.element_id}>
+              {getElementLabel(e.element_id)}
+              {e.normalized_value !== null ? ` (추출 값: ${e.normalized_value})` : ""}
+            </li>
+          ))}
+        </ul>
+      ) : <p>표시할 추출 값이 아직 없습니다.</p>}
+
+      <h4>검토 후보 · 항목 연결 확인 필요</h4>
+      <RawCandidatesList candidates={elementCandidates} onSourceOpen={onSourceOpen} />
+      {rawCandidates.length ? <details>
+        <summary>추가 검색 후보 {rawCandidates.length}건 · 원문 검증 필요</summary>
+        <p>주변 문맥을 찾기 위한 검색 결과입니다. 해당 항목의 근거로 채택된 것은 아닙니다.</p>
+        <RawCandidatesList candidates={rawCandidates} onSourceOpen={onSourceOpen} />
+      </details> : null}
+    </section>
+  );
+}
+
 export function ClaimWorkspace(props: ClaimWorkspaceProps) {
   return props.claimId ? <ClaimDetailView {...props} claimId={props.claimId} /> : <ClaimList {...props} />;
 }
@@ -400,6 +472,7 @@ function ClaimDetailView({ apiBase = "", csrfToken, tenantKey, session, runId, c
   const track = detail.claim.track;
   const elements = track ? completeElements(track, detail.elements) : detail.elements;
   const projection = detail.review_projection;
+  const isHeld = !decision || decision.decision_status === "blocked_evidence" || decision.decision_status === "blocked_rule_gap" || decision.decision_status === "not_run";
   return <section aria-labelledby="claim-heading">
     <h1 id="claim-heading">주장 상세</h1>
     <p><Link to={`/runs/${runId}/claims`}>주장 목록으로</Link></p>
@@ -407,6 +480,7 @@ function ClaimDetailView({ apiBase = "", csrfToken, tenantKey, session, runId, c
     <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 3fr) minmax(280px, 2fr)", gap: 24 }}>
       <SourceViewer key={`${tenantKey}:${runId}:${claimId}`} apiBase={apiBase} csrfToken={csrfToken} runId={runId} sources={detail.source_refs} openRequest={sourceOpen} onSessionInvalid={onSessionInvalid} />
       <section aria-labelledby="evidence-heading"><h2 id="evidence-heading">태깅과 판정</h2>
+        <PartialClaimSummary decision={decision} elements={elements} rawCandidates={projection?.raw_candidates ?? []} projection={projection} onSourceOpen={source => setSourceOpen(current => ({ source, nonce: (current?.nonce ?? 0) + 1 }))} />
         <p>{detail.claim.quote}</p><p>트랙: {track ? trackText[track] : "미분류"}</p><p>판정: <StatusBadge label={decisionText(decision)} tone={decisionTone(decision)} /></p>
         {decision?.review_status ? <p>검토 상태: <StatusBadge label={reviewStatusText[decision.review_status]} tone={decision.review_status === "human_confirmed" ? "success" : "warning"} /></p> : null}
         {decision?.gap_ids.length ? <p>규칙 판정 보류(다음 규칙 항목이 갈리거나 정의되지 않음): {decision.gap_ids.join(", ")}</p> : null}
@@ -414,7 +488,7 @@ function ClaimDetailView({ apiBase = "", csrfToken, tenantKey, session, runId, c
         {detail.rulepack_approved_by?.startsWith("ai-delegated-review:")
           ? <p role="status">이 판정에 쓰인 규칙집은 AI 프로젝트 검토(사람 전문가 승인 아님)로 활성화되었습니다.</p>
           : null}
-        <h3>요소</h3>{elements.length === 0 ? <p>{untagged ? "게시된 요소가 없습니다. 원문 검증 또는 분류가 보류된 경우 추가 검토가 필요합니다." : "표시할 요소가 없습니다."}</p> : <ul>{elements.map(element => <li key={element.element_id}>
+        <details><summary>전체 항목 상세 ({elements.length}개)</summary>{elements.length === 0 ? <p>{untagged ? "게시된 요소가 없습니다. 원문 검증 또는 분류가 보류된 경우 추가 검토가 필요합니다." : "표시할 요소가 없습니다."}</p> : <ul>{elements.map(element => <li key={element.element_id}>
           {getElementLabel(element.element_id)}: {elementStateText[element.state]} · 근거 {element.evidence_refs.length}개
           {element.normalized_value !== null ? <p>값: {element.normalized_value}</p> : null}
           {element.evidence_refs.length ? <details data-element-evidence={element.element_id}>
@@ -426,7 +500,7 @@ function ClaimDetailView({ apiBase = "", csrfToken, tenantKey, session, runId, c
               </button>
             </li>)}</ul>
           </details> : null}
-        </li>)}</ul>}
+        </li>)}</ul>}</details>
         <h3>보증 연결</h3>{detail.assurance.status === "undetermined" ? <p>보증 범위를 확인할 수 없습니다. 보고서 전체가 보증되었다고 간주하지 않습니다.</p> : <p>{detail.assurance.status === "covered" ? "보증 범위 안" : "보증 범위 밖"} · {detail.assurance.level ?? "수준 미확인"} · {detail.assurance.provider ?? "기관 미확인"}</p>}
         {detail.suggestion ? <><h3>수정 제안</h3><p>{detail.suggestion}</p></> : null}
         <h3>기준 근거</h3>{detail.basis_refs.length ? <ul>{detail.basis_refs.map((basis, index) => <li key={`${basis.standard}:${basis.clause}:${index}`}>{basis.standard} {basis.clause ?? "조항 미확정"}: {basis.summary} ({basisVerificationText[basis.verification_status]})</li>)}</ul> : <p>표시할 검증된 기준 근거가 없습니다.</p>}
@@ -457,14 +531,10 @@ function ClaimDetailView({ apiBase = "", csrfToken, tenantKey, session, runId, c
           {projection.field_agreements.length ? <details><summary>모델 응답 필드 상세 ({projection.field_agreements.length}개)</summary>
             <ul>{projection.field_agreements.map(field => <li key={field.field_id}>{field.field_id}: {fieldAgreementText[field.status]} ({field.replicate_values.map(value => typeof value === "string" ? value : JSON.stringify(value)).join(" / ")})</li>)}</ul>
           </details> : null}
-          {projection.raw_candidates && projection.raw_candidates.length ? <section aria-labelledby="raw-candidates-heading">
+          {projection.raw_candidates && projection.raw_candidates.length && !isHeld ? <section aria-labelledby="raw-candidates-heading">
             <h4 id="raw-candidates-heading">미검증 근거 후보</h4>
             <p role="status">원문 검색으로 발견된 미검증 근거 후보입니다. 정식 근거로 채택되지 않았으며 판정 등급에 반영되지 않습니다.</p>
-            <ul>{projection.raw_candidates.map((cand, index) => <li key={`${cand.source_ref.source_id}:${index}`}>
-              <p><strong>원문 {cand.source_ref.page_num}쪽</strong> · {cand.status === "unverified" ? "미검증 근거 후보" : cand.status}{cand.reason ? ` (${cand.reason})` : ""}</p>
-              <p>{cand.source_ref.quote}</p>
-              <button type="button" onClick={() => setSourceOpen(current => ({ source: cand.source_ref, nonce: (current?.nonce ?? 0) + 1 }))}>원문 {cand.source_ref.page_num}쪽 보기</button>
-            </li>)}</ul>
+            <RawCandidatesList candidates={projection.raw_candidates} onSourceOpen={source => setSourceOpen(current => ({ source, nonce: (current?.nonce ?? 0) + 1 }))} />
           </section> : null}
         </section> : null}
         <details><summary>재현성 식별자</summary>{detail.packet_sha256 ? <p>Evidence packet: <code>{detail.packet_sha256}</code></p> : <p>Evidence packet: 태깅 전 (없음)</p>}{detail.replicate_request_ids.length ? <ul>{detail.replicate_request_ids.map(id => <li key={id}><code>{id}</code></li>)}</ul> : <p>재현 요청 식별자가 없습니다.{untagged ? " 태그가 게시되면 여기에 표시됩니다." : ""}</p>}</details>

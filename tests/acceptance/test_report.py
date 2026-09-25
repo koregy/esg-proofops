@@ -750,3 +750,42 @@ def test_tag_elements_escape_html_and_guard_csv_formulas():
     assert json.loads(cell[1:] if cell.startswith("'") else cell)[0][
         "normalized_value"
     ].startswith("=")
+
+
+def test_tag_elements_separates_present_and_review_candidates():
+    records = decisions()
+    records[CLAIMS[0]]["tag_elements"] = [
+        _tag_element("G1", "present", "2040년", "2040년 목표"),
+        _tag_element("G2", "unknown", None, "알 수 없는 목표"),
+        _tag_element("G6", "unknown", None, "x"),  # Without quote (evidence_refs = [])
+        _tag_element("G4", "conflict", "범위 A", "범위 B"),
+        _tag_element("G5", "absent", None, "부재 확인 범위"),
+    ]
+    # Manually add evidence to G2 and G4 so they become candidates
+    records[CLAIMS[0]]["tag_elements"][1]["evidence_refs"] = [source_ref(quote="알 수 없는 목표")]
+    records[CLAIMS[0]]["tag_elements"][3]["evidence_refs"] = [source_ref(quote="범위 B")]
+    records[CLAIMS[0]]["tag_elements"][4]["evidence_refs"] = [source_ref(quote="부재 확인 범위")]
+    # Remove evidence from G6
+    records[CLAIMS[0]]["tag_elements"][2]["evidence_refs"] = []
+
+    model = build_report_model(manifest(), records)
+    html = render_report(model, "html").decode()
+
+    assert "<h3>추출된 항목 (present)</h3>" in html
+    assert "<h3>미해결 태그 요소 검토 후보</h3>" in html
+    assert "<h3>기타 태그 요소</h3>" in html
+
+    # Verify separation
+    present_idx = html.find("<h3>추출된 항목 (present)</h3>")
+    candidate_idx = html.find("<h3>미해결 태그 요소 검토 후보</h3>")
+    other_idx = html.find("<h3>기타 태그 요소</h3>")
+
+    g1_idx = html.find("<li>G1 · ")
+    g2_idx = html.find("<li>G2 · ")
+    g4_idx = html.find("<li>G4 · ")
+    g6_idx = html.find("<li>G6 · ")
+
+    assert present_idx < g1_idx < candidate_idx
+    assert candidate_idx < g2_idx < g4_idx < other_idx
+    assert other_idx < g6_idx
+    assert other_idx < html.find("<li>G5 · ")
