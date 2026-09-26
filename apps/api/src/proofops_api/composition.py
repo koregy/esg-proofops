@@ -151,6 +151,7 @@ def build_composition() -> ApiComposition:
             LocalSQLiteReviewStore(runs.store.jobs),
             load_inputs=tags.load_inputs,
             verify_context_sources=tags.verify_context_sources,
+            load_run_snapshot=runs.store.snapshot,
         ),
         source_conditions=LocalSourceConditionReview(runs.store, uploads, parser),
         rescores=RescoreService(

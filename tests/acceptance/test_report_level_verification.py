@@ -1,9 +1,12 @@
 """Report-level source attestation and receipt replay."""
 
+import json
+import sqlite3
 from dataclasses import asdict, replace
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 import pytest
+from proofops.adapters.local.run_store import LocalSQLiteRunStore
 from proofops.application.evidence.report_level import (
     GRI_ASSURED_PAGE_V1,
     REPORT_SCOPE_V1,
@@ -227,6 +230,80 @@ def _management_body(m3_element):
             *(_unknown(f"M{i}") for i in range(4, 7)),
         ],
     }
+
+
+@pytest.mark.parametrize("element_id", ["M2", "M3"])
+def test_report_level_review_uses_pinned_snapshot_without_nested_sqlite_writer(
+    tmp_path, element_id
+):
+    ws, (idx, cov, std, scope) = report_workspace(tmp_path, m2=element_id == "M2")
+    service, review = ws[1], ws[3]
+    run_store = LocalSQLiteRunStore(tmp_path / "state.sqlite")
+    pinned = {"tenant_id": TENANT, "run_id": RUN, "claim_source_policy": {"reader": "pinned"}}
+    with sqlite3.connect(run_store.path) as db:
+        db.execute(
+            "INSERT INTO run_snapshots VALUES (?, ?, ?)",
+            (TENANT, RUN, json.dumps(pinned)),
+        )
+    service.load_run_snapshot = run_store.snapshot
+
+    def attest(loaded, refs, *, pinned_run_snapshot=None, published_tag=None, replay_receipt=None):
+        # The fallback reproduces the original nested BEGIN IMMEDIATE on a real SQLite DB.
+        snapshot = pinned_run_snapshot or run_store.snapshot(TENANT, RUN)
+        assert snapshot == pinned
+        if replay_receipt is not None:
+            if published_tag is None:
+                with run_store.jobs._transaction():
+                    pass
+            assert published_tag["report_level_review"][0]["source_receipt"] == replay_receipt
+        return (
+            span_verified_graph(
+                loaded.original,
+                tuple(replace(ref, verification_state="verified") for ref in refs),
+                "receipt",
+            ),
+            {"records": [{"status": "verified"} for _ in refs]},
+        )
+
+    service.verify_context_sources = attest
+    refs = [scope] if element_id == "M2" else [idx, cov, std]
+    body = _management_body(_unknown("M3"))
+    body["elements"][1 if element_id == "M2" else 2] = dict(
+        element_id=element_id,
+        state="present",
+        evidence_refs=[asdict(ref) for ref in refs],
+        normalized_value=None,
+        credited_from=scope.source_id if element_id == "M2" else cov.source_id,
+        reason_code=REPORT_SCOPE_V1 if element_id == "M2" else GRI_ASSURED_PAGE_V1,
+    )
+    answer = service.resolve_ai_delegated_review(
+        _actor(),
+        review["review_id"],
+        body,
+        '"1"',
+        str(uuid4()),
+        delegated_reviewer="sqlite-regression",
+        delegation_authority="test approved report-level review",
+    )
+    assert answer["review"]["status"] == "resolved"
+    assert (
+        service.store.history(TENANT, RUN, review["claim_id"])["tags"][-1]["report_level_review"][
+            0
+        ]["policy"]
+        == body["elements"][1 if element_id == "M2" else 2]["reason_code"]
+    )
+    body["base_tag_revision"] = 2
+    replayed = service.resolve_ai_delegated_review(
+        _actor(),
+        review["review_id"],
+        body,
+        '"2"',
+        str(uuid4()),
+        delegated_reviewer="sqlite-regression",
+        delegation_authority="test approved report-level re-review",
+        reopen=True,
+    )
+    assert replayed["new_tag_revision"] == 3
 
 
 def test_review_report_scope_attests_unverified_span(tmp_path):

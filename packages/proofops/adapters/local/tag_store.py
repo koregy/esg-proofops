@@ -202,23 +202,33 @@ def validate_tag_commit(db, jobs, run, message, envelope, next_job):
     return coverage
 
 
-def _stored_context_reader(store, claim, run_id, refs, run_policy, replay_receipt):
+def _stored_context_reader(
+    store, claim, run_id, refs, run_policy, replay_receipt, *, published_tag=None
+):
     """Resolve only the explicitly requested, already-published receipt."""
     jobs = getattr(store, "jobs", None)
     if jobs is None or not hasattr(jobs, "_transaction"):
         raise ValueError("CONTEXT_SOURCE_REPLAY_MISMATCH")
-    try:
-        with jobs._transaction() as db:
-            head = jobs._get(db, claim.tenant_id, run_id, "claim_head", claim.claim_id)
-            tag = jobs._get(
-                db,
-                claim.tenant_id,
-                run_id,
-                "tag_revision",
-                f'{claim.claim_id}:{head["tag_revision"]:010}',
-            )
-    except KeyError:
-        raise ValueError("CONTEXT_SOURCE_REPLAY_MISMATCH") from None
+    if published_tag is None:
+        try:
+            with jobs._transaction() as db:
+                head = jobs._get(db, claim.tenant_id, run_id, "claim_head", claim.claim_id)
+                tag = jobs._get(
+                    db,
+                    claim.tenant_id,
+                    run_id,
+                    "tag_revision",
+                    f'{claim.claim_id}:{head["tag_revision"]:010}',
+                )
+        except KeyError:
+            raise ValueError("CONTEXT_SOURCE_REPLAY_MISMATCH") from None
+    else:
+        tag = published_tag
+        if (
+            not isinstance(tag, dict)
+            or (tag.get("confirmed_tags") or {}).get("claim_id") != claim.claim_id
+        ):
+            raise ValueError("CONTEXT_SOURCE_REPLAY_MISMATCH")
 
     ref_hash = canonical_hash([dict(asdict(ref), verification_state="candidate") for ref in refs])
     for prior in reversed(tag.get("report_level_review", ())):
@@ -276,7 +286,9 @@ class LocalTagStore:
         self.store, self.uploads, self.parser = store, uploads, parser
         self.claims = LocalClaimStore(store, uploads, parser)
 
-    def verify_context_sources(self, inputs, refs, *, replay_receipt=None):
+    def verify_context_sources(
+        self, inputs, refs, *, replay_receipt=None, pinned_run_snapshot=None, published_tag=None
+    ):
         """Source-only supplementary span attestations; never mutate frozen inputs."""
         from dataclasses import replace
 
@@ -302,13 +314,29 @@ class LocalTagStore:
         if run_id is not None:
             if self.store is None:
                 raise ValueError("CONTEXT_SOURCE_REJECTED")
-            snapshot = self.store.snapshot(claim.tenant_id, run_id)
+            snapshot = (
+                pinned_run_snapshot
+                if pinned_run_snapshot is not None
+                else self.store.snapshot(claim.tenant_id, run_id)
+            )
             if snapshot is None:
+                raise ValueError("CONTEXT_SOURCE_REJECTED")
+            if pinned_run_snapshot is not None and (
+                snapshot.get("tenant_id") != claim.tenant_id
+                or snapshot.get("run_id") != run_id
+                or snapshot.get("document", {}).get("version_id") != graph.document_version_id
+            ):
                 raise ValueError("CONTEXT_SOURCE_REJECTED")
             reader_policy = snapshot.get("claim_source_policy")
             if replay_receipt is not None:
                 stored_receipt, reader_policy, stored_reader_policy_hash = _stored_context_reader(
-                    self.store, claim, run_id, refs, reader_policy, replay_receipt
+                    self.store,
+                    claim,
+                    run_id,
+                    refs,
+                    reader_policy,
+                    replay_receipt,
+                    published_tag=published_tag,
                 )
             if reader_policy is not None:
                 from proofops.adapters.local.claim_source_policies import claim_source_reader

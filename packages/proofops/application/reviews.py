@@ -14,6 +14,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, replace
+from functools import partial
 from inspect import signature
 from typing import Any, Protocol
 from unicodedata import normalize
@@ -548,9 +549,11 @@ class ReviewService:
         *,
         load_inputs: Callable[[str, str, str], ReviewInputs],
         verify_context_sources=None,
+        load_run_snapshot=None,
     ):
         self.store, self.load_inputs = store, load_inputs
         self.verify_context_sources = verify_context_sources
+        self.load_run_snapshot = load_run_snapshot
 
     def _review(self, inputs: ReviewInputs, review_id: str | None = None) -> dict:
         inputs.validate()
@@ -715,6 +718,16 @@ class ReviewService:
             inputs = self.load_inputs(actor.tenant_id, target["run_id"], target["claim_id"])
         except KeyError:
             raise ReviewRejected("REVIEW_INPUT_UNAVAILABLE", 409) from None
+        verifier_parameters = (
+            signature(self.verify_context_sources).parameters
+            if self.verify_context_sources is not None
+            else {}
+        )
+        pinned_run_snapshot = (
+            self.load_run_snapshot(actor.tenant_id, target["run_id"])
+            if self.load_run_snapshot is not None and "pinned_run_snapshot" in verifier_parameters
+            else None
+        )
         if not inputs.rule_context.local_synthetic and not (
             inputs.rulepack.status == "active"
             and inputs.rulepack.approved_by
@@ -858,7 +871,13 @@ class ReviewService:
                     raise ReviewRejected("CONTEXT_CANNOT_OVERRIDE_NUMERIC_RESULT")
                 try:
                     context_receipt = review_facility_context(
-                        inputs, context_request, self.verify_context_sources
+                        inputs,
+                        context_request,
+                        partial(
+                            self.verify_context_sources, pinned_run_snapshot=pinned_run_snapshot
+                        )
+                        if pinned_run_snapshot is not None
+                        else self.verify_context_sources,
                     )
                 except (ValueError, KeyError, TypeError) as exc:
                     raise ReviewRejected("CONTEXT_REVIEW_REJECTED") from exc
@@ -960,13 +979,13 @@ class ReviewService:
                             raise ReviewRejected("REPORT_LEVEL_SOURCE_REPLAY_MISMATCH", 409)
                         attestation_refs = prior_refs
                     try:
-                        replay = (
-                            {"replay_receipt": prior["source_receipt"]}
-                            if carried
-                            and "replay_receipt"
-                            in signature(self.verify_context_sources).parameters
-                            else {}
-                        )
+                        replay = {}
+                        if carried and "replay_receipt" in verifier_parameters:
+                            replay["replay_receipt"] = prior["source_receipt"]
+                        if carried and "published_tag" in verifier_parameters:
+                            replay["published_tag"] = initial
+                        if pinned_run_snapshot is not None:
+                            replay["pinned_run_snapshot"] = pinned_run_snapshot
                         graph, source_receipt = self.verify_context_sources(
                             inputs, attestation_refs, **replay
                         )
