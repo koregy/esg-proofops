@@ -172,3 +172,32 @@ science_based_claim, 성과 1건: reduction_or_improvement_claim). 수집되지 
 실측(NAVER): 근거 쪽(p229·230·242)의 블록이 모두 원문 검증되지 않은 상태라 인용이 정당하게 거절된다.
 기존 원문 검증은 주장 쪽 span에만 수행된다. 또 보고 범위 문장(p2)은 이 run에서 파싱되지 않았다.
 따라서 실제 적용에는 (1) 근거 쪽 span 원문 검증, (2) 보고서 앞부분을 포함한 파싱이 선행되어야 한다.
+
+## 11. 실제 run 결과 — NAVER p2 재개와 첫 확정 등급 (2026-09-27)
+
+NAVER run `1ca11598-a2e4-4519-a8dd-541e52d922e3`의 선택 페이지 로컬 실행 결과다.
+근거는 ROOT `outputs/agent-results/`의 R52~R56 기록과 `R57-final-export-and-record/result.json`이다.
+
+- R52: p2를 문맥 페이지로 추가, 추출 1,200회·313 주장·적격 원천 12개 not_run(호출 상한).
+  태깅 232회 후 discarded/INTERNAL_ERROR로 중단했다. R53은 lease 상실 경로를 확인했으나 원 예외는 복원 불가다.
+- 공용 원장 확정+예약액: R52 시작 $10.9711723672 → 중단 $12.9785765672(+$2.0074042),
+  R54 종료 $13.9261633172(재개 +$0.94758675). 원장 호출 9,762 → 10,520(신규 758회).
+  $1 예약 `2477cdce-45e9-59bc-9ee2-0d2aa9278a85` 1건은 미정산이며 실패 요청·해당 claim을 재시도하지 않았다.
+- R54: receipt 재생은 신규 호출 0건·304.39초로 태그 13건 공표, 8개 회복 배치 후 총 47건 공표.
+  대상 10건 중 6건 위임 AI 검토 기록·1건 거절·3건 미공표. 승인 impl2 고정 규칙으로 4건 E3/SUBSTANTIATED다.
+- E3 대상 `f42eafd6`, `e142f988`, `92cf14e6`, `2bb69130`: M1 원문 근거 + M2 p2 개별 기업 보고 범위
+  + M3 p230 GRI 3-3 쪽범위→p242 검증 대상 3-1~3-3·검증 기준 연결이다. 원문 attestation과 credited_from을 보존했다.
+- `cdf4fc00`, `777834eb`는 M2/M3 present이나 M1 unknown이 남아 blocked_evidence, 등급·라벨·범위는 null이다.
+  `96a3f04f`는 3개 태깅 모두 TAGGING_INPUT_COUNT_INVALID/guarded 없음으로 CATEGORY_REVIEW_REQUIRED 거절이다.
+  `2ef66eca`, `3c543e27`, `20e5e70f`는 태그 미공표(blocked)여서 M2/M3·등급 not_run이며 부재로 바꾸지 않았다.
+- 검토 중 SQLite 중첩 writer 잠금은 run snapshot 고정(`19e4abb`)으로 수정했다. 전체 재채점은 비대상 검토 필요로 생략했다.
+- R55 export는 capture 201번째 주장에서 33,918,079 B로 한도 33,554,432 B를 넘었다(전체 분석치 49,601,515 B).
+  `9227bd5`는 coverage·문서 필드를 공유하고 예약명 충돌을 escape하며 복원 해시·범위 검증과 기존 한도를 유지한다.
+  R56 초안 ZIP은 최종 인코딩 이전이므로 R57에서 새 복사본·제품 HTTP JSON+CSV+HTML allow_partial로 재생성했다.
+  capture 49,601,515 → 14,236,576 B, snapshot 49,643,855 → 14,282,354 B; ZIP 5,657,203 B.
+  최종 ZIP SHA-256 `69dd746c1ab112e1a190cdc32637ce40f3bab352690291accfd5a7c5a01dc9c4`.
+  313 주장에 E3 4건·차단 2건 포함, 복원 revision 47/47·판정 6/6 canonical byte 일치, 동결 ZIP 재생성도 byte 일치.
+- 미완료: 위 미정산 예약의 provider 증빙, 범주 검토 1건·미공표 3건, worker 원 예외 telemetry,
+  recovery CLI의 claim×3 표시(계약은 최대 ×9), `tests/integration/test_live_pilot_config.py`의 CSRF 순서 의존성
+  (session-security 선행 시 HEAD `19e4abb`에서도 재현). AWS·production 검증은 not_run이다.
+이는 선택 입력의 처리·보존 검증이며 정확도, 공식 기준 검증, 법적 보증 또는 production 완료를 뜻하지 않는다.
