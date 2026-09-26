@@ -1,32 +1,39 @@
 """Original-PDF attestation for exact table-cell and table-row source spans."""
 
 import io
+import math
+from contextlib import closing
+from ctypes import c_double
 from dataclasses import asdict, replace
 from hashlib import sha256
 from importlib.metadata import version
 from pathlib import Path
+from unicodedata import combining, normalize
 
 import pdfplumber
+import pypdfium2 as pdfium
+import pypdfium2.raw as pdfium_raw
 from pdfminer.pdftypes import resolve1
 
 from proofops.adapters.local import claim_source_verification as claim_verifier
 from proofops.adapters.local.native_glyph_geometry import native_word_ink_geometry
 from proofops.adapters.local.source_verification import _rendered_text
 from proofops.application import claims as claim_validation
-from proofops.application.evidence.citations import _normalized, verify_source_ref
+from proofops.application.evidence.citations import _LIGATURES, _normalized, verify_source_ref
 from proofops.application.ingest.gri import _validate_graph
 from proofops.domain.provenance import canonical_hash
 
 _TABLE_KINDS = {"table_cell", "table_row"}
 _MAX_ROW_CELLS = 40
+_LEGACY_TABLE_VERIFIER_SHA256 = "2973082b442d9d26504f50446fc1c9babbc154a75917992ff2d31aba479fc521"
 
 
 def table_span_policy():
-    """Versioned hashes for every reader, geometry, normalizer and quote guard."""
+    """Pinned v1 policy; preserve its stored full-cell receipt bytes."""
     local = Path(__file__).parent
     return dict(
         schema="table_span_source_policy_v1",
-        verifier_sha256=sha256(Path(__file__).read_bytes()).hexdigest(),
+        verifier_sha256=_LEGACY_TABLE_VERIFIER_SHA256,
         quote_guard_sha256=sha256(Path(claim_verifier.__file__).read_bytes()).hexdigest(),
         claim_validation_sha256=sha256(Path(claim_validation.__file__).read_bytes()).hexdigest(),
         glyph_geometry_sha256=sha256(
@@ -41,6 +48,31 @@ def table_span_policy():
         ).hexdigest(),
         readers={name: version(name) for name in ("pdfplumber", "pdfminer.six", "pypdfium2")},
     )
+
+
+def line_span_policy():
+    """Separate v2 policy for glyph-bounded quote crops."""
+    local = Path(__file__).parent
+    return dict(
+        schema="table_span_line_source_policy_v2",
+        verifier_sha256=sha256(Path(__file__).read_bytes()).hexdigest(),
+        glyph_geometry_sha256=sha256(
+            local.joinpath("native_glyph_geometry.py").read_bytes()
+        ).hexdigest(),
+        rendered_reader_sha256=sha256(
+            local.joinpath("source_verification.py").read_bytes()
+        ).hexdigest(),
+        ocr_script_sha256=sha256(local.joinpath("native_ocr.swift").read_bytes()).hexdigest(),
+        citation_sha256=sha256(
+            Path(verify_source_ref.__code__.co_filename).read_bytes()
+        ).hexdigest(),
+        quote_guard_sha256=sha256(Path(claim_verifier.__file__).read_bytes()).hexdigest(),
+        readers={name: version(name) for name in ("pdfplumber", "pdfminer.six", "pypdfium2")},
+    )
+
+
+def line_span_policy_sha256():
+    return canonical_hash(line_span_policy())
 
 
 def _candidate_bound(graph, candidate):
@@ -64,6 +96,12 @@ def _selected_box(block):
 
 def _matches_raw_text(text, raw_text):
     return isinstance(text, str) and _normalized(text) == _normalized(raw_text)
+
+
+def _matches_line_text(text, quote):
+    return isinstance(text, str) and _normalized(text).replace(" ", "") == _normalized(
+        quote
+    ).replace(" ", "")
 
 
 def _candidate_table_matches(graph, candidate, table_id):
@@ -402,6 +440,206 @@ def _page_reading(source, document, block, glyphs):
     )
 
 
+def _normalized_glyph_stream(parts):
+    """Normalize text with a conservative source-glyph map for exact quote spans."""
+    clusters = []
+    normalized_chars, origins = [], []
+
+    def flush():
+        if clusters:
+            text = normalize("NFC", "".join(char for char, _ in clusters))
+            glyph_ids = frozenset(index for _, ids in clusters for index in ids)
+            normalized_chars.extend(text)
+            origins.extend([glyph_ids] * len(text))
+            clusters.clear()
+
+    for char, ids in parts:
+        for translated in char.translate(_LIGATURES):
+            if clusters and combining(translated) == 0:
+                current = normalize("NFC", "".join(value for value, _ in clusters))
+                extended = normalize("NFC", current + translated)
+                if extended.startswith(current):
+                    flush()
+            clusters.append((translated, ids))
+    flush()
+
+    collapsed, mapped, pending, pending_space = [], [], set(), False
+    for char, glyph_ids in zip(normalized_chars, origins, strict=True):
+        if char.isspace():
+            if collapsed:
+                pending.update(glyph_ids)
+                pending_space = True
+        else:
+            if pending_space:
+                collapsed.append(" ")
+                mapped.append(frozenset(pending))
+                pending.clear()
+                pending_space = False
+            collapsed.append(char)
+            mapped.append(glyph_ids)
+    return "".join(collapsed), mapped
+
+
+def _line_region(source, page, reading, quote, cell_box):
+    """Map a unique native quote to one visual line and refuse intruding glyphs."""
+    quote = _normalized(quote)
+    text = reading.get("native_text")
+    proof = reading.get("glyph_geometry", {})
+    if not isinstance(text, str) or not isinstance(proof.get("matched_words"), list):
+        return dict(reason="glyph_geometry_unresolved", region=None)
+    words = page.extract_words(return_chars=True)
+    proof_by_index = {
+        item.get("native_word_index"): item
+        for item in proof["matched_words"]
+        if type(item.get("native_word_index")) is int
+    }
+    parts = []
+    for position, item in enumerate(reading.get("words", ())):
+        index = item.get("index")
+        if type(index) is not int or not 0 <= index < len(words):
+            return dict(reason="glyph_text_alignment_unresolved", region=None)
+        word = words[index]
+        chars = word.get("chars")
+        mapped = proof_by_index.get(index, {}).get("pdfium_char_indices")
+        if (
+            word.get("text") != item.get("text")
+            or not isinstance(chars, list)
+            or not isinstance(mapped, list)
+            or len(chars) != len(mapped)
+            or "".join(char.get("text", "") for char in chars) != word.get("text")
+        ):
+            return dict(reason="glyph_text_alignment_unresolved", region=None)
+        if position:
+            parts.append((" ", frozenset()))
+        for char, glyph_index in zip(chars, mapped, strict=True):
+            value = char.get("text")
+            if not isinstance(value, str) or len(value) != 1 or type(glyph_index) is not int:
+                return dict(reason="glyph_text_alignment_unresolved", region=None)
+            parts.append((value, frozenset((glyph_index,))))
+    native, source_glyphs = _normalized_glyph_stream(parts)
+    if native != _normalized(text):
+        return dict(reason="glyph_text_alignment_unresolved", region=None)
+    if not claim_verifier._unique_quote(native, quote):
+        return dict(reason="native_quote_unresolved", region=None)
+    start = native.find(quote)
+    selected_ids = []
+    for char, glyph_ids in zip(
+        native[start : start + len(quote)], source_glyphs[start : start + len(quote)], strict=True
+    ):
+        if not char.isspace() and not glyph_ids:
+            return dict(reason="glyph_quote_unmapped", region=None)
+        for glyph_id in glyph_ids:
+            if glyph_id not in selected_ids:
+                selected_ids.append(glyph_id)
+    if not selected_ids:
+        return dict(reason="glyph_quote_unmapped", region=None)
+    selected_set = set(selected_ids)
+
+    try:
+        with pdfium.PdfDocument(source) as native_document:
+            if not 1 <= reading.get("page", 0) <= len(native_document):
+                return dict(reason="glyph_geometry_unresolved", region=None)
+            with closing(native_document[reading["page"] - 1]) as native_page:
+                with closing(native_page.get_textpage()) as text_page:
+                    count = text_page.count_chars()
+                    if not 0 < count <= 20000 or any(index >= count for index in selected_ids):
+                        return dict(reason="glyph_geometry_unresolved", region=None)
+                    glyphs = {}
+                    baselines = []
+                    for index in range(count):
+                        codepoint = pdfium_raw.FPDFText_GetUnicode(text_page, index)
+                        try:
+                            glyph_text = chr(codepoint)
+                            left, bottom, right, top = text_page.get_charbox(index, loose=False)
+                        except (ValueError, pdfium.PdfiumError):
+                            return dict(reason="glyph_geometry_unresolved", region=None)
+                        box = [left, page.height - top, right, page.height - bottom]
+                        if not all(math.isfinite(value) for value in box):
+                            return dict(reason="glyph_geometry_unresolved", region=None)
+                        if not (
+                            0 <= box[0] < box[2] <= page.width
+                            and 0 <= box[1] < box[3] <= page.height
+                        ):
+                            if glyph_text.isspace():
+                                continue
+                            return dict(reason="glyph_geometry_unresolved", region=None)
+                        glyphs[index] = dict(text=glyph_text, bbox=box)
+                        if index in selected_set and not glyph_text.isspace():
+                            origin_x, origin_y = c_double(), c_double()
+                            if not pdfium_raw.FPDFText_GetCharOrigin(
+                                text_page, index, origin_x, origin_y
+                            ) or not math.isfinite(origin_y.value):
+                                return dict(reason="glyph_geometry_unresolved", region=None)
+                            baselines.append(origin_y.value)
+    except (OSError, ValueError, pdfium.PdfiumError):
+        return dict(reason="glyph_geometry_unresolved", region=None)
+
+    selected = [glyphs.get(index) for index in selected_ids]
+    if any(item is None for item in selected):
+        return dict(reason="glyph_geometry_unresolved", region=None)
+    boxes = [item["bbox"] for item in selected]
+    region = [
+        min(box[0] for box in boxes),
+        min(box[1] for box in boxes),
+        max(box[2] for box in boxes),
+        max(box[3] for box in boxes),
+    ]
+    if (
+        not baselines
+        or max(baselines) - min(baselines) > 0.001
+        or max(box[1] for box in boxes) >= min(box[3] for box in boxes) - 0.001
+    ):
+        return dict(reason="quote_not_one_visual_line", region=region)
+    if not _inside(region, cell_box):
+        return dict(reason="line_region_outside_cell", region=region)
+    if any(
+        index not in selected_set
+        and not item["text"].isspace()
+        and min(region[2], item["bbox"][2]) > max(region[0], item["bbox"][0]) + 0.001
+        and min(region[3], item["bbox"][3]) > max(region[1], item["bbox"][1]) + 0.001
+        for index, item in glyphs.items()
+    ):
+        return dict(reason="foreign_glyph_in_region", region=region)
+    return dict(reason=None, region=region, native_text=native[start : start + len(quote)])
+
+
+def _line_attestation(source, page, reading, quote, cell_box):
+    result = _line_region(source, page, reading, quote, cell_box)
+    if result["reason"] is not None:
+        return dict(status="unresolved", **result, rendered=None)
+    rendered = _rendered_text(page, result["region"], padding_px=6)
+    status = (
+        "verified"
+        if (rendered.get("status") == "read" and _matches_line_text(rendered.get("text"), quote))
+        else "unresolved"
+    )
+    return dict(
+        status=status,
+        reason=None
+        if status == "verified"
+        else (
+            "rendered_line_mismatch"
+            if rendered.get("status") == "read"
+            else "rendered_line_unresolved"
+        ),
+        region=result["region"],
+        native_text=result["native_text"],
+        comparison="nfc_ignore_whitespace_v1",
+        rendered=rendered,
+    )
+
+
+def _record_line_attestation(record, source, page, reading, quote, cell_box):
+    attestation = _line_attestation(source, page, reading, quote, cell_box)
+    record.update(
+        method="native_glyph_line_v2",
+        line_policy_sha256=line_span_policy_sha256(),
+        line_attestation=attestation,
+    )
+    if attestation["status"] == "verified":
+        record.update(status="verified", reason=None)
+
+
 def _checked_ref(graph, ref, block, tenant_id):
     checked = replace(
         graph,
@@ -488,10 +726,26 @@ def attest_table_spans(graph, source_pdf_bytes, refs, *, tenant_id):
                     record["reason"] = reading["reason"]
                 elif not _matches_raw_text(reading["native_text"], block.raw_text):
                     record["reason"] = "native_cell_text_mismatch"
+                    _record_line_attestation(
+                        record,
+                        source_pdf_bytes,
+                        document.pages[block.page_num - 1],
+                        reading,
+                        quote,
+                        box,
+                    )
                 elif reading["rendered"].get("status") != "read" or not _matches_raw_text(
                     reading["rendered"].get("text"), block.raw_text
                 ):
                     record["reason"] = "rendered_cell_text_mismatch"
+                    _record_line_attestation(
+                        record,
+                        source_pdf_bytes,
+                        document.pages[block.page_num - 1],
+                        reading,
+                        quote,
+                        box,
+                    )
                 elif not claim_verifier._unique_quote(reading["native_text"], quote):
                     record["reason"] = "native_quote_unresolved"
                 else:
@@ -513,11 +767,27 @@ def attest_table_spans(graph, source_pdf_bytes, refs, *, tenant_id):
                 record["reason"] = "cell_reading_unresolved"
                 record["reading_sha256"] = canonical_hash(reading)
                 continue
+            native_row = " ".join(by_id[cell.source_id]["native_text"] for cell in cells)
+
+            def try_row_line():
+                if len(segments) != 1 or not claim_verifier._unique_quote(native_row, quote):
+                    return
+                selected_cell, _ = segments[0]
+                _record_line_attestation(
+                    record,
+                    source_pdf_bytes,
+                    document.pages[block.page_num - 1],
+                    by_id[selected_cell.source_id],
+                    quote,
+                    _selected_box(selected_cell),
+                )
+
             if any(
                 not _matches_raw_text(by_id[cell.source_id]["native_text"], cell.raw_text)
                 for cell in cells
             ):
                 record["reason"] = "native_cell_text_mismatch"
+                try_row_line()
                 record["reading_sha256"] = canonical_hash(reading)
                 continue
             if any(
@@ -528,9 +798,9 @@ def attest_table_spans(graph, source_pdf_bytes, refs, *, tenant_id):
                 for cell in cells
             ):
                 record["reason"] = "rendered_cell_text_mismatch"
+                try_row_line()
                 record["reading_sha256"] = canonical_hash(reading)
                 continue
-            native_row = " ".join(by_id[cell.source_id]["native_text"] for cell in cells)
             rendered_row = " ".join(
                 by_id[cell.source_id]["rendered"].get("text", "") for cell in cells
             )
