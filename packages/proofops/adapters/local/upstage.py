@@ -140,12 +140,18 @@ def request_usage(ledger, request_ids) -> dict:
     cost = sum((amount for amount, _ in entries), Decimal(0))
     input_tokens = output_tokens = document_parse_pages = 0
     has_parse_receipt = False
+    has_aggregate_bound = False
     for receipt in settled:
         if not isinstance(receipt, dict) or any(
             key in receipt and not isinstance(receipt[key], str)
             for key in ("model", "provider_model")
         ):
             raise ValueError("ACCOUNTING_UNAVAILABLE")
+        if receipt.get("settlement_origin") == "provider_aggregate_upper_bound":
+            if not isinstance(receipt.get("aggregate_bound_id"), str):
+                raise ValueError("ACCOUNTING_UNAVAILABLE")
+            has_aggregate_bound = True
+            continue
         parse_models = {"document-parse-260128", "document-parse"}
         if receipt.get("model") in parse_models or receipt.get("provider_model") in parse_models:
             if (
@@ -185,10 +191,10 @@ def request_usage(ledger, request_ids) -> dict:
         "unsettled_calls": unknown,
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
-        "token_usage_complete": not unknown and not has_parse_receipt,
-        "cost_with_vat_reserve_usd": "unknown" if unknown else str(cost),
+        "token_usage_complete": not unknown and not has_parse_receipt and not has_aggregate_bound,
+        "cost_with_vat_reserve_usd": "unknown" if unknown or has_aggregate_bound else str(cost),
         "committed_or_reserved_usd": str(cost),
-        "unknown_reservation_cost_usd": "unknown" if unknown else None,
+        "unknown_reservation_cost_usd": "unknown" if unknown or has_aggregate_bound else None,
     }
     if has_parse_receipt:
         result["document_parse_pages"] = document_parse_pages
@@ -318,6 +324,26 @@ class UpstageProbe:
             except (InvalidOperation, TypeError, ValueError):
                 raise ValueError("BUDGET_LEDGER_INVALID") from None
             total += amount
+        if db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='probe_aggregate_bounds'"
+        ).fetchone():
+            for bound_id, raw, audit_raw in db.execute(
+                "SELECT id, committed, audit FROM probe_aggregate_bounds"
+            ):
+                try:
+                    amount = Decimal(raw)
+                    audit = json.loads(audit_raw)
+                    if (
+                        not amount.is_finite()
+                        or amount < 0
+                        or not bound_id.startswith("aggregate:")
+                        or not isinstance(audit, dict)
+                        or Decimal(audit["total_usd"]) != amount
+                    ):
+                        raise ValueError
+                except (InvalidOperation, KeyError, TypeError, ValueError):
+                    raise ValueError("BUDGET_LEDGER_INVALID") from None
+                total += amount
         return total
 
     @property
