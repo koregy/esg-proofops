@@ -17,10 +17,12 @@ from proofops.adapters.local.summary_store import LocalSummaryStore
 from proofops.application.exports import (
     MAX_EXPORT_BYTES,
     REVISION_RECORDS_V2,
+    SEARCH_COVERAGE_V1,
     SOURCE_RECEIPTS_V1,
     ExportRejected,
     encode_report_level_source_receipts,
     encode_revision_record,
+    encode_search_coverages,
     timestamp,
 )
 from proofops.application.reporting import _basis_refs, _tag_elements, build_report_model
@@ -166,6 +168,7 @@ class LocalExportStore:
                 raise ExportRejected("EXPORT_INTEGRITY_FAILED")
             refs, records, raw_records, hashes = [], {}, {}, {snapshot["rulepack"]["sha256"]}
             source_receipts = {}
+            search_coverages, coverage_documents = {}, {}
             captured_bytes = 0
             for claim_id in ids:
                 raw_head = self.jobs._raw(db, tenant, run_id, "claim_head", claim_id)
@@ -350,6 +353,31 @@ class LocalExportStore:
                         if previous is None:
                             source_receipts[digest] = receipt
                             captured_bytes += len(canonical_json(receipt).encode())
+                    try:
+                        raw_record, new_coverages, new_documents = encode_search_coverages(
+                            raw_record,
+                            identity={
+                                "tenant_id": tenant,
+                                "document_version_id": run["document_version_id"],
+                                "parse_manifest_id": graph.parse_manifest_id,
+                                "source_sha256": snapshot["document"]["sha256"],
+                            },
+                        )
+                    except (ValueError, TypeError, KeyError) as exc:
+                        raise ExportRejected("EXPORT_INTEGRITY_FAILED") from exc
+                    for table, new in (
+                        (search_coverages, new_coverages),
+                        (coverage_documents, new_documents),
+                    ):
+                        for digest, entry in new.items():
+                            previous = table.get(digest)
+                            if previous is not None and canonical_json(previous) != canonical_json(
+                                entry
+                            ):
+                                raise ExportRejected("EXPORT_INTEGRITY_FAILED")
+                            if previous is None:
+                                table[digest] = entry
+                                captured_bytes += len(canonical_json(entry).encode())
                 captured_bytes += len(canonical_json([record, raw_record]).encode())
                 if captured_bytes > MAX_EXPORT_BYTES:
                     raise ExportRejected("EXPORT_SIZE_LIMIT")
@@ -384,6 +412,10 @@ class LocalExportStore:
             if source_receipts:
                 manifest["source_receipts_encoding"] = SOURCE_RECEIPTS_V1
                 manifest["source_receipts"] = source_receipts
+            if search_coverages:
+                manifest["search_coverage_encoding"] = SEARCH_COVERAGE_V1
+                manifest["search_coverages"] = search_coverages
+                manifest["coverage_documents"] = coverage_documents
             submitted = self.claims.submitted_reviews(tenant, run_id, connection=db)
             if submitted:
                 manifest["submitted_reviews"] = submitted

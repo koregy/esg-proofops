@@ -113,7 +113,45 @@ the preserved revision records before rendering. No API request or response mode
 path or JSON Schema changes; the only external change is the documented versioned receipt
 encoding inside the archived `manifest.json`.
 
-## 3. Bundle compression and what is actually bounded
+## 3. Shared search coverage encoding (v1)
+
+New manifests may declare `search_coverage_encoding: "shared_search_coverage_sha256_v1"`.
+`manifest.search_coverages` maps the SHA-256 of each complete original canonical JSON
+`search_coverage` value to `{scope, value}`. `scope` has exactly `tenant_id`,
+`document_version_id`, `parse_manifest_id`, and `source_sha256`; `value` retains all
+coverage fields except `source_quality` and `quality_issues`. Their generated references
+live in `value.__shared_coverage__.refs`, keyed by the original field name with values
+`"sha256:<digest>"`. The envelope is always present, even when `refs` is empty.
+Any original `__shared_coverage__` field (including null) is escaped as the envelope's
+`original_value` and restored verbatim on decode. Original `source_quality_ref` and
+`quality_issues_ref` fields remain ordinary data and are never consumed as references.
+The envelope permits only `refs` and optional `original_value`; reference keys must be
+`source_quality` or `quality_issues`. This corrects the unreleased R56 v1 draft shape;
+pre-fix experimental shared-coverage manifests must be re-exported for this reader.
+Legacy inline manifests remain compatible; no stored revision or DB migration is needed.
+A packet's `search_coverage` is replaced
+by `search_coverage_ref: "sha256:<digest>"`. This applies independently to
+`inputs.original_packet` and `inputs.packet` in both `tag.inputs` and inline
+`original_inputs`; an existing `original_inputs_ref` continues to point to `tag.inputs`.
+
+`manifest.coverage_documents` maps each canonical JSON SHA-256 of a `source_quality`
+object or `quality_issues` array to `{scope, value}`. The same document scope is checked
+against the manifest and each referring packet. The two tables and their references are
+export-only; the original tag, input, packet, receipt and decision revisions are immutable.
+Decoding restores inner document values before verifying the complete coverage digest,
+then restores each packet. It validates one revision at a time and retains only the
+bounded tables and returned records. The capture guard remains 33,554,432 raw canonical
+JSON bytes; no field is omitted or summarized and no compressed size substitutes for it.
+
+Missing, malformed, hash-mismatched, wrong-scope, inline-plus-reference, and unreferenced
+entries or references fail with `ValueError`; export building maps this to
+`EXPORT_INTEGRITY_FAILED`. Without the encoding field, both tables and all coverage
+references are forbidden, while inline legacy coverage and all earlier manifest versions
+still decode. Unknown encoding versions fail closed. Rollback must retain this decoder
+for new ZIP readers or re-export affected runs; existing snapshots, revisions, receipts,
+and downloadable ZIP bytes are never rewritten.
+
+## 4. Bundle compression and what is actually bounded
 
 `build_export` writes the ZIP with `ZIP_DEFLATED` (stdlib `zipfile`). `ZipInfo()` defaults
 to `ZIP_STORED` and overrides the `ZipFile` compression, so `compress_type` is set on each
@@ -145,7 +183,7 @@ export artifact: `authorize_download` and `content` verify `artifact_sha256` ove
 bytes and serve them. Legacy `ZIP_STORED` artifacts are immutable stored bytes and are
 still served untouched; readers open both `ZIP_STORED` and `ZIP_DEFLATED` archives.
 
-## 4. Measured result
+## 5. Measured result
 
 Real local HTTP on `.local/r24-export-size-probe`, an isolated copy of the read-only
 frozen state `.local/r24-naver-partial-tag`, run `5b5445d9-947c-43fb-90a1-0e403c521f8f`,
@@ -176,7 +214,7 @@ Evidence: `outputs/agent-results/R24/export-size/` (`export_size_probe.py`,
 `probe-before.json`, `probe-after.json`, `strict-decoder-recheck.json`,
 `naver-partial-tag-export-after.zip`).
 
-## 5. Rollback
+## 6. Rollback
 
 Revert the two product files. Artifacts frozen in either direction stay byte-identical and
 downloadable, because the download path never parses or decompresses the archive.
