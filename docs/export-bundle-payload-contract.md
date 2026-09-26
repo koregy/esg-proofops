@@ -69,6 +69,28 @@ inline = {cid: decode_revision_record(r, encoding=encoding)
 the canonical bytes of the v1 record the previous code would have written, so the decoder
 is a pure re-inlining step and never reshapes the record.
 
+### Report-level source receipt references
+
+The optional `manifest.source_receipts_encoding` declares the cross-record source receipt
+table. When present, `shared_source_receipts_sha256_v1` means
+`manifest.source_receipts` maps each canonical content SHA-256 to one complete receipt.
+Every `tag.report_level_review[]` entry that carried `source_receipt` instead carries
+`source_receipt_ref: "sha256:<digest>"`. Identical canonical receipts across any number of
+claim revisions therefore occupy one table entry in the snapshot and ZIP manifest.
+
+The encoder checks the receipt's own `artifact_sha256`, and checks its tenant,
+document-version, parse-manifest, and source SHA-256 against both the enclosing revision
+and manifest identity before emitting a reference. The decoder requires the declared
+version, resolves every reference, checks the canonical receipt hash and source identity,
+rejects missing, extra, inline-plus-reference, and unreferenced table entries, and returns
+the original inline revision records without mutating the compact manifest. Export
+rendering runs the same validation before writing the ZIP. Tag revisions remain immutable;
+deduplication is only an export-snapshot encoding.
+
+Snapshots written before this field existed keep their inline receipts and need no
+rewriting. Absence of `source_receipts_encoding` means no receipt references are valid;
+unknown encodings are rejected.
+
 Every refusal is a `ValueError`:
 
 | input | outcome |
@@ -83,12 +105,13 @@ Every refusal is a `ValueError`:
 | reference present but `tag` is not an object, or `tag.inputs` is missing, null, or not an object | rejected |
 
 Backward compatibility: every already-frozen `export_snapshot` and `export_artifact`
-lacks `revision_records_encoding`, is therefore v1, and still decodes unchanged.
-`build_report_model` does not read `revision_records` at all, so old and new reports
-project identically. Nothing in the product reads `revision_records` back; the field
-exists for external provenance audit of the downloaded `manifest.json`. No API request or
-response model, OpenAPI path or JSON Schema changes; the only external change is this
-documented versioned field inside the archived `manifest.json`.
+lacks `revision_records_encoding`, is therefore v1, and still decodes unchanged. Older
+snapshots with inline report-level receipts also lack `source_receipts_encoding` and remain
+readable as-is. `build_report_model` does not use `revision_records` or the shared receipt
+table, so JSON/CSV/HTML report content is unchanged; export validation expands and checks
+the preserved revision records before rendering. No API request or response model, OpenAPI
+path or JSON Schema changes; the only external change is the documented versioned receipt
+encoding inside the archived `manifest.json`.
 
 ## 3. Bundle compression and what is actually bounded
 
@@ -168,3 +191,7 @@ Reader compatibility after a revert is asymmetric and must be handled deliberate
   dependency on the rest of the change) when reverting, or re-export the affected runs.
   The declared encoding field is what makes those exports identifiable rather than
   silently misread.
+- exports with `source_receipts_encoding=shared_source_receipts_sha256_v1` contain
+  `source_receipt_ref` entries and a manifest-level `source_receipts` table. Keep the
+  receipt decoder/validator from `exports.py` when reverting, or re-export affected runs
+  before removing it. Stored tag revisions and already-frozen ZIPs remain untouched.

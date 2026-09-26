@@ -15,9 +15,13 @@ from proofops.application.exports import (
     REVISION_RECORDS_V1,
     REVISION_RECORDS_V2,
     SHARED_ORIGINAL_INPUTS,
+    SOURCE_RECEIPTS_V1,
     decode_revision_record,
+    decode_revision_records,
+    encode_report_level_source_receipts,
     encode_revision_record,
 )
+from proofops.domain.provenance import canonical_hash
 from proofops.domain.rulepacks import canonical_json
 
 from tests.acceptance.test_exports import archive, create, exports
@@ -134,3 +138,197 @@ def test_stored_and_deflated_bundles_round_trip_the_same_member_bytes():
     for raw in archives.values():
         with ZipFile(BytesIO(raw)) as bundle:
             assert bundle.read("manifest.json") == payload
+
+
+def _source_receipt(identity):
+    receipt = {
+        "schema": "context_source_attestation_v1",
+        **{
+            key: identity[key]
+            for key in ("tenant_id", "document_version_id", "parse_manifest_id", "source_sha256")
+        },
+        "records": [
+            {
+                "status": "verified",
+                "ref": {"source_id": "source-1", "verification_state": "candidate"},
+            }
+        ],
+    }
+    return receipt | {"artifact_sha256": canonical_hash(receipt)}
+
+
+def _receipt_manifest(count=10):
+    identity = {
+        "tenant_id": "tenant-a",
+        "document_version_id": "version-a",
+        "parse_manifest_id": "parse-a",
+        "source_sha256": "a" * 64,
+    }
+    receipt = _source_receipt(identity)
+    records = {
+        f"claim-{index}": encode_revision_record(
+            {
+                "inputs": {
+                    "claim": identity | {"claim_id": f"claim-{index}"},
+                    "original": identity,
+                },
+                "elements": [
+                    {
+                        "element_id": "M3",
+                        "state": "present",
+                        "reason_code": "report-source-v1",
+                        "credited_from": "source-1",
+                        "evidence_refs": [
+                            {"source_id": "source-1", "verification_state": "verified"}
+                        ],
+                    }
+                ],
+                "report_level_review": [
+                    {
+                        "element_id": "M3",
+                        "policy": "report-source-v1",
+                        "refs": [{"source_id": "source-1", "verification_state": "candidate"}],
+                        "credited_from": "source-1",
+                        "source_receipt": receipt,
+                    }
+                ],
+            },
+            None,
+            {
+                "claim": identity | {"claim_id": f"claim-{index}"},
+                "original": identity,
+            },
+        )
+        for index in range(count)
+    }
+    original = {
+        claim_id: {
+            "tag": record["tag"],
+            "decision": record["decision"],
+            "original_inputs": record["tag"]["inputs"],
+        }
+        for claim_id, record in records.items()
+    }
+    compacted, receipts = encode_report_level_source_receipts(records, identity=identity)
+    return (
+        identity
+        | {
+            "revision_records_encoding": REVISION_RECORDS_V2,
+            "revision_records": compacted,
+            "source_receipts_encoding": SOURCE_RECEIPTS_V1,
+            "source_receipts": receipts,
+        },
+        original,
+    )
+
+
+def test_identical_report_level_receipts_are_stored_once_and_restore_exact_records():
+    manifest, original = _receipt_manifest()
+    assert len(manifest["source_receipts"]) == 1
+    refs = {
+        record["tag"]["report_level_review"][0]["source_receipt_ref"]
+        for record in manifest["revision_records"].values()
+    }
+    assert len(refs) == 1
+    assert all(
+        "source_receipt" not in record["tag"]["report_level_review"][0]
+        for record in manifest["revision_records"].values()
+    )
+    assert canonical_json(decode_revision_records(manifest)) == canonical_json(original)
+    assert all(
+        "source_receipt_ref" in record["tag"]["report_level_review"][0]
+        for record in manifest["revision_records"].values()
+    )
+
+
+def test_report_level_receipt_export_validation_rejects_bad_references():
+    manifest, _ = _receipt_manifest(count=1)
+    digest = next(iter(manifest["source_receipts"]))
+    receipt = manifest["source_receipts"][digest]
+
+    tampered = json.loads(canonical_json(manifest))
+    tampered["source_receipts"][digest]["records"][0]["status"] = "unverified"
+
+    missing = json.loads(canonical_json(manifest))
+    del missing["source_receipts"][digest]
+
+    mismatched = json.loads(canonical_json(manifest))
+    wrong = dict(receipt, tenant_id="tenant-b")
+    wrong.pop("artifact_sha256")
+    wrong["artifact_sha256"] = canonical_hash(wrong)
+    wrong_digest = canonical_hash(wrong)
+    mismatched["source_receipts"] = {wrong_digest: wrong}
+    mismatched["revision_records"]["claim-0"]["tag"]["report_level_review"][0][
+        "source_receipt_ref"
+    ] = f"sha256:{wrong_digest}"
+
+    mismatched_source = json.loads(canonical_json(manifest))
+    wrong_source = dict(receipt, source_sha256="b" * 64)
+    wrong_source.pop("artifact_sha256")
+    wrong_source["artifact_sha256"] = canonical_hash(wrong_source)
+    wrong_source_digest = canonical_hash(wrong_source)
+    mismatched_source["source_receipts"] = {wrong_source_digest: wrong_source}
+    mismatched_source["revision_records"]["claim-0"]["tag"]["report_level_review"][0][
+        "source_receipt_ref"
+    ] = f"sha256:{wrong_source_digest}"
+
+    from proofops.application.exports import ExportRejected, build_export
+
+    for broken in (tampered, missing, mismatched, mismatched_source):
+        with pytest.raises(ExportRejected, match="EXPORT_INTEGRITY_FAILED"):
+            build_export({"manifest": broken, "decisions": {}}, ["json"])
+
+
+def test_swapped_same_document_receipt_must_match_review_refs():
+    from proofops.application.exports import ExportRejected, build_export
+
+    manifest, original = _receipt_manifest(count=1)
+    digest = next(iter(manifest["source_receipts"]))
+    wrong = json.loads(canonical_json(manifest["source_receipts"][digest]))
+    wrong["records"][0]["ref"]["source_id"] = "source-2"
+    wrong.pop("artifact_sha256")
+    wrong["artifact_sha256"] = canonical_hash(wrong)
+    wrong_digest = canonical_hash(wrong)
+    manifest["source_receipts"] = {wrong_digest: wrong}
+    manifest["revision_records"]["claim-0"]["tag"]["report_level_review"][0][
+        "source_receipt_ref"
+    ] = f"sha256:{wrong_digest}"
+    with pytest.raises(ValueError, match="source receipt review mismatch"):
+        decode_revision_records(manifest)
+    with pytest.raises(ExportRejected, match="EXPORT_INTEGRITY_FAILED"):
+        build_export({"manifest": manifest, "decisions": {}}, ["json"])
+
+    original["claim-0"]["tag"]["report_level_review"][0]["source_receipt"] = wrong
+    with pytest.raises(ValueError, match="source receipt review mismatch"):
+        encode_report_level_source_receipts(original, identity=manifest)
+
+
+def test_referenced_receipt_review_metadata_must_match_stored_element():
+    manifest, _ = _receipt_manifest(count=1)
+    for field, value in (
+        ("element_id", "M4"),
+        ("policy", "different-policy"),
+        ("credited_from", "source-2"),
+    ):
+        broken = json.loads(canonical_json(manifest))
+        review = broken["revision_records"]["claim-0"]["tag"]["report_level_review"][0]
+        review[field] = value
+        with pytest.raises(ValueError, match="source receipt review mismatch"):
+            decode_revision_records(broken)
+
+
+def test_old_inline_receipt_snapshot_still_validates_without_new_encoding():
+    old = {
+        "tenant_id": "tenant-a",
+        "document_version_id": "version-a",
+        "parse_manifest_id": "parse-a",
+        "source_sha256": "a" * 64,
+        "revision_records": {
+            "claim-0": {
+                "tag": {"report_level_review": [{"source_receipt": {"legacy": True}}]},
+                "decision": None,
+                "original_inputs": {"claim_id": "claim-0"},
+            }
+        },
+    }
+    assert decode_revision_records(old) == old["revision_records"]

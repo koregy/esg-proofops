@@ -17,7 +17,9 @@ from proofops.adapters.local.summary_store import LocalSummaryStore
 from proofops.application.exports import (
     MAX_EXPORT_BYTES,
     REVISION_RECORDS_V2,
+    SOURCE_RECEIPTS_V1,
     ExportRejected,
+    encode_report_level_source_receipts,
     encode_revision_record,
     timestamp,
 )
@@ -163,6 +165,7 @@ class LocalExportStore:
             ):
                 raise ExportRejected("EXPORT_INTEGRITY_FAILED")
             refs, records, raw_records, hashes = [], {}, {}, {snapshot["rulepack"]["sha256"]}
+            source_receipts = {}
             captured_bytes = 0
             for claim_id in ids:
                 raw_head = self.jobs._raw(db, tenant, run_id, "claim_head", claim_id)
@@ -325,6 +328,28 @@ class LocalExportStore:
                     # Preserve all observed states and evidence, never convert uncertainty.
                     # The original packet is stored once only when its bytes are identical.
                     raw_record = encode_revision_record(tag, decision, inputs)
+                    try:
+                        compacted, new_receipts = encode_report_level_source_receipts(
+                            {claim_id: raw_record},
+                            identity={
+                                "tenant_id": tenant,
+                                "document_version_id": run["document_version_id"],
+                                "parse_manifest_id": graph.parse_manifest_id,
+                                "source_sha256": snapshot["document"]["sha256"],
+                            },
+                        )
+                        raw_record = compacted[claim_id]
+                    except (ValueError, TypeError, KeyError) as exc:
+                        raise ExportRejected("EXPORT_INTEGRITY_FAILED") from exc
+                    for digest, receipt in new_receipts.items():
+                        previous = source_receipts.get(digest)
+                        if previous is not None and canonical_json(previous) != canonical_json(
+                            receipt
+                        ):
+                            raise ExportRejected("EXPORT_INTEGRITY_FAILED")
+                        if previous is None:
+                            source_receipts[digest] = receipt
+                            captured_bytes += len(canonical_json(receipt).encode())
                 captured_bytes += len(canonical_json([record, raw_record]).encode())
                 if captured_bytes > MAX_EXPORT_BYTES:
                     raise ExportRejected("EXPORT_SIZE_LIMIT")
@@ -356,6 +381,9 @@ class LocalExportStore:
                 revision_records=raw_records,
                 revision_records_encoding=REVISION_RECORDS_V2,
             )
+            if source_receipts:
+                manifest["source_receipts_encoding"] = SOURCE_RECEIPTS_V1
+                manifest["source_receipts"] = source_receipts
             submitted = self.claims.submitted_reviews(tenant, run_id, connection=db)
             if submitted:
                 manifest["submitted_reviews"] = submitted
