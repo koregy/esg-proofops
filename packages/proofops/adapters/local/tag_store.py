@@ -202,19 +202,86 @@ def validate_tag_commit(db, jobs, run, message, envelope, next_job):
     return coverage
 
 
+def _stored_context_reader(store, claim, run_id, refs, run_policy, replay_receipt):
+    """Resolve only the explicitly requested, already-published receipt."""
+    jobs = getattr(store, "jobs", None)
+    if jobs is None or not hasattr(jobs, "_transaction"):
+        raise ValueError("CONTEXT_SOURCE_REPLAY_MISMATCH")
+    try:
+        with jobs._transaction() as db:
+            head = jobs._get(db, claim.tenant_id, run_id, "claim_head", claim.claim_id)
+            tag = jobs._get(
+                db,
+                claim.tenant_id,
+                run_id,
+                "tag_revision",
+                f'{claim.claim_id}:{head["tag_revision"]:010}',
+            )
+    except KeyError:
+        raise ValueError("CONTEXT_SOURCE_REPLAY_MISMATCH") from None
+
+    ref_hash = canonical_hash([dict(asdict(ref), verification_state="candidate") for ref in refs])
+    for prior in reversed(tag.get("report_level_review", ())):
+        prior_refs = prior.get("refs")
+        if (
+            not isinstance(prior_refs, list)
+            or canonical_hash([dict(ref, verification_state="candidate") for ref in prior_refs])
+            != ref_hash
+            or prior.get("source_receipt") != replay_receipt
+        ):
+            continue
+        receipt = prior.get("source_receipt")
+        if not isinstance(receipt, dict) or receipt.get("artifact_sha256") != canonical_hash(
+            {key: value for key, value in receipt.items() if key != "artifact_sha256"}
+        ):
+            raise ValueError("CONTEXT_SOURCE_REPLAY_MISMATCH")
+        paragraph = (
+            receipt
+            if isinstance(receipt.get("policy"), dict)
+            else (receipt.get("receipts") or {}).get("paragraph")
+        )
+        if paragraph is None and receipt.get("schema") == "context_source_attestation_v1":
+            from proofops.adapters.local.claim_source_verification import claim_source_policy
+
+            policy = claim_source_policy()
+            if receipt.get("policy_hashes", {}).get("paragraph") == canonical_hash(policy):
+                return receipt, policy, None
+            raise ValueError("CONTEXT_SOURCE_REPLAY_MISMATCH")
+        if not isinstance(paragraph, dict) or not isinstance(paragraph.get("policy"), dict):
+            raise ValueError("CONTEXT_SOURCE_REPLAY_MISMATCH")
+        if paragraph.get("artifact_sha256") != canonical_hash(
+            {key: value for key, value in paragraph.items() if key != "artifact_sha256"}
+        ):
+            raise ValueError("CONTEXT_SOURCE_REPLAY_MISMATCH")
+        policy = paragraph["policy"]
+        from proofops.adapters.local.claim_source_verification import claim_source_policy
+
+        if policy != run_policy and policy != claim_source_policy():
+            raise ValueError("CONTEXT_SOURCE_REPLAY_MISMATCH")
+        recorded_hash = paragraph.get("reader_policy_sha256")
+        if recorded_hash is not None and recorded_hash != canonical_hash(policy):
+            raise ValueError("CONTEXT_SOURCE_REPLAY_MISMATCH")
+        if paragraph is receipt and policy != claim_source_policy() and recorded_hash is None:
+            raise ValueError("CONTEXT_SOURCE_REPLAY_MISMATCH")
+        if receipt.get("schema") == "context_source_attestation_v1" and receipt.get(
+            "policy_hashes", {}
+        ).get("paragraph") != canonical_hash(policy):
+            raise ValueError("CONTEXT_SOURCE_REPLAY_MISMATCH")
+        return receipt, policy, recorded_hash
+    raise ValueError("CONTEXT_SOURCE_REPLAY_MISMATCH")
+
+
 class LocalTagStore:
     def __init__(self, store, uploads, parser):
         self.store, self.uploads, self.parser = store, uploads, parser
         self.claims = LocalClaimStore(store, uploads, parser)
 
-    def verify_context_sources(self, inputs, refs):
+    def verify_context_sources(self, inputs, refs, *, replay_receipt=None):
         """Source-only supplementary span attestations; never mutate frozen inputs."""
         from dataclasses import replace
 
-        from proofops.adapters.local.claim_source_verification import (
-            attest_claim_spans,
-            claim_source_policy,
-        )
+        from proofops.adapters.local.claim_source_policies import attest_claims
+        from proofops.adapters.local.claim_source_verification import claim_source_policy
         from proofops.adapters.local.table_span_source_verification import (
             attest_table_spans,
             table_span_policy,
@@ -227,9 +294,46 @@ class LocalTagStore:
         claim, graph = inputs.context.claim, inputs.original
         if not 1 <= len(refs) <= 6:
             raise ValueError("CONTEXT_SOURCE_LIMIT")
+        reader = None
+        reader_policy = None
+        stored_receipt = None
+        stored_reader_policy_hash = None
+        run_id = getattr(inputs, "run_id", None)
+        if run_id is not None:
+            if self.store is None:
+                raise ValueError("CONTEXT_SOURCE_REJECTED")
+            snapshot = self.store.snapshot(claim.tenant_id, run_id)
+            if snapshot is None:
+                raise ValueError("CONTEXT_SOURCE_REJECTED")
+            reader_policy = snapshot.get("claim_source_policy")
+            if replay_receipt is not None:
+                stored_receipt, reader_policy, stored_reader_policy_hash = _stored_context_reader(
+                    self.store, claim, run_id, refs, reader_policy, replay_receipt
+                )
+            if reader_policy is not None:
+                from proofops.adapters.local.claim_source_policies import claim_source_reader
+
+                reader = claim_source_reader(reader_policy)
+        elif replay_receipt is not None:
+            raise ValueError("CONTEXT_SOURCE_REPLAY_MISMATCH")
+        if reader is None:
+            from proofops.adapters.local import claim_source_verification
+
+            reader = claim_source_verification
         source = self.uploads.read_original(claim.tenant_id, claim.document_version_id)
         if sha256(source).hexdigest() != graph.source_sha256:
             raise ValueError("CONTEXT_SOURCE_MISMATCH")
+
+        def attest_paragraphs(selected):
+            return attest_claims(
+                reader=reader,
+                graph=graph,
+                source=source,
+                refs=selected,
+                tenant_id=claim.tenant_id,
+                cache=False,
+            )
+
         kinds = {block.source_id: block.kind for block in graph.blocks}
         if any(
             kinds.get(ref.source_id) not in {"paragraph", "table_cell", "table_row"} for ref in refs
@@ -244,11 +348,7 @@ class LocalTagStore:
         paragraphs = tuple(ref for ref in unresolved if kinds[ref.source_id] == "paragraph")
         tables = tuple(ref for ref in unresolved if kinds[ref.source_id] != "paragraph")
         if tables:
-            paragraph_receipt = (
-                attest_claim_spans(graph, source, paragraphs, tenant_id=claim.tenant_id)
-                if paragraphs
-                else None
-            )
+            paragraph_receipt = attest_paragraphs(paragraphs) if paragraphs else None
             table_receipt = attest_table_spans(graph, source, tables, tenant_id=claim.tenant_id)
             if (
                 (paragraph_receipt and len(paragraph_receipt["records"]) != len(paragraphs))
@@ -276,7 +376,11 @@ class LocalTagStore:
                 parse_manifest_id=graph.parse_manifest_id,
                 source_sha256=graph.source_sha256,
                 policy_hashes={
-                    "paragraph": canonical_hash(claim_source_policy()),
+                    "paragraph": canonical_hash(
+                        reader_policy
+                        if paragraphs and reader_policy is not None
+                        else claim_source_policy()
+                    ),
                     "table": canonical_hash(table_span_policy()),
                 },
                 receipts=receipts,
@@ -285,11 +389,19 @@ class LocalTagStore:
             receipt["artifact_sha256"] = canonical_hash(receipt)
         else:
             # Keep R38 paragraph-only receipts byte-for-byte compatible on replay.
-            receipt = attest_claim_spans(graph, source, unresolved, tenant_id=claim.tenant_id)
+            receipt = attest_paragraphs(unresolved)
+            if reader_policy is not None and reader_policy != claim_source_policy():
+                if stored_receipt is None or stored_reader_policy_hash is not None:
+                    receipt["reader_policy_sha256"] = canonical_hash(reader_policy)
+                    receipt["artifact_sha256"] = canonical_hash(
+                        {key: value for key, value in receipt.items() if key != "artifact_sha256"}
+                    )
         if len(receipt["records"]) != len(unresolved) or any(
             record["status"] != "verified" for record in receipt["records"]
         ):
             raise ValueError("CONTEXT_SOURCE_REJECTED")
+        if stored_receipt is not None and canonical_hash(receipt) != canonical_hash(stored_receipt):
+            raise ValueError("CONTEXT_SOURCE_REPLAY_MISMATCH")
         scoped = span_verified_graph(
             graph,
             (

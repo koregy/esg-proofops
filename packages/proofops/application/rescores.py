@@ -6,6 +6,7 @@ the existing pure engine remains the sole producer of grades and labels.
 """
 
 from dataclasses import asdict, dataclass
+from inspect import signature
 from typing import Literal
 
 from proofops.application.evidence.report_level import POLICIES as REPORT_LEVEL_POLICIES
@@ -275,7 +276,12 @@ class RescoreService:
                         raise RescoreRejected("RESCORE_SOURCE_REJECTED")
                     seen_report_elements.add(element_id)
                     try:
-                        graph, replayed = self.verify_context_sources(inputs, refs)
+                        replay = (
+                            {"replay_receipt": receipt["source_receipt"]}
+                            if "replay_receipt" in signature(self.verify_context_sources).parameters
+                            else {}
+                        )
+                        graph, replayed = self.verify_context_sources(inputs, refs, **replay)
                     except (KeyError, TypeError, ValueError) as exc:
                         raise RescoreRejected("RESCORE_SOURCE_REJECTED") from exc
                     if canonical_hash(replayed) != canonical_hash(receipt["source_receipt"]):

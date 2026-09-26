@@ -14,6 +14,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, replace
+from inspect import signature
 from typing import Any, Protocol
 from unicodedata import normalize
 from uuid import NAMESPACE_URL, uuid5
@@ -959,8 +960,15 @@ class ReviewService:
                             raise ReviewRejected("REPORT_LEVEL_SOURCE_REPLAY_MISMATCH", 409)
                         attestation_refs = prior_refs
                     try:
+                        replay = (
+                            {"replay_receipt": prior["source_receipt"]}
+                            if carried
+                            and "replay_receipt"
+                            in signature(self.verify_context_sources).parameters
+                            else {}
+                        )
                         graph, source_receipt = self.verify_context_sources(
-                            inputs, attestation_refs
+                            inputs, attestation_refs, **replay
                         )
                     except (ValueError, KeyError, TypeError) as exc:
                         raise ReviewRejected("REPORT_LEVEL_SOURCE_REJECTED") from exc
