@@ -27,6 +27,7 @@ MODEL_PROFILE = "upstage-compact-ids-frozen-unicode-v1"
 COVERAGE_PROFILE = "upstage-compact-coverage-unicode-v2"
 QUOTE_PROFILE = "upstage-compact-source-quotes-v3"
 QUOTE_V4_PROFILE = "upstage-compact-source-quotes-v4"
+QUOTE_V5_PROFILE = "upstage-compact-source-quotes-v5"
 
 # The only transport error codes that a locally suppressed, pre-dispatch outcome is
 # allowed to carry. This is an explicit allow-list, never an inference from timing:
@@ -174,7 +175,7 @@ class UpstageTaggingTransport:
             or settings.model_id != probe.model
             or settings.model_profile
             not in (
-                {MODEL_PROFILE, COVERAGE_PROFILE, QUOTE_PROFILE, QUOTE_V4_PROFILE}
+                {MODEL_PROFILE, COVERAGE_PROFILE, QUOTE_PROFILE, QUOTE_V4_PROFILE, QUOTE_V5_PROFILE}
                 if self.MODEL_PROFILE == MODEL_PROFILE
                 else {self.MODEL_PROFILE}
             )
@@ -191,6 +192,8 @@ class UpstageTaggingTransport:
             self.TRANSPORT_VERSION = "compact-source-quotes-v3"
         elif settings.model_profile == QUOTE_V4_PROFILE:
             self.TRANSPORT_VERSION = "compact-source-quotes-v4"
+        elif settings.model_profile == QUOTE_V5_PROFILE:
+            self.TRANSPORT_VERSION = "compact-source-quotes-v5"
         self._authorize = authorize
         self._probe, self._settings, self._tenant = probe, settings, tenant_id
         self._resume = resume
@@ -304,7 +307,12 @@ class UpstageTaggingTransport:
             or not isinstance(user.get("untrusted_document_data"), dict)
         ):
             raise ValueError("UPSTAGE_TAGGING_PACKET_MISMATCH")
-        if settings.model_profile in (COVERAGE_PROFILE, QUOTE_PROFILE, QUOTE_V4_PROFILE):
+        if settings.model_profile in (
+            COVERAGE_PROFILE,
+            QUOTE_PROFILE,
+            QUOTE_V4_PROFILE,
+            QUOTE_V5_PROFILE,
+        ):
             data = user["untrusted_document_data"]
             coverage = data.get("search_coverage", {})
             if (
@@ -322,8 +330,16 @@ class UpstageTaggingTransport:
                 summary[f"{prefix}_source_count"] = len(ids)
                 summary[f"{prefix}_source_ids_sha256"] = canonical_hash(ids)
             data["search_coverage"] = summary
+        data = user["untrusted_document_data"]
+        if settings.model_profile == QUOTE_V5_PROFILE and "claim_source_refs" in data:
+            data["claim_source_refs"] = [
+                {"quote": ref.quote, "page_num": ref.page_num}
+                for ref in (_source_ref_from_dict(raw) for raw in data["claim_source_refs"])
+            ]
         refs: dict[str, dict] = {}
-        for candidate in user["untrusted_document_data"].get("evidence_candidates", []):
+        for candidate in data.get("evidence_candidates", []):
+            if settings.model_profile == QUOTE_V5_PROFILE:
+                candidate.pop("source_id", None)
             identifiers = []
             for raw_ref in candidate.get("source_refs", []):
                 ref = asdict(_source_ref_from_dict(raw_ref))
@@ -331,13 +347,17 @@ class UpstageTaggingTransport:
                 refs[identifier] = ref
                 identifiers.append(identifier)
             candidate["source_refs"] = identifiers
-        user["untrusted_document_data"]["evidence_catalog"] = {
-            key: {field: ref[field] for field in ("quote", "page_num", "verification_state")}
-            for key, ref in refs.items()
+        catalog_fields = (
+            ("quote", "page_num")
+            if settings.model_profile == QUOTE_V5_PROFILE
+            else ("quote", "page_num", "verification_state")
+        )
+        data["evidence_catalog"] = {
+            key: {field: ref[field] for field in catalog_fields} for key, ref in refs.items()
         }
         schema = json.loads(settings.schema_json)
         schema["$defs"]["SourceRef"] = {"type": "string", "pattern": "^e[0-9]+$"}
-        if settings.model_profile in (QUOTE_PROFILE, QUOTE_V4_PROFILE):
+        if settings.model_profile in (QUOTE_PROFILE, QUOTE_V4_PROFILE, QUOTE_V5_PROFILE):
             schema["$defs"]["SourceRef"] = {
                 "type": "object",
                 "required": ["id", "quote"],
@@ -366,7 +386,7 @@ class UpstageTaggingTransport:
             "evidence_catalog IDs such as e0. Select IDs; never repeat or alter source text, "
             "coordinates, offsets or verification state. The server restores those exactly."
         )
-        if settings.model_profile in (QUOTE_PROFILE, QUOTE_V4_PROFILE):
+        if settings.model_profile in (QUOTE_PROFILE, QUOTE_V4_PROFILE, QUOTE_V5_PROFILE):
             instructions = (
                 "\nTransport contract compact-source-quotes-v3: each evidence_refs item is "
                 '{"id":"e0","quote":"exact source substring"}. Select an evidence_catalog '
@@ -380,7 +400,12 @@ class UpstageTaggingTransport:
                 "Exact quotation does not establish claim attribution or semantic sufficiency."
             )
         wire_system = system.replace(settings.schema_json, canonical_json(schema), 1) + instructions
-        if settings.model_profile in (COVERAGE_PROFILE, QUOTE_PROFILE, QUOTE_V4_PROFILE):
+        if settings.model_profile in (
+            COVERAGE_PROFILE,
+            QUOTE_PROFILE,
+            QUOTE_V4_PROFILE,
+            QUOTE_V5_PROFILE,
+        ):
             wire_system += (
                 "\nCoverage v2: omitted/unprocessed source counts and list hashes summarize "
                 "unseen identifiers retained by the server. Missing evidence remains unknown; "
@@ -390,7 +415,7 @@ class UpstageTaggingTransport:
         return wire_system, wire_user, refs, authorization
 
     def _restore_ref(self, selection, refs: dict[str, dict]) -> dict:
-        if self._settings.model_profile not in (QUOTE_PROFILE, QUOTE_V4_PROFILE):
+        if self._settings.model_profile not in (QUOTE_PROFILE, QUOTE_V4_PROFILE, QUOTE_V5_PROFILE):
             return refs[selection]
         if not isinstance(selection, dict) or set(selection) != {"id", "quote"}:
             raise ValueError("invalid source quote selection")
@@ -530,7 +555,7 @@ class UpstageTaggingTransport:
                     if not isinstance(selected, list):
                         raise ValueError("invalid references")
                     element["evidence_refs"] = [self._restore_ref(key, refs) for key in selected]
-                    if settings.model_profile == QUOTE_V4_PROFILE:
+                    if settings.model_profile in (QUOTE_V4_PROFILE, QUOTE_V5_PROFILE):
                         self._refine_g1_year(element)
                 expanded = canonical_json(payload)
             except (ValueError, KeyError, TypeError, AttributeError):

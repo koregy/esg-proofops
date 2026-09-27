@@ -97,6 +97,8 @@ def live_tagging_settings(
     preliminary_goal_role: bool = False,
     preliminary_actor_role: bool = False,
     preliminary_p2: bool = False,
+    compact_element_wire: bool = False,
+    position_context_order: bool = False,
     capacity_refresh: bool = False,
 ) -> dict:
     """Explicit bounded pilot config; grants are registered separately by main."""
@@ -120,6 +122,8 @@ def live_tagging_settings(
         or type(preliminary_goal_role) is not bool
         or type(preliminary_actor_role) is not bool
         or type(preliminary_p2) is not bool
+        or type(compact_element_wire) is not bool
+        or type(position_context_order) is not bool
         or type(capacity_refresh) is not bool
     ):
         raise ValueError("relation/preliminary-context stage must be explicit boolean")
@@ -135,6 +139,10 @@ def live_tagging_settings(
         not preliminary_table_role or preliminary_goal_role or preliminary_actor_role
     ):
         raise ValueError("preliminary P2 requires only preliminary table role")
+    if position_context_order and (
+        not preliminary_table_role or preliminary_goal_role or preliminary_actor_role
+    ):
+        raise ValueError("position context order requires only preliminary table role")
     if type(max_calls) is not int or not 6 <= max_calls <= 2000:
         raise ValueError("live tagging requires 6..2000 bounded calls")
     rubric = yaml.safe_load((ROOT / "config/rubric/elements.yaml").read_text())
@@ -204,7 +212,11 @@ def live_tagging_settings(
     )
     settings = {}
     if preliminary_p2:
-        preliminary_profile = "upstage-preliminary-source-quotes-table-role-v2-p2"
+        preliminary_profile = (
+            "upstage-preliminary-source-quotes-table-role-v2-p2-position-v1"
+            if position_context_order
+            else "upstage-preliminary-source-quotes-table-role-v2-p2"
+        )
         preliminary_prompt = P2_SYSTEM_PROMPT
     elif preliminary_actor_role:
         from proofops.application.tagging.preliminary import (
@@ -232,7 +244,11 @@ def live_tagging_settings(
             + GOAL_ROLE_SYSTEM_SUFFIX
         )
     elif preliminary_table_role:
-        preliminary_profile = "upstage-preliminary-source-quotes-table-role-v1"
+        preliminary_profile = (
+            "upstage-preliminary-source-quotes-table-role-v1-position-v1"
+            if position_context_order
+            else "upstage-preliminary-source-quotes-table-role-v1"
+        )
         preliminary_prompt = (
             SYSTEM_PROMPT + CONTEXT_SYSTEM_SUFFIX + TABLE_SYSTEM_SUFFIX + TABLE_ROLE_SYSTEM_SUFFIX
         )
@@ -255,7 +271,9 @@ def live_tagging_settings(
         ),
         (
             "tagging",
-            "upstage-compact-source-quotes-v4",
+            "upstage-compact-source-quotes-v5"
+            if compact_element_wire
+            else "upstage-compact-source-quotes-v4",
             element_prompt,
             (ROOT / "contracts/jsonschema/llm_tags.schema.json").read_text(),
             4096,
@@ -394,6 +412,8 @@ def apply_resume_metadata(args, saved: dict) -> None:
     args.preliminary_goal_role = bool(saved.get("preliminary_goal_role", False))
     args.preliminary_actor_role = bool(saved.get("preliminary_actor_role", False))
     args.preliminary_p2 = bool(saved.get("preliminary_p2", False))
+    args.compact_element_wire = bool(saved.get("compact_element_wire", False))
+    args.position_context_order = bool(saved.get("position_context_order", False))
     args.capacity_refresh = bool(saved.get("capacity_refresh", False))
     args.extraction_year_notation = bool(saved.get("extraction_year_notation", False))
     args.extraction_context = bool(saved.get("extraction_context", False))
@@ -604,6 +624,12 @@ def main():
         "into the receipt; quotes still resolve from the focal source only.",
     )
     parser.add_argument(
+        "--position-context-order",
+        action="store_true",
+        help="New-run opt-in: page/top-left/content context order for extraction "
+        "and table-role preliminary.",
+    )
+    parser.add_argument(
         "--ai-project-review",
         action="store_true",
         help="Opt-in, NEW-run only (never applies on --resume or an existing "
@@ -620,6 +646,11 @@ def main():
     parser.add_argument("--invoke", action="store_true")
     parser.add_argument("--live-tagging", action="store_true")
     parser.add_argument("--live-relations", action="store_true")
+    parser.add_argument(
+        "--compact-element-wire",
+        action="store_true",
+        help="Opt-in v5 element wire; pins a distinct model/cache identity for new runs.",
+    )
     parser.add_argument(
         "--preliminary-context",
         action="store_true",
@@ -770,6 +801,8 @@ def main():
         requested_preliminary_goal_role = args.preliminary_goal_role
         requested_preliminary_actor_role = args.preliminary_actor_role
         requested_preliminary_p2 = args.preliminary_p2
+        requested_compact_element_wire = args.compact_element_wire
+        requested_position_order = args.position_context_order
         requested_capacity_refresh = getattr(args, "capacity_refresh", False)
         requested_render_resolution = args.claim_span_render_resolution
         requested_bullet_spacing = args.claim_span_bullet_spacing
@@ -802,6 +835,10 @@ def main():
             parser.error("--resume cannot add preliminary actor role; create a new run")
         if requested_preliminary_p2 and not args.preliminary_p2:
             parser.error("--resume cannot add preliminary P2; create a new run")
+        if requested_compact_element_wire and not args.compact_element_wire:
+            parser.error("--resume cannot add compact element wire; create a new run")
+        if requested_position_order and not args.position_context_order:
+            parser.error("--resume cannot add position context order; create a new run")
         if requested_capacity_refresh and not args.capacity_refresh:
             parser.error("--resume cannot add capacity refresh; create a new run")
         if requested_render_resolution and not args.claim_span_render_resolution:
@@ -819,6 +856,8 @@ def main():
         parser.error("--pdf, --report-year, --period-start and --period-end are required")
     if args.live_relations and not args.live_tagging:
         parser.error("--live-relations requires --live-tagging")
+    if args.compact_element_wire and not args.live_tagging:
+        parser.error("--compact-element-wire requires --live-tagging")
     if args.preliminary_context and not args.live_tagging:
         parser.error("--preliminary-context requires --live-tagging")
     if args.preliminary_table_context and not args.preliminary_context:
@@ -831,6 +870,12 @@ def main():
         not args.preliminary_table_role or args.preliminary_goal_role or args.preliminary_actor_role
     ):
         parser.error("--preliminary-p2 requires only --preliminary-table-role")
+    if args.position_context_order and not args.extraction_context:
+        parser.error("--position-context-order requires --extraction-context")
+    if args.position_context_order and args.live_tagging and not args.preliminary_table_role:
+        parser.error("--position-context-order with live tagging requires --preliminary-table-role")
+    if args.position_context_order and (args.preliminary_goal_role or args.preliminary_actor_role):
+        parser.error("--position-context-order requires only preliminary table role")
     if args.claim_span_render_resolution and not args.verify_claim_spans:
         parser.error("--claim-span-render-resolution requires --verify-claim-spans")
     if args.claim_span_bullet_spacing and not args.claim_span_render_resolution:
@@ -915,6 +960,7 @@ def main():
         if (
             args.extraction_year_notation
             or args.extraction_context
+            or args.position_context_order
             or args.extraction_source_ids
             or args.extraction_content_bounds
         ):
@@ -930,6 +976,7 @@ def main():
                     assertion_prompt=args.extraction_assertion_prompt,
                     complete_selection=args.extraction_complete_selection,
                     extraction_content_bounds=args.extraction_content_bounds,
+                    position_order=args.position_context_order,
                 )
             )
         else:
@@ -948,6 +995,10 @@ def main():
             settings["extraction_year_notation"] = True
         if args.extraction_context:
             settings["extraction_context"] = True
+        if args.position_context_order:
+            from proofops.application.tagging.preliminary import CONTEXT_POSITION_ORDER
+
+            settings["position_context_order"] = CONTEXT_POSITION_ORDER
         if args.extraction_table_context:
             settings["extraction_table_context"] = True
         if args.extraction_source_ids:
@@ -972,6 +1023,8 @@ def main():
                     preliminary_goal_role=args.preliminary_goal_role,
                     preliminary_actor_role=args.preliminary_actor_role,
                     preliminary_p2=args.preliminary_p2,
+                    compact_element_wire=args.compact_element_wire,
+                    position_context_order=args.position_context_order,
                     capacity_refresh=getattr(args, "capacity_refresh", False),
                 )
             )
@@ -1270,6 +1323,12 @@ def main():
             manifest["preliminary_actor_role"] = True
         if args.preliminary_p2:
             manifest["preliminary_p2"] = True
+        if args.compact_element_wire:
+            manifest["compact_element_wire"] = True
+        if args.position_context_order:
+            from proofops.application.tagging.preliminary import CONTEXT_POSITION_ORDER
+
+            manifest["position_context_order"] = CONTEXT_POSITION_ORDER
         if args.verify_selected_cells:
             manifest["verify_selected_cells"] = True
         if args.claim_span_render_resolution:
@@ -1324,6 +1383,15 @@ def main():
             raise ValueError("pilot preliminary goal role policy changed; create a new state dir")
         if manifest.get("preliminary_p2", False) != args.preliminary_p2:
             raise ValueError("pilot preliminary P2 policy changed; create a new state dir")
+        if manifest.get("compact_element_wire", False) != args.compact_element_wire:
+            raise ValueError("pilot element wire policy changed; create a new state dir")
+        if args.position_context_order:
+            from proofops.application.tagging.preliminary import CONTEXT_POSITION_ORDER
+
+            if manifest.get("position_context_order") != CONTEXT_POSITION_ORDER:
+                raise ValueError("pilot context order policy changed; create a new state dir")
+        elif manifest.get("position_context_order") is not None:
+            raise ValueError("pilot context order policy changed; create a new state dir")
         if manifest.get("live_tagging", False) != args.live_tagging or (
             args.live_tagging and manifest.get("tagging_max_calls") != args.tagging_max_calls
         ):

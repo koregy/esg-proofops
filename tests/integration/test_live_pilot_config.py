@@ -41,6 +41,37 @@ def test_live_pilot_settings_have_independent_real_profiles():
     assert set(result) == {"preliminary_settings", "tagging_settings", "input_reservation_policy"}
 
 
+def test_compact_element_wire_is_explicit_and_pinned_on_resume():
+    from evaluation.local_upstage_pilot import apply_resume_metadata
+    from tests.unit.test_extraction_source_id_wiring import _args
+
+    old = live_tagging_settings(12)["tagging_settings"]
+    new = live_tagging_settings(12, compact_element_wire=True)["tagging_settings"]
+    assert old["model_profile"] == "upstage-compact-source-quotes-v4"
+    assert new["model_profile"] == "upstage-compact-source-quotes-v5"
+    assert old["system_prompt"] == new["system_prompt"]
+    args = _args()
+    apply_resume_metadata(args, {"source_path": "/tmp/example.pdf", "compact_element_wire": True})
+    assert args.compact_element_wire is True
+
+
+def test_resume_cannot_add_compact_element_wire(tmp_path, monkeypatch, capsys):
+    import json
+    import sys
+
+    from evaluation import local_upstage_pilot as pilot
+
+    state = tmp_path / "legacy"
+    state.mkdir()
+    (state / "pilot.json").write_text(json.dumps({"source_path": "/tmp/example.pdf"}))
+    monkeypatch.setattr(
+        sys, "argv", ["pilot", "--resume", "--state", str(state), "--compact-element-wire"]
+    )
+    with pytest.raises(SystemExit):
+        pilot.main()
+    assert "--resume cannot add compact element wire" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize("calls", [True, 0, 5, 2001, 12.5])
 def test_live_pilot_rejects_invalid_call_limit(calls):
     with pytest.raises(ValueError):

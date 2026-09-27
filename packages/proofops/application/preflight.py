@@ -541,6 +541,7 @@ def check_local_upstage_tagger(
             "upstage-compact-coverage-unicode-v2",
             "upstage-compact-source-quotes-v3",
             "upstage-compact-source-quotes-v4",
+            "upstage-compact-source-quotes-v5",
         }
         or (
             settings.model_profile == "upstage-preliminary-source-quotes-v1"
@@ -574,6 +575,19 @@ def check_local_upstage_tagger(
         )
         or (
             settings.model_profile == "upstage-preliminary-source-quotes-table-role-v2-p2"
+            and settings.system_prompt == P2_SYSTEM_PROMPT
+        )
+        or (
+            settings.model_profile == "upstage-preliminary-source-quotes-table-role-v1-position-v1"
+            and settings.system_prompt
+            == PRELIMINARY_SYSTEM_PROMPT
+            + CONTEXT_SYSTEM_SUFFIX
+            + TABLE_SYSTEM_SUFFIX
+            + TABLE_ROLE_SYSTEM_SUFFIX
+        )
+        or (
+            settings.model_profile
+            == "upstage-preliminary-source-quotes-table-role-v2-p2-position-v1"
             and settings.system_prompt == P2_SYSTEM_PROMPT
         )
         or (

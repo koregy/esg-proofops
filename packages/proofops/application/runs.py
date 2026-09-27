@@ -142,6 +142,7 @@ class RunService:
         raster_runtime_binding_id: str | None = None,
         raster_policy=None,
         input_reservation_policy=None,
+        position_context_order=None,
         budget_limits=None,
         allowed_regions=(),
         build_result=None,
@@ -205,6 +206,20 @@ class RunService:
         self.claim_source_policy = _detach(claim_source_policy)
         self.tagging_settings, self.tagging_mode = tagging_settings, tagging_mode
         self.preliminary_settings = preliminary_settings
+        if position_context_order is not None:
+            from proofops.application.tagging.preliminary import CONTEXT_POSITION_ORDER
+
+            if position_context_order != CONTEXT_POSITION_ORDER:
+                raise ValueError("invalid context order policy")
+        if preliminary_settings is not None and (position_context_order is not None) != (
+            preliminary_settings.model_profile
+            in {
+                "upstage-preliminary-source-quotes-table-role-v1-position-v1",
+                "upstage-preliminary-source-quotes-table-role-v2-p2-position-v1",
+            }
+        ):
+            raise ValueError("context order profile mismatch")
+        self.position_context_order = position_context_order
         self.relation_settings = relation_settings
         if (raster_runtime_binding_id is None) != (raster_policy is None):
             raise ValueError("complete raster configuration required")
@@ -385,7 +400,9 @@ class RunService:
                 # below, so this set only names the accepted profiles.
                 "upstage-preliminary-source-quotes-table-v1",
                 "upstage-preliminary-source-quotes-table-role-v1",
+                "upstage-preliminary-source-quotes-table-role-v1-position-v1",
                 "upstage-preliminary-source-quotes-table-role-v2-p2",
+                "upstage-preliminary-source-quotes-table-role-v2-p2-position-v1",
                 # R34 opt-in goal-role profile; requires table-role and its deps.
                 "upstage-preliminary-source-quotes-goal-role-v1",
                 "upstage-preliminary-source-quotes-actor-role-v1",
@@ -395,6 +412,7 @@ class RunService:
                 "upstage-compact-coverage-unicode-v2",
                 "upstage-compact-source-quotes-v3",
                 "upstage-compact-source-quotes-v4",
+                "upstage-compact-source-quotes-v5",
             }:
                 raise RunRejected("CONFIG_GATE_BLOCKED")
             if relation is not None and (
@@ -545,6 +563,8 @@ class RunService:
                     relation_runtime_artifact_hash=artifact_sha256(relation_runtime),
                 )
         snapshot.update(raster_snapshot)
+        if self.position_context_order is not None:
+            snapshot["position_context_order"] = dict(self.position_context_order)
         return self.store.create(auth, body, key, snapshot, self.budget_limits, now=now)
 
     def get(self, tenant_id, run_id):

@@ -181,6 +181,11 @@ def build_composition(
             assertion_prompt_opt_in = settings.get("extraction_assertion_prompt") is True
             complete_selection_opt_in = settings.get("extraction_complete_selection") is True
             content_bounds_opt_in = settings.get("extraction_content_bounds") is True
+            from proofops.application.tagging.preliminary import CONTEXT_POSITION_ORDER
+
+            position_order = settings.get("position_context_order") == CONTEXT_POSITION_ORDER
+            if settings.get("position_context_order") is not None and not position_order:
+                raise ValueError("EXTRACTION_CONTEXT_ORDER_MISMATCH")
             if year_notation or context_opt_in or source_ids_opt_in:
                 # New-run opt-in only: the frozen settings must carry the exact
                 # option-combination profile hash, otherwise fail closed.
@@ -194,6 +199,7 @@ def build_composition(
                         assertion_prompt=assertion_prompt_opt_in,
                         complete_selection=complete_selection_opt_in,
                         extraction_content_bounds=content_bounds_opt_in,
+                        position_order=position_order,
                     )
                 ):
                     raise ValueError("EXTRACTION_PROFILE_MISMATCH")
@@ -208,6 +214,7 @@ def build_composition(
                     extraction_assertion_prompt=assertion_prompt_opt_in,
                     extraction_complete_selection=complete_selection_opt_in,
                     extraction_content_bounds=content_bounds_opt_in,
+                    position_order=position_order,
                 )
             elif (
                 table_context_opt_in

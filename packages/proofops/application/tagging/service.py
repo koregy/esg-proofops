@@ -45,6 +45,27 @@ from proofops.domain.provenance import canonical_hash
 from proofops.domain.rulepacks import RulePackSnapshot, canonical_json
 from proofops.domain.values import LlmTags, SourceRef, _require_uuid, llm_tags_from_dict
 
+_SAFE_INPUT_COUNT_CODES = frozenset(
+    {
+        "PROBE_REQUEST_TOO_LARGE",
+        "PRICE_RECHECK_REQUIRED",
+        "INVALID_PROBE_REQUEST",
+        "TAGGING_RECOVERY_ALLOWANCE_EXHAUSTED",
+        "UPSTAGE_TAGGING_REQUEST_INVALID",
+        "UPSTAGE_TAGGING_CLASSIFICATION_REQUIRED",
+        "UPSTAGE_TAGGING_CLASSIFICATION_INVALID",
+        "UPSTAGE_TAGGING_PACKET_MISMATCH",
+        "UPSTAGE_TAGGING_COVERAGE_INVALID",
+        "UPSTAGE_TAGGING_ELEMENTS_REQUIRED",
+        "LIVE_TAGGING_SETTINGS_MISMATCH",
+        "LIVE_TAGGING_PACKET_NOT_AUTHORIZED",
+        "LIVE_TAGGING_POLICY_MISMATCH",
+        "LIVE_TAGGING_POLICY_NOT_AUTHORIZED",
+        "LIVE_TAGGING_AUTHORIZATION_REVOKED",
+        "LIVE_TAGGING_AUTHORIZATION_CHANGED",
+    }
+)
+
 
 @dataclass(frozen=True, slots=True)
 class TaggingSettings:
@@ -144,6 +165,7 @@ class TagRun:
     product_variant: bool = False
     recovered: bool = False
     provider_response_json: str | None = None
+    diagnostic_detail: str | None = None
 
     @property
     def replicate_id(self) -> int:
@@ -153,6 +175,8 @@ class TagRun:
     def semantic_hash(self) -> str:
         data = asdict(self)
         data.pop("recovered")
+        if data["diagnostic_detail"] is None:
+            data.pop("diagnostic_detail")
         return canonical_hash(data)
 
 
@@ -411,10 +435,15 @@ def tag_replicates(
                         if count_input_tokens is not None
                         else token_counter(rendered_system + user_json),
                     )
-                except (ValueError, KeyError, TypeError):
+                except (ValueError, KeyError, TypeError) as error:
+                    code = str(error)
                     runs.append(
                         replace(
-                            run, status="invalid_request", errors=("TAGGING_INPUT_COUNT_INVALID",)
+                            run,
+                            status="invalid_request",
+                            errors=("TAGGING_INPUT_COUNT_INVALID",),
+                            diagnostic_detail=type(error).__name__
+                            + (f": {code}" if code in _SAFE_INPUT_COUNT_CODES else ""),
                         )
                     )
                     continue

@@ -34,6 +34,7 @@ from proofops.adapters.local.upstage import UpstageProbe
 from proofops.application.preflight import Preflight
 from proofops.application.tagging.preliminary import (
     ACTOR_ROLE_SYSTEM_SUFFIX,
+    CONTEXT_POSITION_ORDER,
     CONTEXT_SCHEMA,
     CONTEXT_SYSTEM_SUFFIX,
     GOAL_ROLE_SYSTEM_SUFFIX,
@@ -57,8 +58,10 @@ CONTEXT_MODEL_PROFILE = "upstage-preliminary-source-quotes-context-v1"
 TABLE_MODEL_PROFILE = "upstage-preliminary-source-quotes-table-v1"
 # R16: same TABLE wire schema and same validator; only the pinned prompt differs.
 TABLE_ROLE_MODEL_PROFILE = "upstage-preliminary-source-quotes-table-role-v1"
+POSITION_TABLE_ROLE_MODEL_PROFILE = "upstage-preliminary-source-quotes-table-role-v1-position-v1"
 P1_MODEL_PROFILE = "upstage-preliminary-source-quotes-table-role-v2-p1"
 P2_MODEL_PROFILE = "upstage-preliminary-source-quotes-table-role-v2-p2"
+POSITION_P2_MODEL_PROFILE = "upstage-preliminary-source-quotes-table-role-v2-p2-position-v1"
 # R34: same TABLE wire schema and same TABLE validator; adds GOAL_ROLE_SYSTEM_SUFFIX
 # after TABLE_ROLE_SYSTEM_SUFFIX so the goal-role prompt is a strict extension of
 # the table-role prompt. Requires preliminary_table_role=True and its dependencies.
@@ -69,8 +72,10 @@ TRANSPORT_VERSION = "preliminary-source-quotes-v1"
 CONTEXT_TRANSPORT_VERSION = "preliminary-source-quotes-context-v1"
 TABLE_TRANSPORT_VERSION = "preliminary-source-quotes-table-v1"
 TABLE_ROLE_TRANSPORT_VERSION = "preliminary-source-quotes-table-role-v1"
+POSITION_TABLE_ROLE_TRANSPORT_VERSION = "preliminary-source-quotes-table-role-v1-position-v1"
 P1_TRANSPORT_VERSION = "preliminary-source-quotes-table-role-v2-p1"
 P2_TRANSPORT_VERSION = "preliminary-source-quotes-table-role-v2-p2"
+POSITION_P2_TRANSPORT_VERSION = "preliminary-source-quotes-table-role-v2-p2-position-v1"
 # New transport version for replay separation: a stored goal-role receipt can never
 # be replayed as a table-role response and vice versa.
 GOAL_ROLE_TRANSPORT_VERSION = "preliminary-source-quotes-goal-role-v1"
@@ -156,7 +161,7 @@ class UpstagePreliminaryTransport(UpstageTaggingTransport):
         resume=None,
     ):
         _require_uuid("tenant_id", tenant_id)
-        if settings.model_profile == P2_MODEL_PROFILE:
+        if settings.model_profile in (P2_MODEL_PROFILE, POSITION_P2_MODEL_PROFILE):
             expected_prompt = P2_SYSTEM_PROMPT
         elif settings.model_profile == P1_MODEL_PROFILE:
             expected_prompt = P1_SYSTEM_PROMPT
@@ -166,7 +171,10 @@ class UpstagePreliminaryTransport(UpstageTaggingTransport):
             expected_prompt = ACTOR_ROLE_SYSTEM_PROMPT
         elif settings.model_profile == GOAL_ROLE_MODEL_PROFILE:
             expected_prompt = GOAL_ROLE_SYSTEM_PROMPT
-        elif settings.model_profile == TABLE_ROLE_MODEL_PROFILE:
+        elif settings.model_profile in (
+            TABLE_ROLE_MODEL_PROFILE,
+            POSITION_TABLE_ROLE_MODEL_PROFILE,
+        ):
             expected_prompt = TABLE_ROLE_SYSTEM_PROMPT
         elif settings.model_profile == TABLE_MODEL_PROFILE:
             expected_prompt = TABLE_SYSTEM_PROMPT
@@ -189,7 +197,11 @@ class UpstagePreliminaryTransport(UpstageTaggingTransport):
             raise ValueError("UPSTAGE_TAGGING_AUTHORIZER_REQUIRED")
         if resume is not None and not isinstance(resume, TransportResume):
             raise ValueError("UPSTAGE_TAGGING_RESUME_INVALID")
-        if settings.model_profile == P2_MODEL_PROFILE:
+        if settings.model_profile == POSITION_P2_MODEL_PROFILE:
+            self.TRANSPORT_VERSION = POSITION_P2_TRANSPORT_VERSION
+        elif settings.model_profile == POSITION_TABLE_ROLE_MODEL_PROFILE:
+            self.TRANSPORT_VERSION = POSITION_TABLE_ROLE_TRANSPORT_VERSION
+        elif settings.model_profile == P2_MODEL_PROFILE:
             self.TRANSPORT_VERSION = P2_TRANSPORT_VERSION
         elif settings.model_profile == P1_MODEL_PROFILE:
             self.TRANSPORT_VERSION = P1_TRANSPORT_VERSION
@@ -253,14 +265,21 @@ class UpstagePreliminaryTransport(UpstageTaggingTransport):
         actor_role = settings.model_profile == ACTOR_ROLE_MODEL_PROFILE or actor_role_v2
         goal_role = settings.model_profile == GOAL_ROLE_MODEL_PROFILE or actor_role
         role_table = (
-            settings.model_profile in (TABLE_ROLE_MODEL_PROFILE, P1_MODEL_PROFILE, P2_MODEL_PROFILE)
+            settings.model_profile
+            in (
+                TABLE_ROLE_MODEL_PROFILE,
+                POSITION_TABLE_ROLE_MODEL_PROFILE,
+                P1_MODEL_PROFILE,
+                P2_MODEL_PROFILE,
+                POSITION_P2_MODEL_PROFILE,
+            )
             or goal_role
         )
         is_table = settings.model_profile == TABLE_MODEL_PROFILE or role_table
         is_context = settings.model_profile == CONTEXT_MODEL_PROFILE or is_table
         if is_table:
             expected_schema = TABLE_SCHEMA
-            if settings.model_profile == P2_MODEL_PROFILE:
+            if settings.model_profile in (P2_MODEL_PROFILE, POSITION_P2_MODEL_PROFILE):
                 expected_prompt = P2_SYSTEM_PROMPT
             elif settings.model_profile == P1_MODEL_PROFILE:
                 expected_prompt = P1_SYSTEM_PROMPT
@@ -274,7 +293,12 @@ class UpstagePreliminaryTransport(UpstageTaggingTransport):
                 expected_prompt = TABLE_ROLE_SYSTEM_PROMPT
             else:
                 expected_prompt = TABLE_SYSTEM_PROMPT
-            expected_keys = _TABLE_ENVELOPE_KEYS
+            expected_keys = _TABLE_ENVELOPE_KEYS | (
+                {"context_ordering"}
+                if settings.model_profile
+                in (POSITION_P2_MODEL_PROFILE, POSITION_TABLE_ROLE_MODEL_PROFILE)
+                else set()
+            )
         elif is_context:
             expected_schema, expected_prompt = CONTEXT_SCHEMA, CONTEXT_SYSTEM_PROMPT
             expected_keys = _CONTEXT_ENVELOPE_KEYS
@@ -300,6 +324,11 @@ class UpstagePreliminaryTransport(UpstageTaggingTransport):
             raise ValueError("UPSTAGE_PRELIMINARY_PACKET_INVALID")
         if user.get("prompt_sha256") != canonical_hash(expected_prompt):
             raise ValueError("UPSTAGE_PRELIMINARY_PROMPT_INVALID")
+        if (
+            settings.model_profile in (POSITION_P2_MODEL_PROFILE, POSITION_TABLE_ROLE_MODEL_PROFILE)
+            and user.get("context_ordering") != CONTEXT_POSITION_ORDER
+        ):
+            raise ValueError("UPSTAGE_PRELIMINARY_CONTEXT_POLICY_INVALID")
         if user.get("tenant_id") != request["tenant_id"] or user.get("claim_id") != request.get(
             "claim_id"
         ):

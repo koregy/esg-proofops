@@ -32,6 +32,7 @@ _SETTINGS_FIELDS = frozenset(
         "extraction_assertion_prompt",
         "extraction_complete_selection",
         "extraction_content_bounds",
+        "position_context_order",
         "tagging_settings",
         "preliminary_settings",
         "relation_settings",
@@ -321,6 +322,26 @@ def load_local_runtime(env: Mapping[str, str]) -> dict[str, Any]:
         or settings.get("extraction_assertion_prompt") is not True
     ):
         raise _invalid()
+    if "position_context_order" in settings:
+        from proofops.application.tagging.preliminary import CONTEXT_POSITION_ORDER
+
+        if (
+            settings["position_context_order"] != CONTEXT_POSITION_ORDER
+            or settings.get("extraction_context") is not True
+            or (
+                tagging_mode == "upstage_local"
+                and (
+                    not isinstance(settings.get("preliminary_settings"), dict)
+                    or settings["preliminary_settings"].get("model_profile")
+                    not in {
+                        "upstage-preliminary-source-quotes-table-role-v1-position-v1",
+                        "upstage-preliminary-source-quotes-table-role-v2-p2-position-v1",
+                    }
+                )
+            )
+        ):
+            raise _invalid()
+        runtime["position_context_order"] = CONTEXT_POSITION_ORDER
     if "budget_limits" in settings:
         runtime["budget_limits"] = _budget(settings["budget_limits"])
     if extraction_mode:

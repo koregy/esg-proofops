@@ -324,9 +324,29 @@ def _center(bbox):
 
 
 _ROLE_PRIORITY = {"parent_paragraph": 0, "heading": 1, "nearby": 2}
+CONTEXT_POSITION_ORDER = {
+    "version": "document-position-v1",
+    "sha256": canonical_hash(
+        ["page_num", "canonical_bbox_top", "canonical_bbox_left", "raw_text", "kind"]
+    ),
+}
 
 
-def _context_candidates(graph: CanonicalDocumentGraph, sources: tuple[SourceRef, ...]) -> list:
+def _position_key(block: CanonicalBlock) -> tuple:
+    # Canonical boxes use a top-left origin. Missing geometry sorts last on its page.
+    return (
+        block.page_num,
+        block.bbox is None,
+        block.bbox[1] if block.bbox else 0,
+        block.bbox[0] if block.bbox else 0,
+        block.raw_text,
+        block.kind,
+    )
+
+
+def _context_candidates(
+    graph: CanonicalDocumentGraph, sources: tuple[SourceRef, ...], *, position_order: bool = False
+) -> list:
     """Bounded, source-bound interpretation-only blocks for the claim's own sources.
 
     Never returns a claim-eligible ref; callers keep context strictly outside
@@ -401,13 +421,22 @@ def _context_candidates(graph: CanonicalDocumentGraph, sources: tuple[SourceRef,
                 and b.raw_text.strip()
                 and b.bbox is not None
             ),
-            key=lambda b: (distance(b), tuple(b.bbox), b.raw_text, b.source_id),
+            key=lambda b: (
+                (distance(b), tuple(b.bbox), b.raw_text, b.source_id)
+                if not position_order
+                else (distance(b), _position_key(b))
+            ),
         )
         for block in nearby[:2]:
             candidates.setdefault(block.source_id, (block, "nearby"))
-    # Deterministic order: most useful role first, then stable by source_id.
+    # Keep role priority for bounded selection; opt-in ties use document position.
     ordered = sorted(
-        candidates.values(), key=lambda pair: (_ROLE_PRIORITY[pair[1]], pair[0].source_id)
+        candidates.values(),
+        key=(
+            (lambda pair: (_ROLE_PRIORITY[pair[1]], _position_key(pair[0])))
+            if position_order
+            else (lambda pair: (_ROLE_PRIORITY[pair[1]], pair[0].source_id))
+        ),
     )
     return ordered
 
@@ -437,7 +466,10 @@ def _bounded_context_blocks(
     *,
     max_context_chars: int,
     max_context_blocks: int,
+    position_order: bool = False,
 ) -> tuple[list[dict], list[str]]:
+    if type(position_order) is not bool:
+        raise DomainValidationError("preliminary context order invalid")
     if (
         type(max_context_chars) is not int
         or not 1 <= max_context_chars <= 20000
@@ -445,7 +477,7 @@ def _bounded_context_blocks(
         or not 0 <= max_context_blocks <= 20
     ):
         raise DomainValidationError("preliminary context bounds invalid")
-    candidates = _context_candidates(graph, sources)
+    candidates = _context_candidates(graph, sources, position_order=position_order)
     chosen: list[tuple[CanonicalBlock, str]] = []
     used, omitted = 0, []
     for block, role in candidates[:max_context_blocks]:
@@ -456,6 +488,8 @@ def _bounded_context_blocks(
         chosen.append((block, role))
         used += size
     omitted.extend(block.source_id for block, _ in candidates[max_context_blocks:])
+    if position_order:
+        chosen.sort(key=lambda pair: _position_key(pair[0]))
     blocks = [_context_entry(i, block, role) for i, (block, role) in enumerate(chosen)]
     return blocks, omitted
 
@@ -468,6 +502,7 @@ def preliminary_request(
     include_context: bool = False,
     max_context_chars: int = 2000,
     max_context_blocks: int = 4,
+    position_order: bool = False,
 ) -> dict:
     """Trusted preliminary envelope; ``include_context`` is opt-in and additive.
 
@@ -478,6 +513,8 @@ def preliminary_request(
     distinguishable; context entries are never appended into ``sources`` and
     can never be selected by a dimension's ``source_index``.
     """
+    if type(position_order) is not bool or (position_order and not include_context):
+        raise DomainValidationError("preliminary context order requires context")
     sources = _sources(claim, graph, tenant_id)
     envelope = dict(
         schema=SCHEMA,
@@ -497,6 +534,7 @@ def preliminary_request(
         sources,
         max_context_chars=max_context_chars,
         max_context_blocks=max_context_blocks,
+        position_order=position_order,
     )
     envelope["schema"] = CONTEXT_SCHEMA
     # The actual rendered prompt sent to the model includes the additive
@@ -511,6 +549,8 @@ def preliminary_request(
         max_context_blocks=max_context_blocks,
         whole_blocks_only=True,
     )
+    if position_order:
+        envelope["context_ordering"] = CONTEXT_POSITION_ORDER
     return envelope
 
 
@@ -560,6 +600,7 @@ def preliminary_table_request(
     period_role: bool = False,
     p1: bool = False,
     p2: bool = False,
+    position_order: bool = False,
 ) -> dict:
     """Opt-in ``TABLE_SCHEMA`` envelope: context plus verified table axis sources.
 
@@ -614,6 +655,7 @@ def preliminary_table_request(
         include_context=True,
         max_context_chars=max_context_chars,
         max_context_blocks=max_context_blocks,
+        position_order=position_order,
     )
     sources = _sources(claim, graph, tenant_id)
     table = table_structural_sources(
@@ -640,6 +682,9 @@ def preliminary_table_request(
         _table_context_entry(len(kept) + index, item)
         for index, item in enumerate(table.context_only)
     )
+    if position_order:
+        by_id = {block.source_id: block for block in graph.blocks}
+        kept.sort(key=lambda entry: _position_key(by_id[entry["source_id"]]))
     data["context_blocks"] = [{**block, "context_index": index} for index, block in enumerate(kept)]
     data["omitted_source_ids"] = [
         *data["omitted_source_ids"],
@@ -649,6 +694,8 @@ def preliminary_table_request(
             if source_id not in data["omitted_source_ids"]
         ),
     ]
+    if position_order:
+        data["omitted_source_ids"].sort(key=lambda source_id: _position_key(by_id[source_id]))
     envelope["schema"] = TABLE_SCHEMA
     envelope["prompt_sha256"] = canonical_hash(
         P1_SYSTEM_PROMPT

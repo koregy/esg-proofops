@@ -255,11 +255,30 @@ class LiveTaggingRuntime:
 
     def preliminary(self, claim, graph):
         profile = self.preliminary_settings.model_profile
-        p2 = profile == "upstage-preliminary-source-quotes-table-role-v2-p2"
+        from proofops.application.tagging.preliminary import CONTEXT_POSITION_ORDER
+
+        position_order = profile in (
+            "upstage-preliminary-source-quotes-table-role-v1-position-v1",
+            "upstage-preliminary-source-quotes-table-role-v2-p2-position-v1",
+        )
+        if position_order and self.snapshot.get("position_context_order") != CONTEXT_POSITION_ORDER:
+            raise ValueError("PRELIMINARY_CONTEXT_ORDER_MISMATCH")
+        p2 = profile in (
+            "upstage-preliminary-source-quotes-table-role-v2-p2",
+            "upstage-preliminary-source-quotes-table-role-v2-p2-position-v1",
+        )
         actor_role_v2 = profile == "upstage-preliminary-source-quotes-actor-role-v2"
         actor_role = profile == "upstage-preliminary-source-quotes-actor-role-v1" or actor_role_v2
         goal_role = profile == "upstage-preliminary-source-quotes-goal-role-v1" or actor_role
-        role_table = profile == "upstage-preliminary-source-quotes-table-role-v1" or goal_role or p2
+        role_table = (
+            profile
+            in (
+                "upstage-preliminary-source-quotes-table-role-v1",
+                "upstage-preliminary-source-quotes-table-role-v1-position-v1",
+            )
+            or goal_role
+            or p2
+        )
         table = profile == "upstage-preliminary-source-quotes-table-v1" or role_table
         if table:
             packet = preliminary_table_request(
@@ -271,6 +290,7 @@ class LiveTaggingRuntime:
                 actor_role=actor_role,
                 period_role=actor_role_v2,
                 p2=p2,
+                position_order=position_order,
             )
         else:
             packet = preliminary_request(

@@ -368,6 +368,7 @@ def _profile_with_options(
     assertion_prompt: bool = False,
     complete_selection: bool = False,
     extraction_content_bounds: bool = False,
+    position_order: bool = False,
 ) -> ExtractionProfile:
     """Versioned extraction profile for an explicit option combination.
 
@@ -398,10 +399,13 @@ def _profile_with_options(
             assertion_prompt,
             complete_selection,
             extraction_content_bounds,
+            position_order,
         )
     ):
         raise ValueError("UPSTAGE_PROFILE_OPTION_INVALID")
     if extraction_table_context and not extraction_context:
+        raise ValueError("UPSTAGE_PROFILE_OPTION_INVALID")
+    if position_order and not extraction_context:
         raise ValueError("UPSTAGE_PROFILE_OPTION_INVALID")
     if assertion_prompt and not source_ids:
         # The assertion suffix only refines source-ID mode; it has no wire alone.
@@ -427,6 +431,10 @@ def _profile_with_options(
         descriptor.append(_COMPLETE_SELECTION_RULE_ENTRY)
     if extraction_content_bounds:
         descriptor.append(_CONTENT_BOUNDS_RULE_ENTRY)
+    if position_order:
+        from proofops.application.tagging.preliminary import CONTEXT_POSITION_ORDER
+
+        descriptor.append(CONTEXT_POSITION_ORDER)
     return ExtractionProfile(
         model_sha256=canonical_hash(
             {"model": model, "provider": "upstage", "transport": "UpstageProbe"}
@@ -461,6 +469,7 @@ class UpstageClaimExtractor:
         extraction_assertion_prompt: bool = False,
         extraction_complete_selection: bool = False,
         extraction_content_bounds: bool = False,
+        position_order: bool = False,
     ) -> None:
         if not callable(getattr(probe, "complete", None)):
             raise ValueError("UPSTAGE_PROBE_REQUIRED")
@@ -468,6 +477,8 @@ class UpstageClaimExtractor:
             raise ValueError("UPSTAGE_YEAR_NOTATION_INVALID")
         if type(extraction_context) is not bool:
             raise ValueError("UPSTAGE_EXTRACTION_CONTEXT_INVALID")
+        if type(position_order) is not bool or (position_order and not extraction_context):
+            raise ValueError("UPSTAGE_CONTEXT_ORDER_INVALID")
         if type(extraction_table_context) is not bool or (
             extraction_table_context and not extraction_context
         ):
@@ -500,6 +511,7 @@ class UpstageClaimExtractor:
             assertion_prompt=extraction_assertion_prompt,
             complete_selection=extraction_complete_selection,
             extraction_content_bounds=extraction_content_bounds,
+            position_order=position_order,
         )
         if type(max_tokens) is not int or not 1 <= max_tokens <= 4096:
             raise ValueError("UPSTAGE_MAX_TOKENS_INVALID")
@@ -516,6 +528,7 @@ class UpstageClaimExtractor:
         self._assertion_prompt = extraction_assertion_prompt
         self._complete_selection = extraction_complete_selection
         self._content_bounds = extraction_content_bounds
+        self._position_order = position_order
         self._request_ids: list[tuple[str, str]] = []
 
     def _validate_spans(self, payload: dict, text: str):
@@ -705,6 +718,11 @@ class UpstageClaimExtractor:
                     "content_sha256": canonical_hash(result["content"]),
                     "spans": resolved,
                     **rejected,
+                    **(
+                        {"context_ordering": self._context_order_policy()}
+                        if self._position_order
+                        else {}
+                    ),
                 }
             ),
         )
@@ -859,6 +877,10 @@ class UpstageClaimExtractor:
                 stored_result.get("request_id") != request_id
                 or stored_result.get("packet_sha256") != packet_sha
                 or stored_result.get("profile") != asdict(self._profile)
+                or (
+                    self._position_order
+                    and stored_result.get("context_ordering") != self._context_order_policy()
+                )
                 or not isinstance(stored_result.get("spans"), list)
                 or stored_result.get("spans") != resolved
             ):
@@ -878,6 +900,11 @@ class UpstageClaimExtractor:
                         "content_sha256": canonical_hash(metadata["content"]),
                         "spans": resolved,
                         **rejected,
+                        **(
+                            {"context_ordering": self._context_order_policy()}
+                            if self._position_order
+                            else {}
+                        ),
                     }
                 ),
             )
@@ -1058,6 +1085,8 @@ class UpstageClaimExtractor:
             "source_sha256": packet["source_sha256"],
             "untrusted_document_data": data,
         }
+        if self._position_order:
+            user_data["context_ordering"] = self._context_order_policy()
         content_sha = canonical_hash({"system_prompt": system_prompt, "user_data": user_data})
         request_id = str(uuid5(UUID(packet["parse_manifest_id"]), packet_sha + ":" + content_sha))
         return system_prompt, {**user_data, "request_id": request_id}, request_id
@@ -1182,10 +1211,18 @@ class UpstageClaimExtractor:
                 "omitted_source_ids": omitted_source_ids,
             },
         }
+        if self._position_order:
+            user_data["context_ordering"] = self._context_order_policy()
         content_sha = canonical_hash({"system_prompt": system_prompt, "user_data": user_data})
         request_id = str(uuid5(UUID(packet["parse_manifest_id"]), packet_sha + ":" + content_sha))
         user_data = {**user_data, "request_id": request_id}
         return system_prompt, user_data, request_id
+
+    @staticmethod
+    def _context_order_policy() -> dict:
+        from proofops.application.tagging.preliminary import CONTEXT_POSITION_ORDER
+
+        return CONTEXT_POSITION_ORDER
 
     def _context_for(self, packet: dict, context_graph: Any) -> tuple[list[dict], list[str]]:
         """Bounded, source-bound interpretation-only blocks for this packet's block.
@@ -1210,6 +1247,7 @@ class UpstageClaimExtractor:
         from proofops.application.tagging.preliminary import (
             _bounded_context_blocks,
             _context_entry,
+            _position_key,
         )
 
         data = packet["untrusted_document_data"]
@@ -1222,6 +1260,7 @@ class UpstageClaimExtractor:
             (focal.source_ref(),),
             max_context_chars=2000,
             max_context_blocks=4,
+            position_order=self._position_order,
         )
         if not self._table_context:
             return neighbours, omitted
@@ -1257,8 +1296,11 @@ class UpstageClaimExtractor:
             selected.append({**entry, "context_index": len(selected)})
             selected_ids.add(entry["source_id"])
             used += size
-        return selected, [
-            *dict.fromkeys(
+        if self._position_order:
+            selected.sort(key=lambda entry: _position_key(blocks[entry["source_id"]]))
+            selected = [{**entry, "context_index": index} for index, entry in enumerate(selected)]
+        omitted_ids = list(
+            dict.fromkeys(
                 (
                     *omitted,
                     *table.omitted_source_ids,
@@ -1269,7 +1311,10 @@ class UpstageClaimExtractor:
                     ),
                 )
             )
-        ]
+        )
+        if self._position_order:
+            omitted_ids.sort(key=lambda source_id: _position_key(blocks[source_id]))
+        return selected, omitted_ids
 
     @staticmethod
     def _quotes(payload: Any) -> list:
