@@ -405,13 +405,13 @@ def test_tag_publication_fence_and_durable_recovery(tmp_path, monkeypatch, bound
     if boundary == "cancel_before":
         cancel()
     elif boundary == "crash_after_review":
-        publish = runner.reviews.publish_transaction
+        publish = runner.reviews.store.publish_transaction
 
         def crash(*args, **kwargs):
             publish(*args, **kwargs)
             raise RuntimeError("synthetic crash after review heads and audit")
 
-        monkeypatch.setattr(runner.reviews, "publish_transaction", crash)
+        monkeypatch.setattr(runner.reviews.store, "publish_transaction", crash)
     else:
 
         def interrupt(request):
@@ -424,11 +424,11 @@ def test_tag_publication_fence_and_durable_recovery(tmp_path, monkeypatch, bound
 
         monkeypatch.setattr(runner.transport, "invoke", interrupt)
     if boundary == "crash_after_review":
-        with pytest.raises(RuntimeError, match="after review heads"):
-            runner.run_once(tenant_id=TENANT, run_id=run_id)
+        assert runner.run_once(tenant_id=TENANT, run_id=run_id) == "failed"
+        assert jobs.get_job(message)["error_code"] == "TAG_UNEXPECTED_RuntimeError"
     else:
         assert runner.run_once(tenant_id=TENANT, run_id=run_id) == (
-            "cancelled" if boundary == "cancel_before" else "discarded"
+            "cancelled" if boundary == "cancel_before" else "LEASE_LOST"
         )
     assert jobs.read_checkpoint(message) is None
     assert jobs.get_run(TENANT, run_id)["coverage"] == before["coverage"]
@@ -457,6 +457,16 @@ def test_tag_publication_fence_and_durable_recovery(tmp_path, monkeypatch, bound
     if boundary in {"crash_after_review", "stale"}:
         monkeypatch.setattr(runner.transport, "invoke", invoke)
         now[0] += 1000
+        if boundary == "crash_after_review":
+            jobs.retry_run(
+                TENANT,
+                run_id,
+                expected_revision=jobs.get_run(TENANT, run_id)["revision"],
+                idempotency_key=str(uuid4()),
+                reason="retry after recorded tag failure",
+                now=now[0],
+                actor_sub="synthetic-test",
+            )
         reopened = LocalTagRunner(
             LocalSQLiteRunStore(service.store.path),
             service.uploads,
@@ -475,7 +485,11 @@ def test_tag_publication_fence_and_durable_recovery(tmp_path, monkeypatch, bound
         assert sum(run.recovered for run in inputs.tag_runs) == expected_calls
         assert len({run.request.request_signature for run in inputs.tag_runs}) == 3
         assert jobs.get_job(message)["fencing_token"] == 2
-        assert jobs.get_run(TENANT, run_id)["mutation_epoch"] == before["mutation_epoch"] + 3
+        expected_mutations = 6 if boundary == "crash_after_review" else 4
+        assert (
+            jobs.get_run(TENANT, run_id)["mutation_epoch"]
+            == before["mutation_epoch"] + expected_mutations
+        )
 
 
 @pytest.mark.parametrize("keepalive", [False, True])
@@ -512,7 +526,7 @@ def test_tag_operation_over_lease_publication_depends_on_lease_keepalive(
         monkeypatch.setattr(
             tag_runner_module,
             "with_lease_heartbeat",
-            lambda store, lease, clock, operation: operation(lease),
+            lambda store, lease, clock, operation, **kwargs: operation(lease),
         )
 
     # Wall-clock-driven runner clock: any heartbeat renews in real time,
@@ -560,7 +574,7 @@ def test_tag_operation_over_lease_publication_depends_on_lease_keepalive(
         record = runner.tags.load_snapshot(TENANT, run_id)["claims"][0]
         assert record["tag_runs"] and len(record["tag_runs"]) == 3
     else:
-        assert status == "discarded"
+        assert status == "LEASE_LOST"
         assert "tag_job" not in jobs.get_run(TENANT, run_id)
 
     assert not any(t.name.startswith("lease-heartbeat:") for t in threading.enumerate())
@@ -584,10 +598,186 @@ def test_tag_operation_over_lease_publication_depends_on_lease_keepalive(
     assert not isolated.commit_job(stale_lease, payload=b"stale", now=301)
 
 
+def test_slow_provider_call_renews_tag_lease_until_call_returns(tmp_path, monkeypatch):
+    service, run_id, runner, now, _ = verified_setup(tmp_path, monkeypatch)
+    jobs = service.store.jobs
+    original_claim = jobs.claim_job
+    original_heartbeat = jobs.heartbeat
+
+    def short_claim(message, *, owner, now, lease_seconds):
+        return original_claim(message, owner=owner, now=now, lease_seconds=2)
+
+    def capped_heartbeat(lease, *, now, lease_seconds):
+        return original_heartbeat(lease, now=now, lease_seconds=min(lease_seconds, 2))
+
+    monkeypatch.setattr(jobs, "claim_job", short_claim)
+    monkeypatch.setattr(jobs, "heartbeat", capped_heartbeat)
+    started = time_module.monotonic()
+    base_now = now[0]
+    runner.clock = lambda: base_now + int(time_module.monotonic() - started)
+    invoke = runner.transport.invoke
+    delayed = False
+
+    def slow_first_call(request):
+        nonlocal delayed
+        if not delayed:
+            delayed = True
+            time_module.sleep(2.25)
+        return invoke(request)
+
+    monkeypatch.setattr(runner.transport, "invoke", slow_first_call)
+    assert runner.run_once(tenant_id=TENANT, run_id=run_id) == "needs_review"
+    assert len(runner.transport.requests) == 3
+    record = runner.tags.load_snapshot(TENANT, run_id)["claims"][0]
+    assert len(record["tag_runs"]) == 3
+
+
+def test_tag_renewal_failure_stops_reservations_and_returns_specific_code(tmp_path, monkeypatch):
+    service, run_id, runner, now, _ = verified_setup(tmp_path, monkeypatch)
+    jobs = service.store.jobs
+    original_claim = jobs.claim_job
+    original_heartbeat = jobs.heartbeat
+
+    def short_claim(message, *, owner, now, lease_seconds):
+        return original_claim(message, owner=owner, now=now, lease_seconds=2)
+
+    def renewal_fails_on_keepalive(lease, *, now, lease_seconds):
+        if threading.current_thread().name.startswith("lease-heartbeat:"):
+            raise LeaseLost("LEASE_LOST")
+        return original_heartbeat(lease, now=now, lease_seconds=min(lease_seconds, 2))
+
+    monkeypatch.setattr(jobs, "claim_job", short_claim)
+    monkeypatch.setattr(jobs, "heartbeat", renewal_fails_on_keepalive)
+    started = time_module.monotonic()
+    base_now = now[0]
+    runner.clock = lambda: base_now + int(time_module.monotonic() - started)
+    invoke = runner.transport.invoke
+
+    def slow_first_call(request):
+        if not runner.transport.requests:
+            time_module.sleep(1.1)
+        return invoke(request)
+
+    monkeypatch.setattr(runner.transport, "invoke", slow_first_call)
+    message = tag_message(service, run_id, now[0])
+    assert runner.run_once(tenant_id=TENANT, run_id=run_id) == "LEASE_HEARTBEAT_FAILED"
+    assert len(runner.transport.requests) == 1
+    assert service.cost(TENANT, run_id)["attempt_count"] == 1
+    failed_job = jobs.get_job(message)
+    assert failed_job["error_code"] == "LEASE_HEARTBEAT_FAILED"
+    assert failed_job["message"]["stage"] == "tag"
+    assert failed_job["heartbeat_at"] is not None
+    assert jobs.read_checkpoint(message) is None
+
+
+def test_failed_renewal_during_last_element_call_prevents_claim_publication(tmp_path, monkeypatch):
+    service, run_id, runner, now, _ = verified_setup(tmp_path, monkeypatch)
+    jobs = service.store.jobs
+    original_claim, original_heartbeat = jobs.claim_job, jobs.heartbeat
+
+    def short_claim(message, *, owner, now, lease_seconds):
+        return original_claim(message, owner=owner, now=now, lease_seconds=2)
+
+    def renewal_fails_on_keepalive(lease, *, now, lease_seconds):
+        if threading.current_thread().name.startswith("lease-heartbeat:"):
+            raise LeaseLost("LEASE_LOST")
+        return original_heartbeat(lease, now=now, lease_seconds=min(lease_seconds, 2))
+
+    monkeypatch.setattr(jobs, "claim_job", short_claim)
+    monkeypatch.setattr(jobs, "heartbeat", renewal_fails_on_keepalive)
+    started, base_now = time_module.monotonic(), now[0]
+    runner.clock = lambda: base_now + int(time_module.monotonic() - started)
+    invoke = runner.transport.invoke
+
+    def slow_last_call(request):
+        if len(runner.transport.requests) == 2:
+            time_module.sleep(1.1)
+        return invoke(request)
+
+    monkeypatch.setattr(runner.transport, "invoke", slow_last_call)
+    message = tag_message(service, run_id, now[0])
+    assert runner.run_once(tenant_id=TENANT, run_id=run_id) == "LEASE_HEARTBEAT_FAILED"
+    assert len(runner.transport.requests) == 3
+    assert jobs.read_checkpoint(message) is None
+    with jobs._transaction() as db:
+        assert jobs._all(db, TENANT, run_id, "tag_revision") == []
+        assert jobs._all(db, TENANT, run_id, "review_head") == []
+
+
+def test_later_claim_failure_keeps_earlier_claim_published_and_replayable(tmp_path, monkeypatch):
+    service, run_id, runner, now, stream = verified_setup(tmp_path, monkeypatch)
+    extraction, discovery, graph = runner.claims.load_evidence(TENANT, run_id)
+    first = discovery.claims[0]
+    later = replace(first, claim_id=str(uuid4()))
+    discovery = replace(discovery, claims=(first, later))
+    monkeypatch.setattr(
+        runner.claims,
+        "load_evidence",
+        lambda tenant_id, target_run: (extraction, discovery, graph),
+    )
+    preliminary = runner.preliminary
+
+    def fail_on_later_claim(claim, document):
+        if claim.claim_id == later.claim_id:
+            raise RuntimeError("private provider detail must not be logged")
+        return preliminary(claim, document)
+
+    runner.preliminary = fail_on_later_claim
+    message = tag_message(service, run_id, now[0])
+    assert runner.run_once(tenant_id=TENANT, run_id=run_id) == "failed"
+    with service.store.jobs._transaction() as db:
+        assert service.store.jobs._get(db, TENANT, run_id, "claim_head", first.claim_id)
+        with pytest.raises(KeyError):
+            service.store.jobs._get(db, TENANT, run_id, "claim_head", later.claim_id)
+    assert "tag_job" not in service.store.jobs.get_run(TENANT, run_id)
+    assert len(runner.tags.load_inputs(TENANT, run_id, first.claim_id).tag_runs) == 3
+    assert service.store.jobs.get_job(message)["error_code"] == "TAG_UNEXPECTED_RuntimeError"
+    rows = [json.loads(line) for line in stream.getvalue().splitlines()]
+    failure = next(row for row in rows if row.get("event") == "operation_failed")
+    assert failure["stage"] == "TAG"
+    assert failure["exception_type"] == "RuntimeError"
+    assert failure["last_successful_heartbeat_at"] is not None
+    assert "private provider detail" not in stream.getvalue()
+
+
+def test_lost_fence_cannot_publish_the_current_claim(tmp_path, monkeypatch):
+    service, run_id, runner, now, _ = verified_setup(tmp_path, monkeypatch)
+    jobs = service.store.jobs
+    extraction, discovery, graph = runner.claims.load_evidence(TENANT, run_id)
+    first = discovery.claims[0]
+    later = replace(first, claim_id=str(uuid4()))
+    discovery = replace(discovery, claims=(first, later))
+    monkeypatch.setattr(
+        runner.claims,
+        "load_evidence",
+        lambda tenant_id, target_run: (extraction, discovery, graph),
+    )
+    original_publish = runner._publish_claim
+    message = tag_message(service, run_id, now[0])
+
+    def fence_later_claim(lease, inputs, heartbeat_state=None):
+        if inputs.context.claim.claim_id == later.claim_id:
+            now[0] += 301
+            replacement_lease = jobs.claim_job(
+                message, owner="replacement-worker", now=now[0], lease_seconds=300
+            )
+            assert replacement_lease is not None
+        return original_publish(lease, inputs, heartbeat_state)
+
+    monkeypatch.setattr(runner, "_publish_claim", fence_later_claim)
+    assert runner.run_once(tenant_id=TENANT, run_id=run_id) == "LEASE_LOST"
+    with jobs._transaction() as db:
+        assert jobs._get(db, TENANT, run_id, "claim_head", first.claim_id)
+        with pytest.raises(KeyError):
+            jobs._get(db, TENANT, run_id, "claim_head", later.claim_id)
+
+
 @pytest.mark.parametrize(
     "field", ["claim_snapshot_sha256", "input_hash", "tagging_settings_hash", "coverage"]
 )
-def test_tag_checkpoint_tamper_rolls_back_heads_and_outbox(tmp_path, monkeypatch, field):
+def test_tag_checkpoint_tamper_preserves_incremental_claim_publication(
+    tmp_path, monkeypatch, field
+):
     service, run_id, runner, now, _ = verified_setup(tmp_path, monkeypatch)
     jobs = service.store.jobs
     message = tag_message(service, run_id, now[0])
@@ -606,8 +796,9 @@ def test_tag_checkpoint_tamper_rolls_back_heads_and_outbox(tmp_path, monkeypatch
         runner.run_once(tenant_id=TENANT, run_id=run_id)
     assert jobs.read_checkpoint(message) is None
     with jobs._transaction() as db:
-        assert jobs._all(db, TENANT, run_id, "review_head") == []
-        assert jobs._all(db, TENANT, run_id, "claim_head") == []
+        assert len(jobs._all(db, TENANT, run_id, "review_head")) == 1
+        assert len(jobs._all(db, TENANT, run_id, "claim_head")) == 1
+        assert len(jobs._all(db, TENANT, run_id, "tag_revision")) == 1
     assert len(jobs.pending_outbox(TENANT, run_id, now=now[0])) == 1
 
 
@@ -898,11 +1089,11 @@ def test_checkpoint_cannot_mislabel_execution_provenance(tmp_path, monkeypatch):
     service, run_id, runner, _, _ = verified_setup(tmp_path, monkeypatch)
     execute = runner._execute
 
-    def wrong_marker(*args):
-        payload, publications = execute(*args)
+    def wrong_marker(*args, **kwargs):
+        payload = execute(*args, **kwargs)
         envelope = json.loads(payload)
         envelope["synthetic"] = False
-        return json.dumps(envelope).encode(), publications
+        return json.dumps(envelope).encode()
 
     monkeypatch.setattr(runner, "_execute", wrong_marker)
     with pytest.raises(ValueError, match="TAG_CHECKPOINT_INVALID"):

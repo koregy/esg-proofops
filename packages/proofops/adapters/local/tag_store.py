@@ -465,14 +465,50 @@ class LocalTagStore:
         return self._load_snapshot_with_evidence(tenant_id, run_id)[0]
 
     def load_inputs(self, tenant_id, run_id, claim_id):
-        envelope, evidence = self._load_snapshot_with_evidence(tenant_id, run_id)
-        item = next((item for item in envelope["claims"] if item["claim_id"] == claim_id), None)
-        if item is None or item.get("review_inputs") is None:
-            raise KeyError("tagged claim not published")
-        raw = item["review_inputs"]
+        run = self.store.jobs.get_run(tenant_id, run_id)
+        evidence = self.claims.load_evidence(tenant_id, run_id)
+        envelope = None
+        if "tag_job" in run:
+            envelope, evidence = self._load_snapshot_with_evidence(tenant_id, run_id)
+            item = next((item for item in envelope["claims"] if item["claim_id"] == claim_id), None)
+            if item is None or item.get("review_inputs") is None:
+                raise KeyError("tagged claim not published")
+            raw = item["review_inputs"]
+        else:
+            _, discovery, graph = evidence
+            claim = next((c for c in discovery.claims if c.claim_id == claim_id), None)
+            if claim is None:
+                raise KeyError("tagged claim not published")
+            try:
+                with self.store.jobs._transaction() as db:
+                    head = self.store.jobs._get(db, tenant_id, run_id, "claim_head", claim_id)
+                    published = self.store.jobs._get(
+                        db,
+                        tenant_id,
+                        run_id,
+                        "tag_revision",
+                        f"{claim_id}:{1:010}",
+                    )
+            except KeyError:
+                raise KeyError("tagged claim not published") from None
+            raw = published.get("inputs")
+            snapshot = self.store.snapshot(tenant_id, run_id)
+            expected = tag_pins(snapshot, evidence[0], run["claim_snapshot_sha256"])
+            if (
+                published.get("origin") != "consensus"
+                or published.get("tag_revision") != 1
+                or head.get("tag_revision", 0) < 1
+                or not isinstance(raw, dict)
+                or canonical_hash(raw.get("claim")) != canonical_hash(asdict(claim))
+                or raw.get("run_id") != run_id
+                or raw.get("original", {}).get("graph_sha256") != expected["graph_sha256"]
+                or canonical_hash(raw.get("rulepack")) != canonical_hash(snapshot["rulepack"])
+            ):
+                raise ValueError("TAG_REPLAY_MISMATCH")
         _, discovery, graph = evidence
         claim = next(c for c in discovery.claims if c.claim_id == claim_id)
-        rulepack = RulePackSnapshot(**self.store.snapshot(tenant_id, run_id)["rulepack"])
+        snapshot = self.store.snapshot(tenant_id, run_id)
+        rulepack = RulePackSnapshot(**snapshot["rulepack"])
         packet = freeze_packet({k: v for k, v in raw["packet"].items() if k != "packet_sha256"})
         original_packet = freeze_packet(
             {k: v for k, v in raw["original_packet"].items() if k != "packet_sha256"}
@@ -513,7 +549,7 @@ class LocalTagStore:
         decision = (
             evaluate(consensus.confirmed_tags, rule_context, rulepack)
             if consensus.confirmed_tags
-            and envelope.get("rulepack_use") != "candidate_tagging_reference_only"
+            and snapshot.get("rulepack_use") != "candidate_tagging_reference_only"
             else None
         )
         inputs = ReviewInputs(

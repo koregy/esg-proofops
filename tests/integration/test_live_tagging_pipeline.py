@@ -491,15 +491,14 @@ def test_live_publication_crash_rolls_back_and_recovers_without_rebilling(tmp_pa
     runner, service = ctx["tag_runner"], ctx["service"]
     tenant, run_id = ctx["tenant"], ctx["run_id"]
     before_calls = len(ctx["calls"])
-    publish = runner.reviews.publish_transaction
+    publish = runner.reviews.store.publish_transaction
 
     def crash(db, inputs):
         publish(db, inputs)
         raise RuntimeError("injected crash after review publication")
 
-    monkeypatch.setattr(runner.reviews, "publish_transaction", crash)
-    with pytest.raises(RuntimeError, match="injected crash"):
-        runner.run_once(tenant_id=tenant, run_id=run_id)
+    monkeypatch.setattr(runner.reviews.store, "publish_transaction", crash)
+    assert runner.run_once(tenant_id=tenant, run_id=run_id) == "failed"
     assert len(ctx["calls"]) == before_calls + 6
     assert "tag_job" not in service.store.jobs.get_run(tenant, run_id)
     with service.store.jobs._transaction() as db:
@@ -512,6 +511,15 @@ def test_live_publication_crash_rolls_back_and_recovers_without_rebilling(tmp_pa
         ):
             assert service.store.jobs._all(db, tenant, run_id, kind) == []
     billed = service.cost(tenant, run_id)
+    service.store.jobs.retry_run(
+        tenant,
+        run_id,
+        expected_revision=service.store.jobs.get_run(tenant, run_id)["revision"],
+        idempotency_key=str(uuid4()),
+        reason="retry after recorded tag failure",
+        now=ctx["now"][0],
+        actor_sub="synthetic-test",
+    )
     ctx["now"][0] += 1000
     reopened = LocalTagRunner(
         LocalSQLiteRunStore(service.store.path),
@@ -563,7 +571,7 @@ def test_live_cancellation_stops_calls_and_leaves_no_review(tmp_path, monkeypatc
     else:
         cancel()
     assert runner.run_once(tenant_id=tenant, run_id=run_id) == (
-        "discarded" if inflight else "cancelled"
+        "LEASE_LOST" if inflight else "cancelled"
     )
     assert len(ctx["calls"]) == before_calls + int(inflight)
     assert runner.run_once(tenant_id=tenant, run_id=run_id) == "cancelled"

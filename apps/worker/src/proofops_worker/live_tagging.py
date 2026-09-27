@@ -1,6 +1,7 @@
 """Scoped local Upstage composition; immutable receipts, no implicit rule approval."""
 
 import json
+from contextlib import nullcontext
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -22,7 +23,11 @@ from proofops.application.tagging.preliminary import (
     validate_preliminary,
     validate_preliminary_table_sources,
 )
-from proofops.application.tagging.relations import relation_request, validate_relations
+from proofops.application.tagging.relations import (
+    RelationValidationError,
+    relation_request,
+    validate_relations,
+)
 from proofops.application.tagging.service import RawTagResponse
 from proofops.domain.provenance import canonical_hash
 from proofops.domain.rulepacks import canonical_json
@@ -33,6 +38,8 @@ from proofops_agent.upstage_tagging import (
     TransportResume,
     UpstageTaggingTransport,
 )
+
+from proofops_worker.consumer import TagHeartbeatFailed
 
 # The local stop conditions this module raises itself, per replica prefix. Recording
 # only these keeps a durable record free of arbitrary exception text while still
@@ -58,6 +65,11 @@ def _local_stop_code(prefix, error):
 
 class LiveTaggingRuntime:
     synthetic = False
+    heartbeat_state = None
+
+    def _check_heartbeat(self):
+        if self.heartbeat_state is not None:
+            self.heartbeat_state.check()
 
     def __init__(self, runner, snapshot, graph, lease, usage, *, probe, ledger, receipts):
         if (
@@ -149,10 +161,19 @@ class LiveTaggingRuntime:
         )
 
     def _fence(self):
+        self._check_heartbeat()
         now = int(self.runner.clock())
         if not self.runner.store.jobs.can_call(self.lease, now=now):
             raise LeaseLost("LEASE_LOST")
-        self.runner.store.jobs.heartbeat(self.lease, now=now, lease_seconds=300)
+        try:
+            self.runner.store.jobs.heartbeat(self.lease, now=now, lease_seconds=300)
+        except Exception as error:
+            if self.heartbeat_state is not None:
+                self.heartbeat_state.fail()
+            if isinstance(error, LeaseLost):
+                raise
+            raise TagHeartbeatFailed() from None
+        self._check_heartbeat()
 
     def _authorize(self, settings, request):
         self._fence()
@@ -458,6 +479,7 @@ class LiveTaggingRuntime:
         records, results, signatures, provider_ids = [], [], [], []
         record_store[claim.claim_id] = records
         for replica in (1, 2, 3):
+            self._check_heartbeat()
             request_id = str(
                 uuid5(UUID(self.lease.message.job_id), f"{prefix}:{claim.claim_id}:{replica}")
             )
@@ -516,17 +538,28 @@ class LiveTaggingRuntime:
                     # for a request this operation is no longer authorized to send.
                     if not transport.may_dispatch():
                         raise ValueError(prefix.upper() + "_RECOVERY_ALLOWANCE_EXHAUSTED")
-                    if not self.runner.store.usage.reserve_budget(
-                        call,
-                        input_tokens=capacity,
-                        max_output_tokens=settings.max_tokens,
-                        pricing=None,
-                        now=int(self.runner.clock()),
-                    ):
-                        raise ValueError(prefix.upper() + "_PENDING_CALL")
                     self._fence()
-                    if not self.runner.store.usage.mark_dispatched(call):
-                        raise ValueError(prefix.upper() + "_PENDING_CALL")
+                    lock = (
+                        self.heartbeat_state.lock
+                        if self.heartbeat_state is not None
+                        else nullcontext()
+                    )
+                    with lock:
+                        self._check_heartbeat()
+                        if not self.runner.store.usage.reserve_budget(
+                            call,
+                            input_tokens=capacity,
+                            max_output_tokens=settings.max_tokens,
+                            pricing=None,
+                            now=int(self.runner.clock()),
+                        ):
+                            raise ValueError(prefix.upper() + "_PENDING_CALL")
+                    self._fence()
+                    with lock:
+                        self._check_heartbeat()
+                        if not self.runner.store.usage.mark_dispatched(call):
+                            raise ValueError(prefix.upper() + "_PENDING_CALL")
+                    self._check_heartbeat()
                     response = transport.invoke(request)
                 self.runner.store.usage.record_usage(
                     call, response.usage, now=int(self.runner.clock())
@@ -581,8 +614,17 @@ class LiveTaggingRuntime:
                         else "local_stop",
                         # Stable internal codes only. An unrecognized exception
                         # never leaks its message text into a durable record.
-                        error_code=settled_code or _local_stop_code(prefix, error),
-                        detail=None,
+                        error_code=settled_code
+                        or (
+                            error.code
+                            if prefix == "relation" and isinstance(error, RelationValidationError)
+                            else _local_stop_code(prefix, error)
+                        ),
+                        detail=(
+                            error.field
+                            if prefix == "relation" and isinstance(error, RelationValidationError)
+                            else None
+                        ),
                     ),
                 )
                 return None
