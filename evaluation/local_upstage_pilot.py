@@ -96,6 +96,7 @@ def live_tagging_settings(
     preliminary_table_role: bool = False,
     preliminary_goal_role: bool = False,
     preliminary_actor_role: bool = False,
+    preliminary_p2: bool = False,
     capacity_refresh: bool = False,
 ) -> dict:
     """Explicit bounded pilot config; grants are registered separately by main."""
@@ -104,6 +105,7 @@ def live_tagging_settings(
     from proofops.application.tagging.preliminary import (
         CONTEXT_SYSTEM_SUFFIX,
         GOAL_ROLE_SYSTEM_SUFFIX,
+        P2_SYSTEM_PROMPT,
         SYSTEM_PROMPT,
         TABLE_ROLE_SYSTEM_SUFFIX,
         TABLE_SYSTEM_SUFFIX,
@@ -117,6 +119,7 @@ def live_tagging_settings(
         or type(preliminary_table_role) is not bool
         or type(preliminary_goal_role) is not bool
         or type(preliminary_actor_role) is not bool
+        or type(preliminary_p2) is not bool
         or type(capacity_refresh) is not bool
     ):
         raise ValueError("relation/preliminary-context stage must be explicit boolean")
@@ -128,6 +131,10 @@ def live_tagging_settings(
         raise ValueError("preliminary goal role requires preliminary table role")
     if preliminary_actor_role and not preliminary_goal_role:
         raise ValueError("preliminary actor role requires preliminary goal role")
+    if preliminary_p2 and (
+        not preliminary_table_role or preliminary_goal_role or preliminary_actor_role
+    ):
+        raise ValueError("preliminary P2 requires only preliminary table role")
     if type(max_calls) is not int or not 6 <= max_calls <= 2000:
         raise ValueError("live tagging requires 6..2000 bounded calls")
     rubric = yaml.safe_load((ROOT / "config/rubric/elements.yaml").read_text())
@@ -196,7 +203,10 @@ def live_tagging_settings(
         "or grading. Validate this equality for every element before submitting."
     )
     settings = {}
-    if preliminary_actor_role:
+    if preliminary_p2:
+        preliminary_profile = "upstage-preliminary-source-quotes-table-role-v2-p2"
+        preliminary_prompt = P2_SYSTEM_PROMPT
+    elif preliminary_actor_role:
         from proofops.application.tagging.preliminary import (
             ACTOR_ROLE_SYSTEM_SUFFIX,
             PERIOD_ROLE_SYSTEM_SUFFIX,
@@ -383,6 +393,7 @@ def apply_resume_metadata(args, saved: dict) -> None:
     args.preliminary_table_role = bool(saved.get("preliminary_table_role", False))
     args.preliminary_goal_role = bool(saved.get("preliminary_goal_role", False))
     args.preliminary_actor_role = bool(saved.get("preliminary_actor_role", False))
+    args.preliminary_p2 = bool(saved.get("preliminary_p2", False))
     args.capacity_refresh = bool(saved.get("capacity_refresh", False))
     args.extraction_year_notation = bool(saved.get("extraction_year_notation", False))
     args.extraction_context = bool(saved.get("extraction_context", False))
@@ -657,6 +668,11 @@ def main():
         help="Use R34 actor-role prompt",
     )
     parser.add_argument(
+        "--preliminary-p2",
+        action="store_true",
+        help="Opt-in P2 preliminary prompt; requires --preliminary-table-role.",
+    )
+    parser.add_argument(
         "--capacity-policy-refresh",
         dest="capacity_refresh",
         action="store_true",
@@ -753,6 +769,7 @@ def main():
         requested_preliminary_role = args.preliminary_table_role
         requested_preliminary_goal_role = args.preliminary_goal_role
         requested_preliminary_actor_role = args.preliminary_actor_role
+        requested_preliminary_p2 = args.preliminary_p2
         requested_capacity_refresh = getattr(args, "capacity_refresh", False)
         requested_render_resolution = args.claim_span_render_resolution
         requested_bullet_spacing = args.claim_span_bullet_spacing
@@ -783,6 +800,8 @@ def main():
             parser.error("--resume cannot add preliminary goal role; create a new run")
         if requested_preliminary_actor_role and not args.preliminary_actor_role:
             parser.error("--resume cannot add preliminary actor role; create a new run")
+        if requested_preliminary_p2 and not args.preliminary_p2:
+            parser.error("--resume cannot add preliminary P2; create a new run")
         if requested_capacity_refresh and not args.capacity_refresh:
             parser.error("--resume cannot add capacity refresh; create a new run")
         if requested_render_resolution and not args.claim_span_render_resolution:
@@ -808,6 +827,10 @@ def main():
         parser.error("--preliminary-table-role requires --preliminary-table-context")
     if args.preliminary_goal_role and not args.preliminary_table_role:
         parser.error("--preliminary-goal-role requires --preliminary-table-role")
+    if args.preliminary_p2 and (
+        not args.preliminary_table_role or args.preliminary_goal_role or args.preliminary_actor_role
+    ):
+        parser.error("--preliminary-p2 requires only --preliminary-table-role")
     if args.claim_span_render_resolution and not args.verify_claim_spans:
         parser.error("--claim-span-render-resolution requires --verify-claim-spans")
     if args.claim_span_bullet_spacing and not args.claim_span_render_resolution:
@@ -948,6 +971,7 @@ def main():
                     preliminary_table_role=args.preliminary_table_role,
                     preliminary_goal_role=args.preliminary_goal_role,
                     preliminary_actor_role=args.preliminary_actor_role,
+                    preliminary_p2=args.preliminary_p2,
                     capacity_refresh=getattr(args, "capacity_refresh", False),
                 )
             )
@@ -1244,6 +1268,8 @@ def main():
             manifest["preliminary_goal_role"] = True
         if args.preliminary_actor_role:
             manifest["preliminary_actor_role"] = True
+        if args.preliminary_p2:
+            manifest["preliminary_p2"] = True
         if args.verify_selected_cells:
             manifest["verify_selected_cells"] = True
         if args.claim_span_render_resolution:
@@ -1296,6 +1322,8 @@ def main():
             raise ValueError("pilot preliminary table role policy changed; create a new state dir")
         if manifest.get("preliminary_goal_role", False) != args.preliminary_goal_role:
             raise ValueError("pilot preliminary goal role policy changed; create a new state dir")
+        if manifest.get("preliminary_p2", False) != args.preliminary_p2:
+            raise ValueError("pilot preliminary P2 policy changed; create a new state dir")
         if manifest.get("live_tagging", False) != args.live_tagging or (
             args.live_tagging and manifest.get("tagging_max_calls") != args.tagging_max_calls
         ):

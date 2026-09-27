@@ -385,6 +385,7 @@ class RunService:
                 # below, so this set only names the accepted profiles.
                 "upstage-preliminary-source-quotes-table-v1",
                 "upstage-preliminary-source-quotes-table-role-v1",
+                "upstage-preliminary-source-quotes-table-role-v2-p2",
                 # R34 opt-in goal-role profile; requires table-role and its deps.
                 "upstage-preliminary-source-quotes-goal-role-v1",
                 "upstage-preliminary-source-quotes-actor-role-v1",
@@ -528,6 +529,7 @@ class RunService:
             snapshot.update(
                 preliminary_settings=asdict(preliminary),
                 preliminary_settings_hash=canonical_hash(asdict(preliminary)),
+                preliminary_prompt_sha256=canonical_hash(preliminary.system_prompt),
                 preliminary_runtime=preliminary_runtime,
                 preliminary_runtime_artifact_hash=artifact_sha256(preliminary_runtime),
                 tagging_runtime=tagging_runtime,

@@ -255,10 +255,11 @@ class LiveTaggingRuntime:
 
     def preliminary(self, claim, graph):
         profile = self.preliminary_settings.model_profile
+        p2 = profile == "upstage-preliminary-source-quotes-table-role-v2-p2"
         actor_role_v2 = profile == "upstage-preliminary-source-quotes-actor-role-v2"
         actor_role = profile == "upstage-preliminary-source-quotes-actor-role-v1" or actor_role_v2
         goal_role = profile == "upstage-preliminary-source-quotes-goal-role-v1" or actor_role
-        role_table = profile == "upstage-preliminary-source-quotes-table-role-v1" or goal_role
+        role_table = profile == "upstage-preliminary-source-quotes-table-role-v1" or goal_role or p2
         table = profile == "upstage-preliminary-source-quotes-table-v1" or role_table
         if table:
             packet = preliminary_table_request(
@@ -269,6 +270,7 @@ class LiveTaggingRuntime:
                 goal_role=goal_role,
                 actor_role=actor_role,
                 period_role=actor_role_v2,
+                p2=p2,
             )
         else:
             packet = preliminary_request(

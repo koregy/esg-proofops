@@ -264,6 +264,22 @@ P1_SYSTEM_PROMPT = (
         _P1_METRIC,
     )
 )
+P2_SYSTEM_PROMPT = (
+    SYSTEM_PROMPT
+    + CONTEXT_SYSTEM_SUFFIX
+    + TABLE_SYSTEM_SUFFIX
+    + TABLE_ROLE_SYSTEM_SUFFIX
+    + " Keep the main-predicate track rule above. A heading, label, category definition, "
+    "or diagram step without an asserted company action has track null. If one unsplit "
+    "source mixes independent achieved and future clauses, or actor and tense remain "
+    "unresolved, use track null; do not force a track from a topic or nearby heading. "
+    "An explicit existing practice or operating procedure is management, and a reported "
+    "achieved result is performance even without a metric. A target or deadline year is "
+    "never reporting_period; use null unless the source literally states the period of "
+    "the reported activity or result. Metric is the name of a measured quantity, not "
+    "the activity, project, topic, achieved value or target percentage alone; use null "
+    "when no literal measured quantity is named."
+)
 _FIELDS = frozenset(("claim_id", "track", "safe_harbor_category", "track_confidence", "dimensions"))
 
 
@@ -543,6 +559,7 @@ def preliminary_table_request(
     actor_role: bool = False,
     period_role: bool = False,
     p1: bool = False,
+    p2: bool = False,
 ) -> dict:
     """Opt-in ``TABLE_SCHEMA`` envelope: context plus verified table axis sources.
 
@@ -586,6 +603,10 @@ def preliminary_table_request(
         p1 and (not role_resolution or goal_role or actor_role or period_role)
     ):
         raise DomainValidationError("preliminary P1 requires only table role resolution")
+    if type(p2) is not bool or (
+        p2 and (not role_resolution or goal_role or actor_role or period_role or p1)
+    ):
+        raise DomainValidationError("preliminary P2 requires only table role resolution")
     envelope = preliminary_request(
         claim,
         graph,
@@ -632,6 +653,8 @@ def preliminary_table_request(
     envelope["prompt_sha256"] = canonical_hash(
         P1_SYSTEM_PROMPT
         if p1
+        else P2_SYSTEM_PROMPT
+        if p2
         else SYSTEM_PROMPT
         + CONTEXT_SYSTEM_SUFFIX
         + TABLE_SYSTEM_SUFFIX
