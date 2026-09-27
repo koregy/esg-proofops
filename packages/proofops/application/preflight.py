@@ -525,6 +525,7 @@ def check_local_upstage_tagger(
         ACTOR_ROLE_SYSTEM_SUFFIX,
         CONTEXT_SYSTEM_SUFFIX,
         GOAL_ROLE_SYSTEM_SUFFIX,
+        P1_SYSTEM_PROMPT,
         PERIOD_ROLE_SYSTEM_SUFFIX,
         TABLE_ROLE_SYSTEM_SUFFIX,
         TABLE_SYSTEM_SUFFIX,
@@ -565,6 +566,10 @@ def check_local_upstage_tagger(
             + CONTEXT_SYSTEM_SUFFIX
             + TABLE_SYSTEM_SUFFIX
             + TABLE_ROLE_SYSTEM_SUFFIX
+        )
+        or (
+            settings.model_profile == "upstage-preliminary-source-quotes-table-role-v2-p1"
+            and settings.system_prompt == P1_SYSTEM_PROMPT
         )
         or (
             # R34 opt-in: the table-role chain plus the goal-role suffix, pinned
