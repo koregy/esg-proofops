@@ -182,6 +182,7 @@ def run_claim(payload: dict, *, access_code: str, call_model=None) -> dict:
             "steps": steps,
             "decision": None,
             "cost_estimate_usd": round(actual1, 6),
+            "duration_ms": ms1,
         }
     names = sorted({name for group in MAPPINGS[track].values() for name in group})
     tag_system = (

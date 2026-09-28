@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, Route, Routes, useParams } from "react-router";
+import { Link, Route, Routes, useLocation, useParams } from "react-router";
+import { LiveClaim } from "./features/live/LiveClaim";
 import "./static-demo.css";
 
 type Evidence = { page: number | null; quote: string };
@@ -29,6 +30,7 @@ const elementText: Record<string, string> = {
 };
 
 export function StaticDemo() {
+  const isLive = useLocation().pathname === "/live";
   const [data, setData] = useState<Snapshot | null>(null);
   const [error, setError] = useState(false);
   useEffect(() => {
@@ -41,10 +43,10 @@ export function StaticDemo() {
   return <div className="demo-site">
     <header className="site-header"><div className="site-header-inner">
       <Link className="brand" to="/" aria-label="ProofOps 홈"><span className="brand-mark">P<span>◦</span></span> ProofOps</Link>
-      <nav aria-label="주요 메뉴"><Link to="/">소개</Link><Link to="/demo">실제 결과 보기</Link></nav>
+      <nav aria-label="주요 메뉴"><Link to="/">소개</Link><Link to="/demo">실제 결과 보기</Link><Link to="/live">문장 직접 검토</Link></nav>
       <Link className="header-cta" to="/demo">데모 열기 <span aria-hidden="true">↗</span></Link>
     </div></header>
-    {error ? <main className="static-main"><section className="surface"><h1>데모 데이터를 불러오지 못했습니다</h1><p>잠시 후 새로고침해 주세요.</p></section></main> :
+    {isLive ? <LiveClaim /> : error ? <main className="static-main"><section className="surface"><h1>데모 데이터를 불러오지 못했습니다</h1><p>잠시 후 새로고침해 주세요.</p></section></main> :
       !data ? <main className="static-main"><p role="status">실제 검토 결과를 불러오는 중입니다…</p></main> :
       <Routes><Route path="/" element={<Landing data={data} />} /><Route path="/demo" element={<Demo data={data} />} /><Route path="/demo/:claimId" element={<Demo data={data} />} /><Route path="*" element={<Landing data={data} />} /></Routes>}
     <footer className="site-footer"><div><strong>ProofOps</strong><span>공시 문장의 근거를 읽을 수 있는 검토 기록으로.</span></div><span>부분 실행 · AI 위임 검토 · 사용자 최종 검토 전</span></footer>
