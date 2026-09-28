@@ -105,6 +105,11 @@ class LocalSQLiteRunStore:
                 return replay
             try:
                 validate_raster_snapshot(snapshot)
+                if snapshot.get("fact_assembly_profile", "strict-v1") not in (
+                    "strict-v1",
+                    "partial-facts-v1",
+                ):
+                    raise ValueError("unknown fact assembly profile")
                 if "claim_source_policy" in snapshot:
                     from proofops.adapters.local.claim_source_policies import (
                         publication_reader,

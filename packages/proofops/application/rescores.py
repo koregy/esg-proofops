@@ -200,6 +200,7 @@ class RescoreService:
                 )
                 if (
                     snapshot_hash != pinned_hash
+                    or tag.get("fact_assembly") != inputs.snapshot().get("fact_assembly")
                     or inputs.run_id != run_id
                     or inputs.context.claim.claim_id != claim_id
                     or inputs.rulepack.sha256 != captured["run_snapshot"]["rulepack"]["sha256"]
@@ -335,6 +336,7 @@ class RescoreService:
                 api=api,
                 input_snapshot_sha256=snapshot_hash,
                 tag_record_sha256=canonical_hash(tag),
+                **({"fact_assembly": tag["fact_assembly"]} if "fact_assembly" in tag else {}),
             )
         try:
             return self.store.commit(actor, run_id, body, captured, prepared)

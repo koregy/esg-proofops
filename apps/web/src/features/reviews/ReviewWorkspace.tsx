@@ -43,6 +43,11 @@ const trackElements: Record<Track, string[]> = {
   performance: Array.from({ length: 6 }, (_, i) => `P${i + 1}`),
   management: Array.from({ length: 6 }, (_, i) => `M${i + 1}`),
 };
+const completeElements = (track: Track, elements: ReviewElement[]): ReviewElement[] =>
+  trackElements[track].map(element_id => elements.find(element => element.element_id === element_id) ?? {
+    element_id, state: "unknown", evidence_refs: [], normalized_value: null,
+    credited_from: null, reason_code: null,
+  });
 const states: ReviewElement["state"][] = ["present", "absent", "unknown", "conflict", "not_applicable"];
 const stateText: Record<ReviewElement["state"], string> = {
   present: "충족(present)",
@@ -66,9 +71,9 @@ export function ReviewWorkspace(props: Props) {
 }
 
 function Editor(props: Props) {
-  const [base, setBase] = useState<ReviewSnapshot>(() => structuredClone({ review: props.review, track: props.track, elements: props.elements, headTagRevision: props.headTagRevision }));
+  const [base, setBase] = useState<ReviewSnapshot>(() => structuredClone({ review: props.review, track: props.track, elements: completeElements(props.track, props.elements), headTagRevision: props.headTagRevision }));
   const [track, setTrack] = useState(props.track);
-  const [elements, setElements] = useState(() => structuredClone(props.elements));
+  const [elements, setElements] = useState(() => structuredClone(completeElements(props.track, props.elements)));
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -110,7 +115,7 @@ function Editor(props: Props) {
   async function refresh() {
     try {
       const value = await props.loadLatest();
-      if (live.current) setLatest(value);
+      if (live.current) setLatest({ ...value, elements: completeElements(value.track, value.elements) });
     } catch { if (live.current) setError("최신 태깅을 불러오지 못했습니다. 초안은 보존되었습니다."); }
   }
   async function save() {

@@ -497,7 +497,12 @@ class LocalTagRunner:
             if not self.store.jobs.can_call(lease, now=int(self.clock())):
                 raise LeaseLost("LEASE_LOST")
             consensus = form_consensus(
-                tag_runs, packet=packet, rulepack=rulepack, tenant_id=tenant, tag_revision=1
+                tag_runs,
+                packet=packet,
+                rulepack=rulepack,
+                tenant_id=tenant,
+                tag_revision=1,
+                profile=snapshot.get("fact_assembly_profile", "strict-v1"),
             )
             rule_context = RuleContext(
                 tenant,
@@ -535,6 +540,7 @@ class LocalTagRunner:
                 consensus,
                 relation_tags,
                 decision=decision,
+                fact_assembly_profile=snapshot.get("fact_assembly_profile", "strict-v1"),
             )
             self._publish_claim(lease, inputs, heartbeat_state)
             item.update(

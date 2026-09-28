@@ -143,6 +143,8 @@ def tag_pins(snapshot, extraction, extraction_hash):
         )
     ):
         raise ValueError("TAG_CHECKPOINT_PIN_MISMATCH")
+    if "fact_assembly_profile" in snapshot:
+        pins["fact_assembly_profile"] = snapshot["fact_assembly_profile"]
     return pins
 
 
@@ -544,6 +546,7 @@ class LocalTagStore:
             rulepack=rulepack,
             tenant_id=tenant_id,
             tag_revision=raw["tag_revision"],
+            profile=raw.get("fact_assembly", {}).get("profile", "strict-v1"),
         )
         rule_context = RuleContext(**raw["rule_context"])
         decision = (
@@ -568,6 +571,7 @@ class LocalTagStore:
             },
             raw["tag_revision"],
             decision,
+            raw.get("fact_assembly", {}).get("profile", "strict-v1"),
         )
         inputs.validate()
         if canonical_hash(inputs.snapshot()) != canonical_hash(raw):

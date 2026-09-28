@@ -158,6 +158,91 @@ def consensus(runs, inputs):
     )
 
 
+def test_partial_facts_keep_unknown_and_disagreement_for_range(tmp_path):
+    from proofops.application.rescores import RetagRequired, create_rescore
+    from proofops.application.tagging.consensus import form_consensus
+    from proofops.domain.rules.engine import RuleContext, evaluate
+
+    inputs = setup(tmp_path)
+    runs = tuple(replace(run, product_variant=False) for run in execute(inputs))
+    result = form_consensus(
+        runs,
+        packet=inputs["packet"],
+        rulepack=inputs["rulepack"],
+        tenant_id=TENANT,
+        tag_revision=1,
+        profile="partial-facts-v1",
+    )
+    assert result.review_status == "needs_review"
+    assert result.confirmed_tags is not None
+    facts = {fact.name: fact for fact in result.confirmed_tags.facts}
+    assert facts["quantitative_or_qualified_ordinal"].state == "present"
+    assert facts["comparison_baseline"].state == "unknown"
+    decision = evaluate(
+        result.confirmed_tags,
+        RuleContext(
+            TENANT,
+            inputs["context"].claim.document_version_id,
+            inputs["context"].claim.claim_id,
+            inputs["packet"].packet_sha256,
+            local_synthetic=True,
+        ),
+        inputs["rulepack"],
+    )
+    assert decision.review_status == "needs_review"
+    assert decision.evidence_grade is None
+    assert (decision.grade_floor, decision.grade_ceiling) == ("E1", "E3")
+    assert decision.grade_open_elements == ("P2", "P3", "P4")
+    rescored = create_rescore(
+        inputs["rulepack"],
+        result.confirmed_tags,
+        previous_pack=inputs["rulepack"],
+        context=RuleContext(
+            TENANT,
+            inputs["context"].claim.document_version_id,
+            inputs["context"].claim.claim_id,
+            inputs["packet"].packet_sha256,
+            local_synthetic=True,
+        ),
+    )
+    assert not isinstance(rescored, RetagRequired)
+    assert rescored.decision_status == decision.decision_status
+
+    (tmp_path / "disagreement").mkdir()
+    changed = setup(tmp_path / "disagreement")
+    changed["invoke"].changes[3] = {
+        "element": {"state": "unknown", "evidence_refs": [], "normalized_value": None}
+    }
+    disputed = form_consensus(
+        execute(changed),
+        packet=changed["packet"],
+        rulepack=changed["rulepack"],
+        tenant_id=TENANT,
+        tag_revision=1,
+        profile="partial-facts-v1",
+    )
+    assert {fact.name: fact.state for fact in disputed.confirmed_tags.facts}[
+        "quantitative_or_qualified_ordinal"
+    ] == "conflict"
+    assert all(f.state != "absent" for f in disputed.confirmed_tags.facts)
+    assert consensus(runs, inputs).confirmed_tags is None
+
+    (tmp_path / "failed").mkdir()
+    failed = setup(tmp_path / "failed")
+    failed["invoke"].fail = (3,)
+    projected = form_consensus(
+        execute(failed),
+        packet=failed["packet"],
+        rulepack=failed["rulepack"],
+        tenant_id=TENANT,
+        tag_revision=1,
+        profile="partial-facts-v1",
+    )
+    assert {fact.name: fact.state for fact in projected.confirmed_tags.facts}[
+        "quantitative_or_qualified_ordinal"
+    ] == "unknown"
+
+
 def test_actual_token_overrun_stops_remaining_replicas_and_retains_raw_recovery(tmp_path):
     inputs = setup(tmp_path)
     responder = inputs["invoke"]
