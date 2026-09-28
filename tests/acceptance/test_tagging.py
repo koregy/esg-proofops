@@ -242,6 +242,58 @@ def test_partial_facts_keep_unknown_and_disagreement_for_range(tmp_path):
         "quantitative_or_qualified_ordinal"
     ] == "unknown"
 
+    (tmp_path / "mixed-failure").mkdir()
+    mixed = setup(tmp_path / "mixed-failure")
+    mixed["invoke"].changes[2] = {
+        "element": {"state": "unknown", "evidence_refs": [], "normalized_value": None}
+    }
+    mixed["invoke"].fail = (3,)
+    mixed_result = form_consensus(
+        execute(mixed),
+        packet=mixed["packet"],
+        rulepack=mixed["rulepack"],
+        tenant_id=TENANT,
+        tag_revision=1,
+        profile="partial-facts-v1",
+    )
+    assert {fact.name: fact.state for fact in mixed_result.confirmed_tags.facts}[
+        "quantitative_or_qualified_ordinal"
+    ] == "conflict"
+
+
+def test_all_present_partial_facts_still_require_review(tmp_path):
+    from proofops.application.tagging.consensus import form_consensus
+    from proofops_worker.tag_runner import _consensus_review_reason
+
+    inputs = setup(tmp_path)
+    runs = execute(inputs)
+    # Synthetic post-guard votes exercise the all-present routing boundary.
+    source = runs[0].guarded.elements[0].evidence_refs
+    complete = tuple(
+        replace(
+            run,
+            guarded=replace(
+                run.guarded,
+                elements=tuple(
+                    replace(element, state="present", evidence_refs=source, normalized_value="40%")
+                    for element in run.guarded.elements
+                ),
+            ),
+        )
+        for run in runs
+    )
+    result = form_consensus(
+        complete,
+        packet=inputs["packet"],
+        rulepack=inputs["rulepack"],
+        tenant_id=TENANT,
+        tag_revision=1,
+        profile="partial-facts-v1",
+    )
+    assert result.review_status == "needs_review"
+    assert result.confirmed_tags is None
+    assert _consensus_review_reason(result) == "PARTIAL_FACTS_REVIEW_REQUIRED"
+
 
 def test_actual_token_overrun_stops_remaining_replicas_and_retains_raw_recovery(tmp_path):
     inputs = setup(tmp_path)

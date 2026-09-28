@@ -256,10 +256,11 @@ def _partial_facts(ordered, data, packet, rulepack, tenant_id, tag_revision, rul
         agreement.append(
             (element_id, max((keys.count(key) for key in keys if key is not None), default=0))
         )
-        if any(key is None for key in keys):
-            state = "unknown"
-        elif len(set(keys)) > 1:
+        valid_keys = {key for key in keys if key is not None}
+        if len(valid_keys) > 1:
             state = "conflict"
+        elif any(key is None for key in keys):
+            state = "unknown"
         elif (
             votes[0].state == "present"
             and all(key[2] is not None for key in keys)
@@ -323,7 +324,7 @@ def _partial_facts(ordered, data, packet, rulepack, tenant_id, tag_revision, rul
     if track == "goal":
         required.update(("target_metric", "transition_plan"))
     facts.extend(ConfirmedFact(name, "unknown") for name in sorted(required - observed))
-    if all(fact.state == "present" for fact in facts):
+    if all(element.state == "present" for element in elements):
         # This profile only publishes reviewable partial facts, never an automatic confirmation.
         return ConsensusResult(
             tuple(elements),
