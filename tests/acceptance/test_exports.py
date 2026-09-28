@@ -10,20 +10,22 @@ from zipfile import ZipFile
 
 import pytest
 from proofops.application.authorization import MembershipRecord
+from proofops.application.ports.jobs import JobMessage
+from proofops_agent.extraction import SyntheticClaimExtractor
 
 from tests.integration.test_local_tag_runner import TENANT
 from tests.integration.test_revision_coverage import prepare_rescore, resolve, workspace
 from tests.integration.test_run_lifecycle import validate
 
 
-def exports(tmp_path, monkeypatch, *, store_type=None):
+def exports(tmp_path, monkeypatch, *, store_type=None, configure_runner=None):
     try:
         from proofops.adapters.local.export_store import LocalExportStore
         from proofops.application.exports import ExportService
         from proofops_api.routers.exports import build_exports_router
     except ImportError as exc:
         pytest.fail(f"Export implementation missing: {exc}")
-    ws = workspace(tmp_path, monkeypatch)
+    ws = workspace(tmp_path, monkeypatch, configure_runner=configure_runner)
     store = (store_type or LocalExportStore)(ws["service"].store, ws["runner"].claims)
     service = ExportService(store)
     now = [__import__("time").time()]
@@ -91,6 +93,68 @@ def test_real_http_bundle_manifest_provenance_idempotency_and_immutable_reopen(
                 "INSERT OR REPLACE INTO job_records SELECT * FROM job_records "
                 "WHERE kind='export_artifact'"
             )
+
+
+def test_later_tag_checkpoint_keeps_review_decision_coverage_and_export(tmp_path, monkeypatch):
+    extract = SyntheticClaimExtractor.extract
+
+    def two_claims(self, packet):
+        original = extract(self, packet)["spans"][0]
+        split = original["quote"].index(" 1234") + original["char_start"]
+        return {
+            "spans": [
+                original | {"char_end": split, "quote": original["quote"][:split]},
+                original | {"char_start": split + 1, "quote": original["quote"][split + 1 :]},
+            ]
+        }
+
+    def leave_other_claim_for_recovery(runner, run_id):
+        other = runner.claims.load_evidence(TENANT, run_id)[1].claims[1].claim_id
+        preliminary = runner.preliminary
+        runner.preliminary = lambda claim, graph: (
+            None if claim.claim_id == other else preliminary(claim, graph)
+        )
+
+    monkeypatch.setattr(SyntheticClaimExtractor, "extract", two_claims)
+    ws = exports(tmp_path, monkeypatch, configure_runner=leave_other_claim_for_recovery)
+    resolve(ws)
+    jobs, tenant, run_id = ws["jobs"], ws["actor"].tenant_id, ws["run"]
+    run = jobs.get_run(tenant, run_id)
+    assert run["coverage"]["claims_discovered"] == 2
+    old_message = JobMessage(**run["tag_job"])
+    old_checkpoint = jobs.read_checkpoint(old_message)
+    assert old_checkpoint is not None
+    assert [item["status"] for item in json.loads(old_checkpoint)["claims"]] == [
+        "needs_review",
+        "blocked",
+    ]
+    with jobs._transaction() as db:
+        revisions_before = db.execute(
+            "SELECT kind,record_id,value FROM job_records WHERE tenant_id=? AND run_id=? "
+            "AND kind IN ('tag_revision','decision_revision') ORDER BY kind,record_id",
+            (tenant, run_id),
+        ).fetchall()
+    message = replace(old_message, job_id=str(uuid4()), shard="tag-recovery-regression")
+    jobs.enqueue(message, now=ws["runner"].clock())
+    lease = jobs.claim_job(
+        message, owner="test-recovery", now=ws["runner"].clock(), lease_seconds=300
+    )
+    assert lease is not None
+    assert jobs.commit_job(
+        lease, payload=old_checkpoint, now=ws["runner"].clock(), publish=lambda db: None
+    )
+    assert jobs.get_run(tenant, run_id)["coverage"]["claims_decided"] == 1
+    assert jobs.get_run(tenant, run_id)["coverage"]["claims_needs_review"] == 1
+    with jobs._transaction() as db:
+        assert (
+            db.execute(
+                "SELECT kind,record_id,value FROM job_records WHERE tenant_id=? AND run_id=? "
+                "AND kind IN ('tag_revision','decision_revision') ORDER BY kind,record_id",
+                (tenant, run_id),
+            ).fetchall()
+            == revisions_before
+        )
+    assert create(ws).status_code == 202
 
 
 def test_review_during_capture_retries_only_snapshot_then_renders_frozen_revisions(
@@ -396,18 +460,16 @@ def test_capture_projects_immutable_tag_elements_without_grading(tmp_path, monke
     for element in record["tag_elements"]:
         assert element["state"] == pinned[element["element_id"]]["state"]
         assert element["normalized_value"] == pinned[element["element_id"]]["normalized_value"]
-        assert len(element["evidence_refs"]) == len(
-            pinned[element["element_id"]]["evidence_refs"]
-        )
+        assert len(element["evidence_refs"]) == len(pinned[element["element_id"]]["evidence_refs"])
         if element["evidence_refs"]:
-            assert element["evidence_refs"][0]["quote"] == pinned[element["element_id"]][
-                "evidence_refs"
-            ][0]["quote"]
+            assert (
+                element["evidence_refs"][0]["quote"]
+                == pinned[element["element_id"]]["evidence_refs"][0]["quote"]
+            )
         if element["state"] == "present":
             assert element["evidence_refs"]
             assert all(
-                ref.get("verification_state") == "verified"
-                for ref in element["evidence_refs"]
+                ref.get("verification_state") == "verified" for ref in element["evidence_refs"]
             )
     model = build_report_model(captured["manifest"], captured["decisions"])
     got = [(e["element_id"], e["state"]) for e in model["claims"][0]["tag_elements"]]
