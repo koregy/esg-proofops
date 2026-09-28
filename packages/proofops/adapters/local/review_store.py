@@ -401,6 +401,7 @@ class LocalSQLiteReviewStore:
                 or frozen["document"]["version_id"] != inputs.original.document_version_id
                 or frozen["document"]["sha256"] != inputs.original.source_sha256
                 or canonical_hash(frozen["rulepack"]) != canonical_hash(asdict(inputs.rulepack))
+                or frozen.get("report_level_link") != inputs.report_level_link
                 or frozen.get("rulepack_use")
                 not in {"candidate_tagging_reference_only", "approved_grading"}
                 or (
@@ -450,6 +451,12 @@ class LocalSQLiteReviewStore:
         )
         if "fact_assembly" in snapshot:
             tag["fact_assembly"] = snapshot["fact_assembly"]
+        if "report_level_link" in snapshot:
+            tag["report_level_link"] = {
+                "policy": snapshot["report_level_link"]["policy"],
+                "policy_hash": snapshot["report_level_link"]["policy_hash"],
+            }
+            tag["report_level_review"] = snapshot["report_level_review"]
         decision_revision = inputs.decision.decision_revision if inputs.decision else 0
         self.jobs._put(
             db, tenant, run_id, "review_inputs", review["review_id"], snapshot, immutable=True

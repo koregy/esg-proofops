@@ -23,6 +23,9 @@ from proofops.application.preflight import (
 from proofops.application.registry import RegistryNotFound, artifact_sha256
 from proofops.application.tagging.consensus import PARTIAL_FACTS_V1
 from proofops.application.tagging.relations import SYSTEM_PROMPT as RELATION_SYSTEM_PROMPT
+from proofops.application.tagging.report_level_link import (
+    validate_config as validate_report_level_link,
+)
 from proofops.application.tagging.service import TaggingSettings
 from proofops.application.uploads_security import UploadRejected
 from proofops.domain.provenance import canonical_hash
@@ -139,6 +142,7 @@ class RunService:
         tagging_settings: TaggingSettings | None = None,
         tagging_mode: str | None = None,
         fact_assembly_profile: str = "strict-v1",
+        report_level_link=None,
         preliminary_settings: TaggingSettings | None = None,
         relation_settings: TaggingSettings | None = None,
         raster_runtime_binding_id: str | None = None,
@@ -207,9 +211,16 @@ class RunService:
             raise ValueError("invalid claim source policy")
         self.claim_source_policy = _detach(claim_source_policy)
         self.tagging_settings, self.tagging_mode = tagging_settings, tagging_mode
+        if report_level_link is not None and (tagging_mode is None or tagging_settings is None):
+            raise ValueError("report-level link requires tagging")
         if fact_assembly_profile not in ("strict-v1", PARTIAL_FACTS_V1):
             raise ValueError("unknown fact assembly profile")
         self.fact_assembly_profile = fact_assembly_profile
+        self.report_level_link = (
+            _detach(validate_report_level_link(report_level_link))
+            if report_level_link is not None
+            else None
+        )
         self.preliminary_settings = preliminary_settings
         if position_context_order is not None:
             from proofops.application.tagging.preliminary import CONTEXT_POSITION_ORDER
@@ -245,6 +256,8 @@ class RunService:
         self.local_synthetic = True
 
     def create(self, auth, body: dict[str, Any], key: str):
+        if self.report_level_link is not None:
+            validate_report_level_link(self.report_level_link)
         created_time = self.clock()
         now = int(created_time)
         replay = self.store.replay(auth.tenant_id, body, key, now=now)
@@ -547,6 +560,8 @@ class RunService:
             )
             if self.fact_assembly_profile == PARTIAL_FACTS_V1:
                 snapshot["fact_assembly_profile"] = PARTIAL_FACTS_V1
+            if self.report_level_link is not None:
+                snapshot["report_level_link"] = _detach(self.report_level_link)
         if live_tagging:
             assert isinstance(preliminary, TaggingSettings)
             assert isinstance(tagging, TaggingSettings)

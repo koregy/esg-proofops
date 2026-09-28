@@ -15,6 +15,44 @@ PARTIAL_FACTS_V1 = "partial-facts-v1"
 PARTIAL_FACTS_HASH = canonical_hash({"fact_assembly": PARTIAL_FACTS_V1})
 
 
+def reviewable_decision(decision, profile, review_status):
+    """A complete ladder remains a candidate until its tag is actually confirmed."""
+    if (
+        decision
+        and decision.decision_status == "decided"
+        and (profile == PARTIAL_FACTS_V1 or review_status != "auto_confirmed")
+    ):
+        return None, decision.evidence_grade
+    return decision, None
+
+
+def reviewable_checkpoint(item, *, pinned_profile=None):
+    """Keep an old unreviewed decision out of a new stage checkpoint."""
+    decision = item.get("decision")
+    decided = decision and decision.get("decision_status") == "decided"
+    if item.get("status") != "completed" and not decided:
+        return item
+    inputs = item.get("review_inputs") or {}
+    profile = (inputs.get("fact_assembly") or {}).get("profile", "strict-v1")
+    status = (inputs.get("consensus") or {}).get("review_status")
+    origin = inputs.get("review_origin")
+    reviewed = (status, origin) in {
+        ("human_confirmed", "human"),
+        ("ai_delegated_confirmed", "ai_delegated"),
+    }
+    if not reviewed and (
+        profile == PARTIAL_FACTS_V1
+        or pinned_profile == PARTIAL_FACTS_V1
+        or status != "auto_confirmed"
+    ):
+        item["status"] = "needs_review"
+        item["reason"] = "PARTIAL_FACTS_REVIEW_REQUIRED"
+        if decided:
+            item["candidate_grade"] = decision.get("evidence_grade")
+            item["decision"] = None
+    return item
+
+
 @dataclass(frozen=True, slots=True)
 class ConsensusResult:
     candidate_elements: tuple[LlmElement, ...]

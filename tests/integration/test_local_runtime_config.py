@@ -266,6 +266,33 @@ def test_tagging_mode_requires_explicit_typed_settings_without_defaults(tmp_path
     assert runtime["tagging_mode"] == "local_synthetic"
 
 
+def test_m2_auto_link_error_survives_local_settings_wrapper(tmp_path: Path) -> None:
+    from proofops.application.tagging.report_level_link import POLICY, POLICY_HASH
+    from proofops_api.local_runtime import load_local_runtime
+
+    parser_path = _write_json(tmp_path / "parser.json", _parser_snapshot())
+    settings_path = _write_json(
+        tmp_path / "run.json",
+        {
+            "build_root": str(tmp_path),
+            "budget_limits": _budget_limits(),
+            "report_level_link": {
+                "policy": POLICY,
+                "policy_hash": POLICY_HASH,
+                "refs": {"M2": [{}]},
+            },
+        },
+    )
+    with pytest.raises(ValueError, match="REPORT_LEVEL_LINK_M3_ONLY"):
+        load_local_runtime(
+            {
+                "LOCAL_PARSER_PROFILE_PATH": str(parser_path),
+                "LOCAL_RUN_SETTINGS_PATH": str(settings_path),
+                "LOCAL_TAGGING_MODE": "local_synthetic",
+            }
+        )
+
+
 def test_settings_reject_duplicate_json_keys(tmp_path: Path) -> None:
     from proofops_api.local_runtime import load_local_runtime
 

@@ -29,7 +29,14 @@ from proofops.application.evidence.retrieval import (
 )
 from proofops.application.ports.jobs import JobMessage, LeaseLost
 from proofops.application.reviews import ReviewInputs, ReviewService
-from proofops.application.tagging.consensus import form_consensus
+from proofops.application.tagging.consensus import (
+    form_consensus,
+    reviewable_checkpoint,
+)
+from proofops.application.tagging.consensus import (
+    reviewable_decision as _review_decision,
+)
+from proofops.application.tagging.report_level_link import apply_report_level_link, strict_fallback
 from proofops.application.tagging.service import tag_replicates
 from proofops.application.telemetry import TraceContext
 from proofops.domain.rulepacks import RulePackSnapshot, canonical_json
@@ -70,6 +77,36 @@ def _consensus_review_reason(consensus):
         "PARTIAL_FACTS_REVIEW_REQUIRED"
         if "PARTIAL_FACTS_REVIEW_REQUIRED" in consensus.reasons
         else "CONSENSUS_UNRESOLVED"
+    )
+
+
+def _prior_claim_record(claim_id, prior, rulepack_unapproved, *, pinned_profile=None):
+    decision, candidate_grade = _review_decision(
+        prior.decision, prior.fact_assembly_profile, prior.consensus.review_status
+    )
+    if rulepack_unapproved:
+        reason = "DOMAIN_RULEPACK_UNAPPROVED"
+    elif candidate_grade is not None or prior.consensus.confirmed_tags is None:
+        reason = _consensus_review_reason(prior.consensus)
+    elif decision and decision.decision_status != "decided":
+        reason = decision.decision_status
+    else:
+        reason = None
+    return reviewable_checkpoint(
+        dict(
+            claim_id=claim_id,
+            status=(
+                "completed"
+                if decision and decision.decision_status == "decided"
+                else "needs_review"
+            ),
+            reason=reason,
+            tag_runs=[asdict(result) for result in prior.tag_runs],
+            decision=asdict(decision) if decision else None,
+            candidate_grade=candidate_grade,
+            review_inputs=prior.snapshot(),
+        ),
+        pinned_profile=pinned_profile,
     )
 
 
@@ -217,6 +254,7 @@ class LocalTagRunner:
                     graph, tenant_id=tenant, pages=avail_pages, index_generation=raw_gen
                 )
         records = []
+        report_source_cache = {}
         for claim in discovery.claims:
             if heartbeat_state is not None:
                 heartbeat_state.check()
@@ -233,23 +271,12 @@ class LocalTagRunner:
                     )
                 if prior_revision is not None:
                     prior = self.tags.load_inputs(tenant, run_id, claim.claim_id)
-                    decided = prior.decision and prior.decision.decision_status == "decided"
-                    if snapshot.get("rulepack_use") == "candidate_tagging_reference_only":
-                        reason = "DOMAIN_RULEPACK_UNAPPROVED"
-                    elif prior.consensus.confirmed_tags is None:
-                        reason = _consensus_review_reason(prior.consensus)
-                    elif prior.decision and prior.decision.decision_status != "decided":
-                        reason = prior.decision.decision_status
-                    else:
-                        reason = None
                     records.append(
-                        dict(
-                            claim_id=claim.claim_id,
-                            status="completed" if decided else "needs_review",
-                            reason=reason,
-                            tag_runs=[asdict(result) for result in prior.tag_runs],
-                            decision=asdict(prior.decision) if prior.decision else None,
-                            review_inputs=prior.snapshot(),
+                        _prior_claim_record(
+                            claim.claim_id,
+                            prior,
+                            snapshot.get("rulepack_use") == "candidate_tagging_reference_only",
+                            pinned_profile=snapshot.get("fact_assembly_profile", "strict-v1"),
                         )
                     )
                     continue
@@ -262,7 +289,12 @@ class LocalTagRunner:
             if recovery is not None and (
                 claim.claim_id not in recovery.claim_ids or not recovery.can_attempt_claim()
             ):
-                records.append(recovery.carry_forward(claim.claim_id))
+                records.append(
+                    reviewable_checkpoint(
+                        recovery.carry_forward(claim.claim_id),
+                        pinned_profile=snapshot.get("fact_assembly_profile", "strict-v1"),
+                    )
+                )
                 continue
             # A manual-classification reprocess attempts exactly its one authorized
             # claim and carries every other committed claim forward verbatim: no
@@ -273,7 +305,12 @@ class LocalTagRunner:
             if reprocess is not None and (
                 claim.claim_id not in reprocess.claim_ids or not reprocess.can_attempt_claim()
             ):
-                records.append(reprocess.carry_forward(claim.claim_id))
+                records.append(
+                    reviewable_checkpoint(
+                        reprocess.carry_forward(claim.claim_id),
+                        pinned_profile=snapshot.get("fact_assembly_profile", "strict-v1"),
+                    )
+                )
                 continue
             raw_candidate_review = None
             if raw_search is not None and _source_traceable(claim, graph):
@@ -520,17 +557,63 @@ class LocalTagRunner:
                 mode=snapshot["mode"],
                 local_synthetic=live is None,
             )
+            link_config = snapshot.get("report_level_link")
+            link_receipts = ()
+            if link_config is not None:
+
+                def attest_report_sources(refs):
+                    if refs not in report_source_cache:
+                        report_source_cache[refs] = self.tags.verify_context_sources(
+                            base_inputs,
+                            refs,
+                            pinned_run_snapshot=snapshot,
+                        )
+                    return report_source_cache[refs]
+
+                base_inputs = ReviewInputs(
+                    run_id,
+                    context,
+                    graph,
+                    rulepack,
+                    rule_context,
+                    packet,
+                    original_packet,
+                    tag_runs,
+                    consensus,
+                    relation_tags,
+                    fact_assembly_profile=snapshot.get("fact_assembly_profile", "strict-v1"),
+                )
+                consensus, link_receipts = apply_report_level_link(
+                    consensus,
+                    config=link_config,
+                    context=context,
+                    graph=graph,
+                    fallback_tags=strict_fallback(
+                        tag_runs,
+                        packet,
+                        rulepack,
+                        tenant,
+                        1,
+                        snapshot.get("fact_assembly_profile", "strict-v1"),
+                    ),
+                    attest=attest_report_sources,
+                )
             rulepack_unapproved = snapshot.get("rulepack_use") == "candidate_tagging_reference_only"
             decision = (
                 evaluate(consensus.confirmed_tags, rule_context, rulepack)
                 if consensus.confirmed_tags and not rulepack_unapproved
                 else None
             )
+            decision, candidate_grade = _review_decision(
+                decision,
+                snapshot.get("fact_assembly_profile", "strict-v1"),
+                consensus.review_status,
+            )
             # Explicit needs_review diagnostic: never collapse the "why" to None.
             # Domain approval gate outranks consensus, which outranks rule holds.
             if rulepack_unapproved:
                 review_reason = "DOMAIN_RULEPACK_UNAPPROVED"
-            elif not consensus.confirmed_tags:
+            elif candidate_grade is not None or not consensus.confirmed_tags:
                 review_reason = _consensus_review_reason(consensus)
             elif decision and decision.decision_status != "decided":
                 review_reason = decision.decision_status
@@ -549,6 +632,8 @@ class LocalTagRunner:
                 relation_tags,
                 decision=decision,
                 fact_assembly_profile=snapshot.get("fact_assembly_profile", "strict-v1"),
+                report_level_link=link_config,
+                report_level_review=link_receipts,
             )
             self._publish_claim(lease, inputs, heartbeat_state)
             item.update(
@@ -558,6 +643,7 @@ class LocalTagRunner:
                 reason=review_reason,
                 tag_runs=[asdict(r) for r in tag_runs],
                 decision=asdict(decision) if decision else None,
+                candidate_grade=candidate_grade,
                 review_inputs=inputs.snapshot(),
             )
             records.append(item)

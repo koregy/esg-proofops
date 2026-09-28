@@ -16,8 +16,9 @@ from proofops.application.evidence.retrieval import freeze_packet
 from proofops.application.ports.jobs import JobMessage
 from proofops.application.ports.models import ModelBinding
 from proofops.application.reviews import ReviewInputs
-from proofops.application.tagging.consensus import form_consensus
+from proofops.application.tagging.consensus import form_consensus, reviewable_decision
 from proofops.application.tagging.relations import SYSTEM_PROMPT as RELATION_SYSTEM_PROMPT
+from proofops.application.tagging.report_level_link import replay_report_level_link, strict_fallback
 from proofops.application.tagging.service import TaggingSettings, TagRun
 from proofops.domain.provenance import canonical_hash
 from proofops.domain.rulepacks import RulePackSnapshot
@@ -145,6 +146,8 @@ def tag_pins(snapshot, extraction, extraction_hash):
         raise ValueError("TAG_CHECKPOINT_PIN_MISMATCH")
     if "fact_assembly_profile" in snapshot:
         pins["fact_assembly_profile"] = snapshot["fact_assembly_profile"]
+    if "report_level_link" in snapshot:
+        pins["report_level_link"] = snapshot["report_level_link"]
     return pins
 
 
@@ -548,12 +551,39 @@ class LocalTagStore:
             tag_revision=raw["tag_revision"],
             profile=raw.get("fact_assembly", {}).get("profile", "strict-v1"),
         )
+        link_config = snapshot.get("report_level_link")
+        if raw.get("report_level_link") != link_config:
+            raise ValueError("TAG_REPLAY_MISMATCH")
+        link_receipts = tuple(raw.get("report_level_review", ()))
+        if link_config is not None:
+            consensus = replay_report_level_link(
+                consensus,
+                config=link_config,
+                context=context,
+                graph=graph,
+                receipts=link_receipts,
+                fallback_tags=strict_fallback(
+                    tuple(runs),
+                    packet,
+                    rulepack,
+                    tenant_id,
+                    raw["tag_revision"],
+                    raw.get("fact_assembly", {}).get("profile", "strict-v1"),
+                ),
+            )
+        elif link_receipts:
+            raise ValueError("TAG_REPLAY_MISMATCH")
         rule_context = RuleContext(**raw["rule_context"])
         decision = (
             evaluate(consensus.confirmed_tags, rule_context, rulepack)
             if consensus.confirmed_tags
             and snapshot.get("rulepack_use") != "candidate_tagging_reference_only"
             else None
+        )
+        decision, _ = reviewable_decision(
+            decision,
+            raw.get("fact_assembly", {}).get("profile", "strict-v1"),
+            consensus.review_status,
         )
         inputs = ReviewInputs(
             run_id,
@@ -572,8 +602,15 @@ class LocalTagStore:
             raw["tag_revision"],
             decision,
             raw.get("fact_assembly", {}).get("profile", "strict-v1"),
+            link_config,
+            link_receipts,
         )
         inputs.validate()
+        for receipt in link_receipts:
+            refs = tuple(SourceRef(**ref) for ref in receipt["refs"])
+            _, replayed = self.verify_context_sources(inputs, refs)
+            if canonical_hash(replayed) != canonical_hash(receipt["source_receipt"]):
+                raise ValueError("REPORT_LEVEL_LINK_REPLAY_MISMATCH")
         if canonical_hash(inputs.snapshot()) != canonical_hash(raw):
             raise ValueError("TAG_REPLAY_MISMATCH")
         return inputs

@@ -10,6 +10,7 @@ from inspect import signature
 from typing import Literal
 
 from proofops.application.evidence.report_level import POLICIES as REPORT_LEVEL_POLICIES
+from proofops.application.tagging.consensus import PARTIAL_FACTS_V1
 from proofops.domain.audit import AuditConflict
 from proofops.domain.errors import DomainValidationError
 from proofops.domain.provenance import canonical_hash
@@ -323,6 +324,12 @@ class RescoreService:
                 raise RescoreRejected("RESCORE_INPUT_UNAVAILABLE") from error
             if isinstance(decision, RetagRequired):
                 raise RescoreRejected(decision.code)
+            if (
+                inputs.fact_assembly_profile == PARTIAL_FACTS_V1
+                and tag["origin"] not in REVIEWED_TAG_ORIGINS
+                and decision.decision_status == "decided"
+            ):
+                raise RescoreRejected("HUMAN_REVIEW_REQUIRED")
             api = decision.to_api_dict()
             if tag["origin"] == "human":
                 api["review_status"] = "human_confirmed"

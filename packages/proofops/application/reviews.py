@@ -33,6 +33,7 @@ from proofops.application.tagging.consensus import (
     ConsensusResult,
     form_consensus,
 )
+from proofops.application.tagging.report_level_link import replay_report_level_link, strict_fallback
 from proofops.application.tagging.service import TagRun
 from proofops.domain.audit import AuditConflict
 from proofops.domain.errors import DomainValidationError
@@ -103,6 +104,8 @@ class ReviewInputs:
     tag_revision: int = 1
     decision: Decision | None = None
     fact_assembly_profile: str = "strict-v1"
+    report_level_link: dict | None = None
+    report_level_review: tuple[dict, ...] = ()
 
     def snapshot(self) -> dict:
         snapshot = dict(
@@ -137,6 +140,9 @@ class ReviewInputs:
         )
         if self.fact_assembly_profile == PARTIAL_FACTS_V1:
             snapshot["fact_assembly"] = {"profile": PARTIAL_FACTS_V1, "sha256": PARTIAL_FACTS_HASH}
+        if self.report_level_link is not None:
+            snapshot["report_level_link"] = self.report_level_link
+            snapshot["report_level_review"] = list(self.report_level_review)
         return snapshot
 
     def validate(self) -> None:
@@ -165,12 +171,49 @@ class ReviewInputs:
             tag_revision=self.tag_revision,
             profile=self.fact_assembly_profile,
         )
+        if self.report_level_link is not None:
+            try:
+                result = replay_report_level_link(
+                    result,
+                    config=self.report_level_link,
+                    context=self.context,
+                    graph=self.original,
+                    receipts=self.report_level_review,
+                    fallback_tags=strict_fallback(
+                        self.tag_runs,
+                        self.packet,
+                        self.rulepack,
+                        claim.tenant_id,
+                        self.tag_revision,
+                        self.fact_assembly_profile,
+                    ),
+                )
+            except (ValueError, KeyError, TypeError) as exc:
+                raise ReviewRejected("REPORT_LEVEL_LINK_REPLAY_MISMATCH", 409) from exc
+        elif self.report_level_review:
+            raise ReviewRejected("REPORT_LEVEL_LINK_REPLAY_MISMATCH", 409)
+        if self.report_level_link is not None and (
+            result.candidate_elements != self.consensus.candidate_elements
+            or result.confirmed_tags != self.consensus.confirmed_tags
+            or result.reasons != self.consensus.reasons
+            or result.review_status != self.consensus.review_status
+        ):
+            raise ReviewRejected("REPORT_LEVEL_LINK_REPLAY_MISMATCH", 409)
         if result.replicate_hashes != self.consensus.replicate_hashes:
             raise ReviewRejected("REVIEW_RECEIPT_MISMATCH", 409)
         if self.consensus.confirmed_tags is not None and (
             self.consensus.confirmed_tags != result.confirmed_tags
         ):
             raise ReviewRejected("REVIEW_CONFIRMATION_MISMATCH", 409)
+        if (
+            self.decision is not None
+            and self.decision.decision_status == "decided"
+            and (
+                self.fact_assembly_profile == PARTIAL_FACTS_V1
+                or self.consensus.review_status != "auto_confirmed"
+            )
+        ):
+            raise ReviewRejected("PARTIAL_FACTS_REVIEW_REQUIRED", 409)
         if self.decision is not None and (
             self.consensus.confirmed_tags is None
             or evaluate(self.consensus.confirmed_tags, self.rule_context, self.rulepack)
@@ -913,11 +956,9 @@ class ReviewService:
                     )
             checked_elements = []
             report_level_receipts = []
-            prior_report_level = (
-                {item["element_id"]: item for item in initial.get("report_level_review", ())}
-                if reopen
-                else {}
-            )
+            prior_report_level = {
+                item["element_id"]: item for item in initial.get("report_level_review", ())
+            }
             page_texts: dict[int, list[str]] | None = None
             for element in elements:
                 if element.element_id == "P6" and context_receipt is not None:

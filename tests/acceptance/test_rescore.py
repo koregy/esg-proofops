@@ -507,6 +507,21 @@ def test_http_rescore_accepts_partial_fact_revision_without_retag(tmp_path):
     assert decisions[-1]["fact_assembly"] == decisions[0]["fact_assembly"]
 
 
+def test_partial_fact_rescore_cannot_publish_candidate_grade(tmp_path, monkeypatch):
+    from proofops.application import rescores
+
+    ws = rescore_workspace(tmp_path, partial=True)
+    original = rescores.create_rescore
+
+    def candidate(*args, **kwargs):
+        return replace(original(*args, **kwargs), decision_status="decided", evidence_grade="E3")
+
+    monkeypatch.setattr(rescores, "create_rescore", candidate)
+    response = rescore_post(ws)
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "HUMAN_REVIEW_REQUIRED"
+
+
 @pytest.mark.parametrize("change", ["ontology", "no_confirmed"])
 def test_http_retag_required_never_creates_ready_job_or_changes_heads(tmp_path, change):
     ws = rescore_workspace(

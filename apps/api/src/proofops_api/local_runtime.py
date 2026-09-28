@@ -41,6 +41,7 @@ _SETTINGS_FIELDS = frozenset(
         "claim_source_policy",
         "raster_runtime_binding_id",
         "raster_policy",
+        "report_level_link",
     }
 )
 _REQUIRED_SETTINGS_FIELDS = frozenset({"build_root", "budget_limits"})
@@ -273,6 +274,19 @@ def load_local_runtime(env: Mapping[str, str]) -> dict[str, Any]:
     ):
         raise _invalid()
     runtime.update(_raster(settings, extraction_mode))
+    if "report_level_link" in settings:
+        from proofops.application.tagging.report_level_link import validate_config
+
+        if not tagging_mode:
+            raise _invalid()
+        try:
+            runtime["report_level_link"] = validate_config(settings["report_level_link"])
+        except ValueError as exc:
+            if str(exc) == "REPORT_LEVEL_LINK_M3_ONLY":
+                raise ValueError(
+                    "LOCAL_RUNTIME_CONFIG_INVALID: REPORT_LEVEL_LINK_M3_ONLY"
+                ) from None
+            raise _invalid() from None
     if "claim_source_policy" in settings:
         from proofops.adapters.local.claim_source_policies import claim_source_reader
 

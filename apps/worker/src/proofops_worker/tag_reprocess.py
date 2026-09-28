@@ -25,6 +25,7 @@ from proofops.adapters.local.classification_reprocess import (  # re-exported fo
     plan_reprocess,
 )
 from proofops.application.ports.jobs import JobMessage
+from proofops.application.tagging.consensus import reviewable_checkpoint
 from proofops.domain.provenance import canonical_hash
 from proofops.domain.rulepacks import canonical_json
 from proofops_agent.upstage_tagging import TransportResume
@@ -62,6 +63,7 @@ class TagReprocess:
         self.claim_ids = frozenset({plan.claim_id})
         self.classification = classification
         self._items = {item["claim_id"]: item for item in lineage["claims"]}
+        self._profile = lineage.get("fact_assembly_profile", "strict-v1")
         if plan.claim_id not in self._items:
             raise ReprocessRejected("TAG_REPROCESS_CLAIM_NOT_IN_LINEAGE")
         try:
@@ -127,7 +129,7 @@ class TagReprocess:
         item = self._items.get(claim_id)
         if item is None:
             raise ReprocessRejected("TAG_REPROCESS_CLAIM_NOT_IN_LINEAGE")
-        return json.loads(canonical_json(item))
+        return reviewable_checkpoint(json.loads(canonical_json(item)), pinned_profile=self._profile)
 
     def verify_published(self, store, *, db=None) -> int:
         """Every carried published item must still match its immutable revision.

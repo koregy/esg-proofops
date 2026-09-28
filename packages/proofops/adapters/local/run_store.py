@@ -110,6 +110,17 @@ class LocalSQLiteRunStore:
                     "partial-facts-v1",
                 ):
                     raise ValueError("unknown fact assembly profile")
+                if "report_level_link" in snapshot:
+                    from proofops.application.tagging.report_level_link import validate_config
+
+                    validate_config(snapshot["report_level_link"])
+                    if any(
+                        ref.get("document_version_id") != snapshot["document"]["version_id"]
+                        for refs in snapshot["report_level_link"]["refs"].values()
+                        for ref in refs
+                        if "source_id" in ref
+                    ):
+                        raise ValueError("report-level link document mismatch")
                 if "claim_source_policy" in snapshot:
                     from proofops.adapters.local.claim_source_policies import (
                         publication_reader,
