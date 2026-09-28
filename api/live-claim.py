@@ -174,12 +174,20 @@ def run_claim(payload: dict, *, access_code: str, call_model=None) -> dict:
             "tokens": usage1,
         }
     ]
+    source = {
+        "kind": "pasted_text",
+        "sha256": _hash(claim),
+        "page_label": page,
+        "document_version_id": document_id,
+    }
     if track is None:
         return {
             "status": "needs_review",
             "notice": "원문 PDF 검증 없음 — 입력 텍스트 기준",
             "draft": "사용자 최종 검토 전",
             "steps": steps,
+            "source": source,
+            "replicas": 1,
             "decision": None,
             "cost_estimate_usd": round(actual1, 6),
             "duration_ms": ms1,
@@ -259,6 +267,7 @@ def run_claim(payload: dict, *, access_code: str, call_model=None) -> dict:
                 "candidate_state": state,
                 "engine_state": facts[-1].state,
                 "quote": quote,
+                "page_label": page if state == "present" else None,
             }
         )
     # The full evaluator DTO requires three hashes; the latter two mark unrun replicas.
@@ -310,6 +319,7 @@ def run_claim(payload: dict, *, access_code: str, call_model=None) -> dict:
         "replicas": 1,
         "claim_id": claim_id,
         "steps": steps,
+        "source": source,
         "decision": decision.to_api_dict(),
         "cost_estimate_usd": round(actual1 + actual2, 6),
         "duration_ms": ms1 + ms2,
