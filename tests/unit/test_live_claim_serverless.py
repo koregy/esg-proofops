@@ -107,6 +107,81 @@ def test_unmatched_quote_rejected(monkeypatch):
     assert error.value.code == "TAG_QUOTE_NOT_IN_CLAIM"
 
 
+def test_omitted_elements_remain_unknown(monkeypatch):
+    monkeypatch.setenv("DEMO_ACCESS_CODE", "local-only")
+
+    def fake(system, user, max_tokens):
+        content = (
+            {"claim_id": user["claim_id"], "track": "management", "safe_harbor_category": None}
+            if "sources" in user
+            else {
+                "elements": [
+                    {
+                        "name": "concrete_implementation_detail",
+                        "state": "present",
+                        "quote": "연 3회",
+                    }
+                ]
+            }
+        )
+        return {
+            "choices": [{"message": {"content": json.dumps(content)}}],
+            "usage": {"prompt_tokens": 100, "completion_tokens": 40},
+        }
+
+    result = live.run_claim(
+        {"claim": "ESG위원회는 연 3회 정기적으로 개최한다."},
+        access_code="local-only",
+        call_model=fake,
+    )
+    elements = result["steps"][1]["elements"]
+    assert len(elements) == len(set().union(*live.MAPPINGS["management"].values()))
+    present = next(item for item in elements if item["name"] == "concrete_implementation_detail")
+    assert present["engine_state"] == "present"
+    assert all(
+        item["engine_state"] == "unknown"
+        for item in elements
+        if item["name"] != "concrete_implementation_detail"
+    )
+
+
+def test_local_quote_cannot_prove_bound_assurance(monkeypatch):
+    monkeypatch.setenv("DEMO_ACCESS_CODE", "local-only")
+
+    def fake(system, user, max_tokens):
+        content = (
+            {"claim_id": user["claim_id"], "track": "performance", "safe_harbor_category": None}
+            if "sources" in user
+            else {
+                "elements": [
+                    {
+                        "name": "assurance_covered",
+                        "state": "present",
+                        "quote": "제3자 검증",
+                        "extra": "ignored",
+                    },
+                    {"name": "method", "state": "not_applicable", "quote": "제3자 검증"},
+                    {"name": "method", "state": "present", "quote": "제3자 검증"},
+                ],
+                "comment": "ignored",
+            }
+        )
+        return {
+            "choices": [{"message": {"content": json.dumps(content)}}],
+            "usage": {"prompt_tokens": 100, "completion_tokens": 40},
+        }
+
+    result = live.run_claim(
+        {"claim": "2024년 배출량은 제3자 검증을 받았다."},
+        access_code="local-only",
+        call_model=fake,
+    )
+    elements = {item["name"]: item for item in result["steps"][1]["elements"]}
+    assert elements["assurance_covered"]["candidate_state"] == "present"
+    assert elements["assurance_covered"]["engine_state"] == "unknown"
+    assert elements["method"]["engine_state"] == "unknown"
+
+
 def test_http_handler_with_fake_model(monkeypatch):
     monkeypatch.setenv("DEMO_ACCESS_CODE", "local-only")
 

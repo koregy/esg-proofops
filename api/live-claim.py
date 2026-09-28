@@ -37,7 +37,6 @@ MAX_CONTEXT = 2_000
 MAX_ESTIMATE_USD = 0.01
 INPUT_RATE = 0.15 / 1_000_000
 OUTPUT_RATE = 0.60 / 1_000_000
-TAG_PROMPT = (ROOT / "prompts/element_tagging.md").read_text(encoding="utf-8")
 PACK = RulePackSnapshot(**json.loads((ROOT / "api/rulepack.json").read_text(encoding="utf-8")))
 
 
@@ -193,12 +192,19 @@ def run_claim(payload: dict, *, access_code: str, call_model=None) -> dict:
             "duration_ms": ms1,
         }
     names = sorted({name for group in MAPPINGS[track].values() for name in group})
+    definitions = {e["id"]: e for e in PACK.file_content("rubric/elements.yaml")["elements"]}
+    local_allowed = {
+        name
+        for element, group in MAPPINGS[track].items()
+        if "local_claim" in definitions[element]["source_scopes"]
+        for name in group
+    }
     tag_system = (
-        TAG_PROMPT + "\nFor this pasted-text mini demo, replace the full llm_tags JSON "
-        "schema above with exactly an elements array containing one item "
-        "per requested name: {name,state,quote}. state is present, absent, unknown, "
-        "or conflict. For present, quote must be a literal substring of claim text, "
-        "not context. No grade or label. No PDF verification is available."
+        "Tag only the pasted claim. Return a JSON object with exactly one key, elements. "
+        "elements must contain one {name,state,quote} object for EACH requested name, "
+        "including names with no evidence. Use state present only when quote is an exact "
+        "substring of claim; otherwise use unknown and quote null. Use context only to "
+        "interpret the claim, never as quote evidence. Do not output grades or labels."
     )
     tag_user = {
         "claim": claim,
@@ -209,23 +215,32 @@ def run_claim(payload: dict, *, access_code: str, call_model=None) -> dict:
     raw_tags, usage2, ms2, _, actual2 = _step(call_model, tag_system, tag_user, 768, est1)
     if actual1 + actual2 > MAX_ESTIMATE_USD:
         raise LiveError(502, "ACTUAL_COST_CAP_EXCEEDED")
-    if set(raw_tags) != {"elements"} or not isinstance(raw_tags["elements"], list):
+    if not isinstance(raw_tags.get("elements"), list):
         raise LiveError(502, "TAGS_INVALID")
     given = raw_tags["elements"]
-    if len(given) != len(names) or {
-        item.get("name") for item in given if isinstance(item, dict)
-    } != set(names):
-        raise LiveError(502, "TAGS_INVALID")
-    facts, visible = [], []
+    given_by_name = {}
     for item in given:
-        if set(item) != {"name", "state", "quote"} or item["state"] not in (
-            "present",
-            "absent",
-            "unknown",
-            "conflict",
-        ):
-            raise LiveError(502, "TAGS_INVALID")
-        name, state, quote = item["name"], item["state"], item["quote"]
+        if not isinstance(item, dict) or item.get("name") not in names:
+            continue
+        name = item["name"]
+        state = item.get("state")
+        if state not in ("present", "absent", "unknown", "conflict"):
+            state = "unknown"
+        normalized = {
+            "name": name,
+            "state": state,
+            "quote": item.get("quote") if state == "present" else None,
+        }
+        # Conflicting duplicate candidates cannot establish an element.
+        given_by_name[name] = (
+            {"name": name, "state": "unknown", "quote": None}
+            if name in given_by_name
+            else normalized
+        )
+    facts, visible = [], []
+    for name in names:
+        item = given_by_name.get(name, {"name": name, "state": "unknown", "quote": None})
+        state, quote = item["state"], item["quote"]
         if state == "present":
             if not isinstance(quote, str) or not quote.strip() or claim.count(quote) != 1:
                 raise LiveError(502, "TAG_QUOTE_NOT_IN_CLAIM")
@@ -244,21 +259,22 @@ def run_claim(payload: dict, *, access_code: str, call_model=None) -> dict:
                 "located",
                 "verified",
             )
-            facts.append(
-                ConfirmedFact(
-                    name,
-                    "present",
-                    (ref,),
-                    tenant_id,
-                    True,
-                    True,
-                    source_scope="local_claim",
-                    normalized_value=quote,
+            if name in local_allowed:
+                facts.append(
+                    ConfirmedFact(
+                        name,
+                        "present",
+                        (ref,),
+                        tenant_id,
+                        True,
+                        True,
+                        source_scope="local_claim",
+                        normalized_value=quote,
+                    )
                 )
-            )
+            else:
+                facts.append(ConfirmedFact(name, "unknown"))
         else:
-            if quote is not None:
-                raise LiveError(502, "TAGS_INVALID")
             # One pasted sentence cannot prove a document-wide absence.
             facts.append(ConfirmedFact(name, "conflict" if state == "conflict" else "unknown"))
         visible.append(
