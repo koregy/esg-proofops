@@ -72,8 +72,8 @@ main {
 }
 
 /* ── sections become white panels ── */
-main > section,
-main > section > section {
+main:not(.static-main) > section,
+main:not(.static-main) > section > section {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -82,7 +82,7 @@ main > section > section {
 }
 
 /* avoid triple nesting extra panels */
-main > section > section > section {
+main:not(.static-main) > section > section > section {
   background: transparent;
   border: none;
   padding: 0;
@@ -309,8 +309,8 @@ form[aria-label] button { flex: 0 0 auto; }
 /* ── responsive: 320 px min, no page-wide overflow ── */
 @media (max-width: 600px) {
   main { padding: 1rem .75rem 2rem; }
-  main > section,
-  main > section > section {
+  main:not(.static-main) > section,
+  main:not(.static-main) > section > section {
     padding: 1rem;
   }
   h1 { font-size: 1.25rem; }

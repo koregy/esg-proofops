@@ -1,5 +1,6 @@
+import { StaticDemo } from "./StaticDemo";
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
-import { BrowserRouter, Link, Navigate, Route, Routes, useNavigate, useParams } from "react-router";
+import { BrowserRouter, Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from "react-router";
 import { ClaimWorkspace, ReviewQueueWorkspace } from "./features/claims/ClaimWorkspace";
 import { ComparisonWorkspace } from "./features/comparison/ComparisonWorkspace";
 import { ReconciliationWorkspace } from "./features/reconciliation/ReconciliationWorkspace";
@@ -30,6 +31,9 @@ export function App() {
 
 function SessionApp() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const publicPage = location.pathname === "/" || location.pathname.startsWith("/demo");
+  const [staticMode, setStaticMode] = useState(import.meta.env.VITE_DEMO_STATIC === "true");
   const [session, setSession] = useState<Session | null>(null);
   const [sessionStatus, setSessionStatus] = useState<"loading" | "ready" | "missing" | "error">("loading");
   const [sessionError, setSessionError] = useState<string | null>(null);
@@ -53,12 +57,12 @@ function SessionApp() {
         if (controller.signal.aborted) return;
         setSession(null);
         if (reason instanceof ApiError && reason.status === 401) return setSessionStatus("missing");
-        setSessionStatus("error"); setSessionError(errorMessage(reason, "세션을 확인하지 못했습니다."));
+        setStaticMode(true); setSessionStatus("error"); setSessionError(errorMessage(reason, "세션을 확인하지 못했습니다."));
       });
     return () => controller.abort();
   }, []);
 
-  useEffect(() => loadSession(), [loadSession]);
+  useEffect(() => { if (!staticMode && !publicPage) return loadSession(); }, [loadSession, staticMode, publicPage]);
 
   useEffect(() => {
     setIsSavedDemo(false); setDemoRunId(null);
@@ -124,6 +128,8 @@ function SessionApp() {
   const canRun = session?.role === "admin";
   const loginUrl = `/auth/login?return_to=${encodeURIComponent(location.pathname.startsWith("/runs/") ? location.pathname : "/documents/new")}`;
   const changed = useCallback(() => setDataRevision(current => current + 1), []);
+
+  if (staticMode || publicPage) return <StaticDemo />;
 
   return <main style={{ fontFamily: "system-ui, 'Noto Sans KR', sans-serif", lineHeight: 1.5, maxWidth: 1200, margin: "32px auto", padding: "0 16px 48px" }}>
     {sessionStatus === "loading" ? <p role="status">세션을 확인하는 중입니다.</p> : null}
