@@ -1,85 +1,91 @@
-> **팀 개발 시작:** [전체 범위 상세 인수인계 v2](https://github.com/tskwak111/esg-proofops/tree/main/handoff/team-v2)
-> 개발자 A: 기존 ESG 파이프라인 / 개발자 B: 독립 DART·C1/C3 / 도메인: 원문 정답과 규칙.
-> 이 저장소는 기존 로컬 commit 254f228의 현재 파일 스냅샷에서 시작합니다. 기존 Git 이력은 포함하지 않습니다.
-> 새 팀 작업은 이 저장소를 clone하고 main에서 분기하세요. 기존 로컬 브랜치를 강제 push하지 마세요.
+# ESG ProofOps
 
-# ESG ProofOps · Implementation-ready Development Package v1.0
+**지속가능성 공시의 환경 관련 주장을 발간 전에 근거와 함께 검토하는 도구입니다.** 기업의 실제 환경성과나 위법 여부를 판정하지 않습니다. 각 주장에 대해 같은 공시의 어느 문장·표·쪽이 근거인지, 무엇이 빠졌는지, 사람의 확인이 어디에 필요한지를 보여줍니다.
 
-지속가능성 공시 입증 검토 시스템의 개발 문서·계약 패키지. 도메인 정본은 첨부 원문 v2.0(2026-09-07)이며, 기존 GitHub 의 선택 이식과 OpenDataLoader 기반 파싱 구조를 반영했다.
+## 문제와 작동 방식
 
-로컬 문서 업로드·파싱·태깅·검토·재판정·요약·평가와 버전 보존·인증·감사·비용 제한을 구현하고 후속 기능을 연결 중이다. 구현·검증 범위와 보류 입력은 [작업 현황](docs/IMPLEMENTATION_STATUS.md)에 기록한다. 실제 고객 PDF 벤치마크·Bedrock 호출·AWS 배포는 아직 수행하지 않았다. `validate_package.py`는 문서·schema·설정·참조관계만 검사한다.
+긴 보고서에서는 목표, 실적, 관리체계 주장이 본문과 표에 흩어져 있습니다. ProofOps는 원자 주장으로 나누고 원문 위치를 보존해 검토자가 주장과 근거를 왕복할 수 있게 합니다.
 
-## 먼저 읽기
-[최상위 명세](docs/00_MASTER_SPEC.md) → [기존 코드 재사용 검토](docs/26_LEGACY_REUSE_AUDIT.md) → [파싱·근거 추적](docs/27_PARSING_AND_PROVENANCE.md) → [규칙 계약](docs/28_RULE_ENGINE_CONTRACT.md) → [미정 계약 처리](docs/31_DOMAIN_IMPLEMENTATION_GAPS.md) → [구현 계획](docs/19_IMPLEMENTATION_PLAN.md).
-
-## Codex 에 전달
-압축을풀어대상 repo 의개발영역에넣는다. 기존 repo 에 AGENTS.md 가있으면무조건덮어쓰지말고본규칙과충돌을검토해병합한다. `CODEX_START_PROMPT.md`내용을 Codex 에전달한다. 원문두파일과 source_manifest 를같이유지한다. Task 별세부명세는[작업 분해](docs/20_TASK_BREAKDOWN.md), API 는[OpenAPI](contracts/openapi.yaml), ID 연결은[추적표](docs/32_REQUIREMENT_TRACEABILITY.md)에있다.
-
-## 패키지 자체 검증
-Python3.11+와 PyYAML/jsonschema 가있는환경에서:
-
-```bash
-python -m pip install -r requirements-package-validation.txt
-python scripts/validate_package.py
+```mermaid
+flowchart LR
+  A[보고서 PDF] --> B[파싱·원문 위치 기록]
+  B --> C[원자 주장 추출]
+  C --> D[같은 문서의 근거 검색·연결]
+  D --> E[인용·귀속 검증]
+  E --> F[Python 규칙엔진]
+  F --> G[검토 화면·부분 보고서]
+  G --> H[사람의 태깅 수정·새 불변 revision]
+  H --> F
 ```
 
-실행하면 `evidence/package_validation.json`과 `.txt`를기록한다. 설치명령은문서 검증용의존성만설치하며 AWS·모델을호출하지않는다. 원본 SHA,문서존재,JSON/YAML,OpenAPIrefs,요구사항/API/TaskDAG,fixture 형식,스키마양/음성예시를검사한다.
+Upstage 모델은 **추출과 태깅만** 맡습니다. E0~E3 등급과 라벨은 순수 Python 규칙엔진이 계산합니다. 검증되지 않은 원문을 `present`로 인정하지 않으며, `unknown`·`conflict`·`unreadable`을 근거 부재로 바꾸지 않습니다. 미정 규칙은 등급을 꾸며내는 대신 판정을 보류합니다. 사람은 태깅을 수정하며 기존 결과와 감사 기록은 보존됩니다. [도메인 계약](docs/00_MASTER_SPEC.md) · [미정 규칙](docs/31_DOMAIN_IMPLEMENTATION_GAPS.md)
+
+## 구성
+
+| 영역 | 구현 |
+| --- | --- |
+| 검토 화면 | React, TypeScript, Vite (`apps/web/`) |
+| API·작업 처리 | FastAPI, Python 워커 (`apps/api/`, `apps/worker/`) |
+| 주장·근거·규칙 | Python 도메인·애플리케이션·로컬 어댑터 (`packages/proofops/`) |
+| 모델 연결 | Upstage 추출·태깅 어댑터 (`apps/agent/`), 명시적 호출·예산 제한 |
+| 로컬 상태 | SQLite와 로컬 객체 저장소; 원문 버전·출처·규칙 해시 보존 |
+| 계약·검증 | `contracts/`, `tests/`, `evidence/` |
+
+AWS 배포 구조는 [명세](docs/00_MASTER_SPEC.md)에 기록되어 있습니다. 로컬 실증과 AWS 운영 배포는 별개입니다.
+
+## 확인된 부분 실행
+
+아래는 개발 중 **실제 공개 보고서의 선택한 페이지**를 처리한 기록입니다. AI 위임 검토를 포함한 결과는 **사용자 최종 검토 전 초안**입니다. 숫자는 모델 정확도나 보고서 전체 처리율이 아닙니다.
+
+| 기록 | 관찰 결과 | 출처 |
+| --- | --- | --- |
+| KB 보고서 물리 30쪽 로컬 실행 | 추출 후보 7개 중 원문 확인 2개, 미확인 5개. 태깅은 선행 조건 때문에 보류; 자동 등급 없음. | [실행 기록](evidence/developer-a-validation-20260918.md) |
+| 삼성생명·한전 저장 결과 재생 | 각각 주장 2개·3개를 근거 후보와 연결. 원문 미검증으로 확정 등급 0개. | [재생 기록](evidence/source-linked-demo-verification.md) |
 
 ## 로컬 실행
-Python 3.12, uv, Node.js, pnpm을 사용한다. 의존성을 설치한다:
+
+Python 3.12, `uv`, Node.js, `pnpm`이 필요합니다.
 
 ```bash
 uv sync --locked
 pnpm install --frozen-lockfile
 ```
 
-서로 다른 터미널에서 API와 웹을 실행한다:
+**API 비용 없이 저장 결과 열기:** 권리가 확인된 기존 pilot 상태 디렉터리(`pilot.json` 포함)를 준비한 뒤 실행합니다. 보고서 원본과 저장 결과는 재배포 권리가 확인되지 않아 이 저장소에 포함하지 않습니다. 실행기는 seed를 복사하며 유료 모델 호출을 하지 않습니다.
+
+```bash
+uv run python scripts/submission_demo.py --seed .local/saved-pilot-state --port 8790
+```
+
+출력된 로컬 로그인 URL을 엽니다. seed가 없다면 합성 로컬 모드에서 화면과 API를 비용 없이 확인할 수 있습니다(서로 다른 터미널에서 실행).
 
 ```bash
 APP_ENV=local MODEL_ADAPTER=synthetic APP_ORIGIN=http://localhost:5173 uv run proofops-api
 pnpm --dir apps/web dev
 ```
 
-웹은 `http://localhost:5173`, API 생존 확인은 `http://localhost:8000/v1/health/live`다. `APP_ORIGIN`은 변경 요청을 허용할 웹 출처이며, 비어 있으면 변경 요청을 거부한다. 회사·문서·버전은 기본 `.local/state.sqlite3`에, 원본은 `.local/objects/`에 보존한다. 로그인 계정·암호화 저장소가 연결되지 않은 기본 설정은 `/auth/login`에서 503을 반환하며 승인된 프로필을 자동 생성하지 않는다. 운영 환경은 승인된 어댑터가 연결될 때까지 시작을 거부한다.
-
-로컬 작업자는 `uv run proofops-worker --tenant-id <UUID> --run-id <UUID> --once
---stage parse`로 지정한 실행의 파싱을 수행한다. 이후 단계는 `extract`, `tag`다.
-[명시적 로컬 실행 설정](docs/17_ENV_CONFIG.md)의 parser/profile/budget 설정과
-합성 모드가 필요하며, 원문 검증이나 선행 산출물이 부족하면 partial/blocked를 유지한다.
-태깅을 끝냈다고 근거 없는 등급이나 완료 상태를 생성하지 않는다.
-
-평가는 `uv run python -m evaluation.cli --predictions <JSON> --gold <JSON>
---manifest <JSON> --synthetic-fixture`로 분리된 합성 입력을 읽는다.
-결과는 같은 로컬 DB에 불변 보고서로 저장하며, 관리자 평가 조회 API에서 확인한다.
-실제 정답 데이터에는 `--synthetic-fixture`를 붙이지 않는다.
-
-검증 명령:
+**새 PDF로 Upstage 실행:** 사용 권한이 있는 PDF와 별도 `.env.upstage.local`의 `UPSTAGE_API_KEY`가 필요합니다. 먼저 아래 명령으로 입력 계획을 확인하고, 실제 유료 실행을 승인한 경우에만 끝에 `--invoke`를 붙입니다. 선택한 쪽만 처리하는 제한된 실행입니다. [세부 실행 방법](docs/SUBMISSION_DEMO.md)
 
 ```bash
-uv run pytest tests/contracts/test_package_contracts.py tests/unit/test_package_validation.py
-uv run ruff check packages apps scripts tests
-uv run mypy packages/proofops apps/api/src apps/worker/src apps/agent/src
-uv run python scripts/verify_architecture.py
-pnpm typecheck
-pnpm build
+uv run python scripts/analyze_report.py --pdf /path/to/report.pdf \
+  --pages 25,117,138 --report-year 2025 \
+  --period-start 2025-01-01 --period-end 2025-12-31
 ```
 
-후속 작업의 수용 테스트는 `tests/acceptance/`에 추가한다. 클라우드 환경은 17장의 계정 값을 승인된 정보로 설정한 뒤 preflight 한다. 모델·클라우드 값이 없으면 local synthetic으로 진행하고 결과에 합성 표시를 남긴다.
+## 배포와 한계
 
-## 사람이 제공하거나 결정해야 할 입력
+제출용 링크 자리: **정적 Vercel 데모 `STATIC_DEMO_URL`** · **라이브 미니 파이프라인 `LIVE_PIPELINE_URL`**. URL과 실제 배포 검증 결과가 확정되기 전에는 배포 완료로 표시하지 않습니다. 정적 데모의 예시는 저장된 결과를 설명하기 위한 것이며 새 PDF 분석과 구분합니다.
 
-| 입력 | 필요한 내용 |
-|---|---|
-| 미정 도메인 기준 | [GAP-001–010](docs/31_DOMAIN_IMPLEMENTATION_GAPS.md)의 판단과 승인된 기준 원문·버전. 조항 번호와 법적 효과를 임의로 채우지 않는다. |
-| 실제 문서·권리 | 사용 가능한 기업 보고서 PDF, 기업·보고기간·버전 정보, 처리·보존 권한과 허용 리전. |
-| 평가 정답 | 원문 페이지·좌표와 연결된 요소 태깅 정답 및 규칙 버전. 기업 단위로 개발·검증·holdout을 분리하고 모델 출력과 독립적으로 검토한다. |
-| 모델·운영 환경 | 승인된 계정·모델 binding·동의·가격/예산·배포 및 보존 설정. 실제 호출·AWS 검증·배포 승인은 별도로 남긴다. |
+현재 실증은 선택한 페이지와 로컬 상태에 한정됩니다. 원문 판독 불가, 근거 귀속 충돌, 승인되지 않은 규칙은 보류 상태로 남습니다. 독립적인 정답 자료에 대한 정확도, 전체 보고서 처리 성능, AWS 운영 환경, 법적 면책 효과는 검증됐다고 주장하지 않습니다.
 
-위 입력을 기다리지 않아도 로컬 합성 데이터로 코드·계약·경합·복구를 검증할 수 있다.
-그 결과를 실제 문서 정확도나 운영 환경 검증으로 표시하지 않는다.
+## 팀과 권리
 
-## 포함 범위
-00–25개발명세,26재사용검토,27파싱,28규칙 계약,29대회데모,30출처,31도메인 gap,32추적표,33handoff audit. API/JSONSchema/루브릭설정초안/합성 rule·edgefixtures/프롬프트/AGENTS/Codex 시작프롬프트가함께있다. 실제규칙조항·safeharbor 등급매핑등원문미정부분은승인 gate 로남긴다.
+개발자 A는 공시 파이프라인, 개발자 B는 DART·재무 연계, 도메인 담당은 원문·규칙 계약을 맡는 방식으로 작업했습니다. Orca에서 위임한 AI 에이전트의 제안은 코드·원문 근거·검증 기록을 통해 통합했으며, AI 검토 결과 자체를 독립적인 정답으로 취급하지 않습니다. [개발 기록](docs/IMPLEMENTATION_STATUS.md)
 
-## 문제 해결
-패키지 검증의 sourcehash 오류는원문이변경됐다는뜻이다. 원문을조용히고치지말고새 sourceversion 으로갱신한다. Taskcycle/API 누락오류는 contract 와명세를같이수정한다. MODEL_BINDINGS/CONSENT 가비어있어 live 실행이막히는것은정상보호동작이다. PDF 추출실패는문서근거없음/E0와다르므로27장 qualitygate 를확인한다.
+이 저장소의 코드에는 별도 `LICENSE` 파일이 없으므로 사용·재배포 허가를 추정하지 마세요. 제3자 보고서 PDF·페이지 이미지의 재배포 권리도 확인되지 않았습니다. 공개 화면과 문서는 짧은 인용, 물리 쪽번호, 공식 보고서 링크만 사용해야 합니다.
+
+<details><summary>English summary</summary>
+
+ProofOps reviews environmental claims in sustainability disclosures against evidence in the same report before publication. AI extracts and tags; a deterministic Python rule engine computes grades, while unresolved evidence or rules remain pending. Local demos replay saved results without model calls; live analysis requires an authorized report and an explicit Upstage invocation. Results are drafts pending final user review, not accuracy or legal-compliance claims.
+
+</details>
