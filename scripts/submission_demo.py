@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
 import shutil
 import subprocess
 import sys
@@ -115,6 +116,114 @@ def _prepare_writable(seed: Path, demo_state: Path) -> None:
             pass
 
 
+def _parse_pilot_status(stdout: str) -> dict | None:
+    """Ignore log records; keep only the pilot's final status object."""
+    status = None
+    for line in stdout.splitlines():
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict) and "pipeline_outcome" in obj:
+            status = obj
+    return status
+
+
+def _latest_inspection(demo_state: Path, previous: set[Path]) -> dict | None:
+    candidates = sorted(set(demo_state.glob("inspection-*.json")) - previous)
+    if not candidates:
+        return None
+    try:
+        result = json.loads(candidates[-1].read_text())
+        return result if isinstance(result, dict) else None
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _coverage_from_inspection(inspection: dict | None) -> dict:
+    """Count the returned API page; a blocked decision is not a grade."""
+    claims = (inspection or {}).get("claims")
+    if not isinstance(claims, dict) or not isinstance(claims.get("items"), list):
+        return {}
+    items = claims["items"]
+    decisions = [item.get("decision") or {} for item in items]
+    graded = sum(
+        d.get("decision_status") == "decided"
+        and d.get("evidence_grade") in {"E0", "E1", "E2", "E3"}
+        for d in decisions
+    )
+    excluded = sum(d.get("decision_status") == "not_applicable" for d in decisions)
+    return dict(
+        total=len(items),
+        graded=graded,
+        pending=len(items) - graded - excluded,
+        not_applicable=excluded,
+        has_more=bool(claims.get("next_cursor")),
+    )
+
+
+def _resume_command(demo_state: Path, port: int) -> str:
+    return shlex.join(
+        [
+            sys.executable,
+            "-m",
+            "evaluation.local_upstage_pilot",
+            "--resume",
+            "--state",
+            str(demo_state),
+            "--port",
+            str(port),
+            "--serve",
+        ]
+    )
+
+
+def summarize_outcome(
+    status: dict | None, *, demo_state: Path, port: int, coverage: dict | None = None
+) -> list[str]:
+    """Report observed state and a read-only reopen command, never infer completeness."""
+    lines = ["", "== run outcome (from the pilot's own status + saved claims) =="]
+    if status is None:
+        lines.append("  pilot status line not found; inspect the saved inspection-*.json directly.")
+    else:
+        outcome = status.get("pipeline_outcome") or {}
+        for label in ("run_id", "selected_pages", "claim_pages"):
+            lines.append(f"  {label}: {status.get(label)}")
+        lines.extend(
+            [
+                f"  pipeline stage: {outcome.get('stage')}",
+                f"  pipeline status: {outcome.get('status', 'unknown')}",
+            ]
+        )
+    if coverage:
+        lines.append(
+            f"  visible page only: {coverage['graded']}/{coverage['total']} claims decided, "
+            f"{coverage['pending']} pending; {coverage.get('not_applicable', 0)} not applicable"
+        )
+        if coverage.get("has_more"):
+            lines.append("  More claim pages exist; these counts are not report totals.")
+        if coverage["pending"]:
+            lines.append(
+                f"  REMAINING: {coverage['pending']} claim(s) have no rule-engine grade yet. "
+                "A generated ZIP or opened review is a PARTIAL result, not a completed report."
+            )
+            lines.append(
+                "  Open claim details to resolve source, classification, tagging or "
+                "rule blockers. Reopening alone does not process pending work."
+            )
+    lines.append(f"  reopen (read-only, same results): {_resume_command(demo_state, port)}")
+    lines.append("  [Reviewer Next Actions / 검토 가이드]")
+    lines.append(
+        "  1. Claims (주장 목록): /runs/<run_id>/claims - 추출된 주장과 규칙 판정 상태 확인"
+    )
+    lines.append("  2. Source Evidence (원문 근거): 주장 상세의 '원문 보기'로 원문 쪽수·발췌 확인")
+    lines.append(
+        "  3. Export (보고서 내보내기): /runs/<run_id>/report - "
+        "검토용 부분 결과(JSON/CSV/HTML) 내보내기"
+    )
+    return lines
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -154,6 +263,11 @@ def main() -> int:
     print(f"demo state (writable copy): {demo_state}", flush=True)
     print(f"run_id: {manifest.get('run_id')}", flush=True)
     print(f"pipeline: {json.dumps(summary, ensure_ascii=False)}", flush=True)
+    print(
+        "zero automatic paid invocation: live model calls (--invoke) are strictly disabled; "
+        "replaying saved seed results.",
+        flush=True,
+    )
     if not manifest.get("live_tagging"):
         print(
             "note: this run is extraction-only; claims show tag_status=untagged "
@@ -184,11 +298,35 @@ def main() -> int:
             f"{demo_state / 'browser.json'}.",
             flush=True,
         )
-    else:
-        print("Resume-only (no server) requested.", flush=True)
+        print("Reviewer steps:", flush=True)
+        print(
+            "  1. Claims (주장): Review extracted claims and rulepack evaluation state", flush=True
+        )
+        print(
+            "  2. Original Source (원문 보기): Open claim detail and inspect source quote/page",
+            flush=True,
+        )
+        print("  3. Export (보고서): Download partial review report in JSON/CSV/HTML", flush=True)
+        # Serve is an interactive, long-lived blocking server: stream its stdout
+        # straight through so the login URL and logs appear live. We do not
+        # capture/parse here.
+        served = subprocess.run(cmd, cwd=ROOT, check=False)
+        return served.returncode
 
-    completed = subprocess.run(cmd, cwd=ROOT, check=False)
-    return completed.returncode
+    print("Resume-only (no server) requested.", flush=True)
+    previous = set(demo_state.glob("inspection-*.json"))
+    status = None
+    # Stream a potentially slow source replay, retaining only its final status.
+    with subprocess.Popen(cmd, cwd=ROOT, stdout=subprocess.PIPE, text=True) as process:
+        assert process.stdout is not None
+        for line in process.stdout:
+            print(line, end="", flush=True)
+            status = _parse_pilot_status(line) or status
+        returncode = process.wait()
+    coverage = _coverage_from_inspection(_latest_inspection(demo_state, previous))
+    for line in summarize_outcome(status, demo_state=demo_state, port=args.port, coverage=coverage):
+        print(line, flush=True)
+    return returncode
 
 
 if __name__ == "__main__":

@@ -30,8 +30,87 @@ class Case:
         return check_numeric_consistency(self.items, (self.binding,), **args)[0]
 
 
-def row(value, period="2025", unit="tCO2e", denominator=""):
-    return ["배출량", "Scope 1", "서울", period, "시장기반", "연결", unit, denominator, value]
+def test_saved_sum_binding_hash_before_optional_product_fields_remains_valid():
+    c = case(row("1"), row("2"), kind="sum", reported="3", aggregation=True)
+    old_payload = asdict(replace(c.binding, aggregation=None))
+    for field in (
+        "baseline_subject",
+        "subject_ref",
+        "baseline_subject_ref",
+        "product_comparison_accepted",
+        "conditions",
+    ):
+        old_payload.pop(field)
+    c.binding = replace(
+        c.binding,
+        aggregation=replace(c.binding.aggregation, binding_sha256=canonical_hash(old_payload)),
+    )
+    assert c.check().status == "consistent"
+
+
+@pytest.mark.parametrize("tamper", [None, "hash", "quote", "members", "actor", "pending", "owner"])
+def test_growth_requires_pinned_review_of_nontrivial_shared_note(tamper):
+    from proofops.domain.numeric import NumericCondition, condition_binding_hash
+
+    c = case(
+        row("598846", "2023"),
+        row("644685", "2024"),
+        kind="growth",
+        reported="8",
+        footnote="도매 기준",
+    )
+    assert c.check().status == "not_computable"
+    note = next(b for b in c.original.blocks if b.kind == "footnote")
+    source = verify_source_ref(note.source_ref(), c.original, tenant_id=TENANT)
+    condition = NumericCondition(
+        source,
+        c.binding.observation_ids,
+        condition_binding_hash(c.binding),
+        "same_basis_for_selected_observations",
+        "accepted",
+        "synthetic-reviewer",
+    )
+    if tamper == "hash":
+        condition = replace(condition, binding_sha256="f" * 64)
+    elif tamper == "quote":
+        condition = replace(condition, source_ref=replace(source, quote="소매 기준"))
+    elif tamper == "members":
+        condition = replace(condition, observation_ids=c.binding.observation_ids[:1])
+    elif tamper == "actor":
+        condition = replace(condition, reviewed_by="")
+    elif tamper == "pending":
+        condition = replace(condition, acceptance_state="pending")
+    elif tamper == "owner":
+        c.original = replace(
+            c.original, edges=tuple(e for e in c.original.edges if e.relation != "footnote_of")
+        )
+    c.binding = replace(c.binding, conditions=(condition,))
+    assert c.check().status == ("consistent" if tamper is None else "not_computable")
+
+
+def test_unit_and_denominator_can_be_verified_subspans_of_same_original_cell():
+    c = case(row("35.40", unit="tCO2eq/대", denominator="대"), reported="35.40")
+    item = c.items[0]
+    unit = next(ref for ref in item.source_refs if ref.quote == "tCO2eq/대")
+    denominator = next(ref for ref in item.source_refs if ref.quote == "대")
+    part = verify_source_ref(
+        replace(unit, quote="대", char_start=unit.char_end - 1), c.original, tenant_id=TENANT
+    )
+    c.items = (
+        replace(
+            item,
+            source_refs=tuple(ref for ref in item.source_refs if ref != denominator) + (part,),
+            parent_relations=tuple(
+                (a, unit.source_id if field == "denominator" else b, field)
+                for a, b, field in item.parent_relations
+            ),
+        ),
+    )
+    assert c.check().status == "consistent"
+
+
+def row(value, period="2025", unit="tCO2e", denominator="", subject="서울"):
+    return ["배출량", "Scope 1", subject, period, "시장기반", "연결", unit, denominator, value]
 
 
 def case(
@@ -130,7 +209,7 @@ def case(
         scope=first.scope,
         subject=first.subject,
         reporting_period=items[-1].reporting_period,
-        baseline_period=first.reporting_period if kind == "reduction" else None,
+        baseline_period=first.reporting_period if kind in ("reduction", "growth") else None,
         scope2_basis=first.scope2_basis,
         organizational_boundary=first.organizational_boundary,
         unit=first.unit_canonical,
@@ -881,3 +960,235 @@ def test_hold_diagnostics_retain_root_issue_when_value_ref_is_removed():
     issue = QualityIssue(root, "table_value_unreadable", 1, (root,), "open", "test")
     graph = replace(sample.original, issues=(issue,))
     assert observation_source_holds(item, graph)["issue_ids"] == [issue.issue_id]
+
+
+# ---------------------------------------------------------------------------
+# R30: bounded temporal growth and same-period different-product relative
+# reduction. Explicitly synthetic confirmed sources, never model/customer
+# approval. Both new kinds reuse Fraction + the existing display rounding
+# intervals and the same verified-source guards as the existing kinds.
+# ---------------------------------------------------------------------------
+
+
+def _carve(claim_ref, literal, original):
+    """A verified sub-span of the accepted claim quote, exactly like a number ref."""
+    start = claim_ref.char_start + claim_ref.quote.index(literal)
+    return verify_source_ref(
+        replace(claim_ref, quote=literal, char_start=start, char_end=start + len(literal)),
+        original,
+        tenant_id=TENANT,
+    )
+
+
+def product_case(
+    baseline_value,
+    current_value,
+    *,
+    period="2025",
+    baseline_subject="EV4",
+    current_subject="SUV",
+    reported="27",
+    accepted=True,
+):
+    """Same period, deliberately different product subject; all else identical."""
+    from proofops.domain.numeric import ClaimBinding
+
+    statement = f"{reported} {current_subject} 는 동급 {baseline_subject} 대비 저감 배출량 수치."
+    graph = fuse_candidates(
+        (
+            table(
+                [
+                    [
+                        "지표",
+                        "Scope",
+                        "사업장",
+                        "연도",
+                        "산정방식",
+                        "조직경계",
+                        "단위",
+                        "분모",
+                        "값",
+                    ],
+                    row(baseline_value, period=period, subject=baseline_subject),
+                    row(current_value, period=period, subject=current_subject),
+                ]
+            ),
+            candidate("claim", [("C", "paragraph", statement, (1, 500, 590, 520), ())]),
+        ),
+        tenant_id=TENANT,
+    )
+    graph = replace(graph, blocks=tuple(replace(b, quality="verified") for b in graph.blocks))
+    normalized = normalize_tables(graph, tenant_id=TENANT).observations
+    items = tuple(
+        replace(
+            o,
+            quality="verified",
+            source_refs=tuple(
+                verify_source_ref(r, graph, tenant_id=TENANT)
+                for r in o.source_refs
+                if r.quote.strip()
+            ),
+        )
+        for o in normalized
+    )
+    discovered = discover_atomic_claims(
+        graph, ClaimScope(TENANT, VERSION, MANIFEST), extractor=SyntheticClaimExtractor()
+    )
+    claim = next(c for c in discovered.claims if c.quote.startswith(reported + " "))
+    claim = replace(
+        claim,
+        source_refs=tuple(verify_source_ref(r, graph, tenant_id=TENANT) for r in claim.source_refs),
+    )
+    claim_ref = claim.source_refs[0]
+    number_ref = _carve(claim_ref, reported, graph)
+    baseline, current = items
+    binding = ClaimBinding(
+        claim_id=claim.claim_id,
+        tenant_id=TENANT,
+        document_version_id=VERSION,
+        parse_manifest_id=MANIFEST,
+        kind="product_reduction",
+        observation_ids=(baseline.observation_id, current.observation_id),
+        reported_value=reported,
+        metric_raw=current.metric_raw,
+        scope=current.scope,
+        subject=current_subject,
+        reporting_period=period,
+        baseline_period=period,
+        baseline_subject=baseline_subject,
+        scope2_basis=current.scope2_basis,
+        organizational_boundary=current.organizational_boundary,
+        unit=current.unit_canonical,
+        denominator=current.denominator,
+        source_refs=claim.source_refs,
+        reported_value_ref=number_ref,
+        subject_ref=_carve(claim_ref, current_subject, graph),
+        baseline_subject_ref=_carve(claim_ref, baseline_subject, graph),
+        product_comparison_accepted=accepted,
+        binding_accepted=True,
+        quantity_kind="absolute",
+    )
+    return Case(items, binding, (claim,), graph)
+
+
+def test_growth_uses_temporal_rate_and_matches_reported_percent():
+    # (644685/598846 - 1) * 100 ~= 7.65, consistent with the reported ~8 band 7.5-8.5.
+    c = case(row("598846", "2023"), row("644685", "2024"), kind="growth", reported="8")
+    result = c.check()
+    assert result.status == "consistent"
+    # Recurring quotient -> exact ratio preserved, never fabricated precision.
+    assert result.computed_value is None
+    assert result.reason == "non_terminating_decimal"
+    assert result.exact_ratio is not None
+
+
+def test_growth_terminating_rate_is_exact_and_can_be_inconsistent():
+    c = case(row("100.00", "2023"), row("110.00", "2024"), kind="growth", reported="10.00")
+    assert c.check().status == "consistent"
+    assert c.check().computed_value == "10"
+    c = case(row("100.000", "2023"), row("110.000"), kind="growth", reported="9.0")
+    assert c.check().status == "inconsistent"
+
+
+def test_growth_requires_distinct_periods_like_reduction():
+    c = case(row("100.00", "2023"), row("110.00", "2024"), kind="growth", reported="10.00")
+    for changes in ({"baseline_period": None}, {"reporting_period": "2023"}):
+        c.binding = replace(c.binding, **changes)
+        assert c.check().status == "not_comparable"
+
+
+@pytest.mark.parametrize("baseline", ["0", "-", "0.0"])
+def test_growth_zero_or_missing_baseline_is_not_computable(baseline):
+    c = case(row(baseline, "2023"), row("10"), kind="growth", reported="10")
+    assert c.check().status == "not_computable"
+
+
+def test_growth_dimension_mismatch_including_subject_is_not_comparable():
+    c = case(row("100.00", "2023"), row("110.00", "2024"), kind="growth", reported="10.00")
+    c.items = (replace(c.items[0], subject="부산"), c.items[1])
+    # A mismatched dimension is never a numeric finding (not consistent/inconsistent).
+    assert c.check().status not in ("consistent", "inconsistent")
+
+
+def test_product_reduction_same_period_matches_reported_percent():
+    # (1 - 35.40/48.73) * 100 ~= 27.35, consistent with the reported ~27 band 26.5-27.5.
+    c = product_case("48.73", "35.40", reported="27")
+    result = c.check()
+    assert result.status == "consistent"
+    assert result.computed_value is None
+    assert result.reason == "non_terminating_decimal"
+    assert result.exact_ratio is not None
+
+
+def test_product_reduction_terminating_rate_is_exact():
+    c = product_case("100.00", "75.00", reported="25.00")
+    assert c.check().status == "consistent"
+    assert c.check().computed_value == "25"
+    c = product_case("100.000", "75.000", reported="20.0")
+    assert c.check().status == "inconsistent"
+
+
+def test_product_reduction_requires_same_period():
+    c = product_case("48.73", "35.40", reported="27")
+    c.binding = replace(c.binding, baseline_period="2024")
+    assert c.check().status == "not_comparable"
+
+
+def test_product_reduction_requires_deliberately_different_subject():
+    c = product_case("48.73", "35.40", baseline_subject="SUV", current_subject="SUV", reported="0")
+    # Same subject on both sides is not a different-product comparison.
+    assert c.check().status == "not_comparable"
+
+
+def test_product_reduction_requires_explicit_product_acceptance():
+    c = product_case("48.73", "35.40", reported="27", accepted=False)
+    assert c.check().status == "not_comparable"
+    assert c.check().reason == "product_comparison_unaccepted"
+
+
+def test_product_reduction_requires_verified_subject_source_spans():
+    c = product_case("48.73", "35.40", reported="27")
+    # A forged/absent baseline subject ref cannot be synthesized from the number.
+    c.binding = replace(c.binding, baseline_subject_ref=None)
+    assert c.check().status == "not_comparable"
+    c = product_case("48.73", "35.40", reported="27")
+    ref = c.binding.baseline_subject_ref
+    c.binding = replace(
+        c.binding, baseline_subject_ref=replace(ref, quote="FORGED", raw_text_sha256="f" * 64)
+    )
+    assert c.check().status == "not_comparable"
+
+
+def test_product_reduction_subject_literal_must_match_observation_subjects():
+    c = product_case("48.73", "35.40", reported="27")
+    # Observation subject that does not equal the accepted product literal is refused.
+    c.items = (replace(c.items[0], subject="세단"), c.items[1])
+    assert c.check().status not in ("consistent", "inconsistent")
+
+
+def test_product_reduction_zero_baseline_is_not_computable():
+    c = product_case("0", "35.40", reported="100")
+    assert c.check().status == "not_computable"
+
+
+def test_product_reduction_dimension_mismatch_other_than_subject_is_not_comparable():
+    c = product_case("48.73", "35.40", reported="27")
+    c.items = (replace(c.items[0], scope="Scope 2"), c.items[1])
+    assert c.check().status not in ("consistent", "inconsistent")
+
+
+def test_new_kinds_still_require_trusted_observations_and_claims():
+    c = case(row("100.00", "2023"), row("110.00", "2024"), kind="growth", reported="10.00")
+    c.items = (replace(c.items[0], quality="unverified"), c.items[1])
+    assert c.check().status == "not_computable"
+    c = product_case("48.73", "35.40", reported="27")
+    assert c.check(original=None, claims=()).status == "not_computable"
+
+
+def test_existing_reduction_behavior_is_unchanged_by_new_kinds():
+    # Same-period reduction stays not_comparable; distinct-period reduction unchanged.
+    c = case(row("48.73", "2024"), row("35.40", "2024"), kind="reduction", reported="27")
+    assert c.check().status == "not_comparable"
+    ok = case(row("100.00", "2024"), row("90.00"), kind="reduction", reported="10.00")
+    assert ok.check().status == "consistent"
+    assert ok.check().computed_value == "10"

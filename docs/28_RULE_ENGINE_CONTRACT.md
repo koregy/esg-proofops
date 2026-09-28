@@ -92,7 +92,8 @@ not_applicable로 바꾸지 않는다.
 `input_snapshot_sha256`, `track`, `claim_source_refs`, `source_authority`,
 `triggers`만 포함한다. 각 trigger는 `name/value/reason`이며 value는 true/false/null이다.
 이름은 고정 rulepack의 해당 track 조건부 trigger와 지원된 다섯 claim trigger의
-교집합이다. 누락·null은 false가 아니다. HTTP 수정 body는 기존 4키를 유지한다.
+교집합이다. 2026-09-25부터 고정 track 사다리 분기가 `willingness_only`를 쓰면(관리체계 E0 "의지 표현만")
+같은 원자 주장 검토로 그 값도 받는다. 다른 track에서는 거절한다. 누락·null은 false가 아니다. HTTP 수정 body는 기존 4키를 유지한다.
 
 trusted loader가 원문 provenance를 재생하고, 검토 refs가 원자 주장 전체 refs와
 정확히 같으며 모든 span이 재검증된 경우에만 적용한다. false의 coverage는

@@ -28,8 +28,10 @@ from tests.integration.test_local_tag_runner import TENANT, tag_message, verifie
 from tests.integration.test_run_lifecycle import client, validate
 
 
-def workspace(tmp_path, monkeypatch):
+def workspace(tmp_path, monkeypatch, *, configure_runner=None):
     service, run_id, runner, now, _ = verified_setup(tmp_path, monkeypatch)
+    if configure_runner is not None:
+        configure_runner(runner, run_id)
     checkpoint = tag_message(service, run_id, now[0])
     assert runner.run_once(tenant_id=TENANT, run_id=run_id) == "needs_review"
     jobs = service.store.jobs

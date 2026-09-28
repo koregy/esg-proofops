@@ -55,6 +55,9 @@ from uuid import uuid4
 
 # scripts/ -> TEAM checkout (owns evaluation.local_upstage_pilot).
 TEAM_ROOT = Path(__file__).resolve().parents[1]
+# Direct script launch puts scripts/, not the checkout, on the import path.
+if str(TEAM_ROOT) not in sys.path:
+    sys.path.insert(0, str(TEAM_ROOT))
 # Published root command lives two levels up; the default report-runs area and the
 # shared Upstage budget ledger both live under that root.
 PROJECT_ROOT = TEAM_ROOT.parent.parent
@@ -111,12 +114,22 @@ def _pdf_page_count(pdf: Path) -> int:
     return count
 
 
-def validate_pdf(pdf: Path, pages: list[int]) -> int:
-    """Confirm the PDF exists and every requested page is within its page count."""
+def _validate_pdf_file(pdf: Path) -> None:
+    """Refuse unsupported files before reading contents or discovering scope."""
+    from proofops.application.uploads_security import PdfLimits
+
     if not pdf.is_file():
         raise PlanError(f"--pdf not found: {pdf}")
     if pdf.suffix.lower() != ".pdf":
         raise PlanError(f"--pdf must be a .pdf file: {pdf}")
+    limit = PdfLimits().max_bytes
+    if pdf.stat().st_size > limit:
+        raise PlanError(f"--pdf exceeds the supported upload limit of {limit} bytes (100 MiB)")
+
+
+def validate_pdf(pdf: Path, pages: list[int]) -> int:
+    """Confirm the PDF exists and every requested page is within its page count."""
+    _validate_pdf_file(pdf)
     count = _pdf_page_count(pdf)
     over = [page for page in pages if page > count]
     if over:
@@ -324,12 +337,17 @@ def build_pilot_argv(
     tagging_max_calls: int = TAGGING_MAX_CALLS,
     verify_selected_cells: bool = False,
     native_quote_typography: bool = False,
+    claim_span_typography: bool = False,
     live_relations: bool = False,
     preliminary_context: bool = False,
+    preliminary_actor_role: bool = False,
     ai_project_review: bool = False,
     extraction_year_notation: bool = False,
     extraction_context: bool = False,
     extraction_source_ids: bool = False,
+    extraction_assertion_prompt: bool = False,
+    extraction_complete_selection: bool = False,
+    extraction_content_bounds: bool = False,
     parser_max_output_bytes: int | None = None,
 ) -> list[str]:
     """Assemble the exact argv driving ``evaluation.local_upstage_pilot``."""
@@ -370,10 +388,19 @@ def build_pilot_argv(
         argv += ["--extraction-total-calls", str(extraction_total_calls)]
     if native_quote_typography:
         argv.append("--native-quote-typography")
+    if claim_span_typography:
+        argv += [
+            "--claim-span-render-resolution",
+            "--claim-span-bullet-spacing",
+            "--claim-span-typography",
+        ]
     if live_relations:
         argv.append("--live-relations")
-    if preliminary_context:
+    if preliminary_context or preliminary_actor_role:
         argv.append("--preliminary-context")
+    if preliminary_actor_role:
+        argv += ["--preliminary-table-context", "--preliminary-table-role",
+                 "--preliminary-goal-role", "--preliminary-actor-role"]
     if ai_project_review:
         argv.append("--ai-project-review")
     if extraction_year_notation:
@@ -382,6 +409,12 @@ def build_pilot_argv(
         argv.append("--extraction-context")
     if extraction_source_ids:
         argv.append("--extraction-source-ids")
+    if extraction_assertion_prompt:
+        argv.append("--extraction-assertion-prompt")
+    if extraction_complete_selection:
+        argv.append("--extraction-complete-selection")
+    if extraction_content_bounds:
+        argv.append("--extraction-content-bounds")
     if claim_pages is not None:
         argv += ["--claim-pages", ",".join(str(page) for page in claim_pages)]
     if invoke:
@@ -402,6 +435,7 @@ def plan_run(args: argparse.Namespace) -> dict:
             raise PlanError("--auto-scope cannot be combined with an explicit --pages")
         if getattr(args, "claim_pages", None) is not None:
             raise PlanError("--auto-scope cannot be combined with an explicit --claim-pages")
+        _validate_pdf_file(pdf)
         auto_scope_proposal = discover_auto_scope(pdf)
         if auto_scope_proposal["source_sha256"] != sha256(pdf.read_bytes()).hexdigest():
             raise PlanError(f"--auto-scope source changed while inspecting {pdf}")
@@ -456,12 +490,19 @@ def plan_run(args: argparse.Namespace) -> dict:
     _validate_extraction_total(EXTRACTION_MAX_CALLS, extraction_total_calls)
     verify_selected_cells = bool(getattr(args, "verify_selected_cells", False))
     native_quote_typography = bool(getattr(args, "native_quote_typography", False))
+    claim_span_typography = bool(getattr(args, "claim_span_typography", False))
     live_relations = bool(getattr(args, "live_relations", False))
-    preliminary_context = bool(getattr(args, "preliminary_context", False))
+    preliminary_actor_role = bool(getattr(args, "preliminary_actor_role", False))
+    preliminary_context = (
+        bool(getattr(args, "preliminary_context", False)) or preliminary_actor_role
+    )
     ai_project_review = bool(getattr(args, "ai_project_review", False))
     extraction_year_notation = bool(getattr(args, "extraction_year_notation", False))
     extraction_context = bool(getattr(args, "extraction_context", False))
     extraction_source_ids = bool(getattr(args, "extraction_source_ids", False))
+    extraction_assertion_prompt = bool(getattr(args, "extraction_assertion_prompt", False))
+    extraction_complete_selection = bool(getattr(args, "extraction_complete_selection", False))
+    extraction_content_bounds = bool(getattr(args, "extraction_content_bounds", False))
     argv = build_pilot_argv(
         pdf=pdf,
         pages=pages,
@@ -478,12 +519,17 @@ def plan_run(args: argparse.Namespace) -> dict:
         tagging_max_calls=tagging_max_calls,
         verify_selected_cells=verify_selected_cells,
         native_quote_typography=native_quote_typography,
+        claim_span_typography=claim_span_typography,
         live_relations=live_relations,
         preliminary_context=preliminary_context,
+        preliminary_actor_role=preliminary_actor_role,
         ai_project_review=ai_project_review,
         extraction_year_notation=extraction_year_notation,
         extraction_context=extraction_context,
         extraction_source_ids=extraction_source_ids,
+        extraction_assertion_prompt=extraction_assertion_prompt,
+        extraction_complete_selection=extraction_complete_selection,
+        extraction_content_bounds=extraction_content_bounds,
         parser_max_output_bytes=parser_max_output_bytes,
     )
     return {
@@ -501,8 +547,10 @@ def plan_run(args: argparse.Namespace) -> dict:
         "tagging_max_calls": tagging_max_calls,
         "verify_selected_cells": verify_selected_cells,
         "native_quote_typography": native_quote_typography,
+        "claim_span_typography": claim_span_typography,
         "live_relations": live_relations,
         "preliminary_context": preliminary_context,
+        "preliminary_actor_role": preliminary_actor_role,
         "ai_project_review": ai_project_review,
         "extraction_year_notation": extraction_year_notation,
         "extraction_context": extraction_context,
@@ -548,8 +596,10 @@ def print_plan(plan: dict) -> None:
         pilot_opts.append(f"extraction-total-calls={plan['extraction_total_calls']}")
     for flag in (
         "native_quote_typography",
+        "claim_span_typography",
         "live_relations",
         "preliminary_context",
+        "preliminary_actor_role",
         "ai_project_review",
         "extraction_year_notation",
         "extraction_context",
@@ -662,6 +712,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--verify-paragraphs without raster OCR, which this launcher always uses).",
     )
     parser.add_argument(
+        "--claim-span-typography",
+        action="store_true",
+        help="Opt a new run into rendered quote/middle-dot comparison, including "
+        "the required render-resolution and bullet-spacing wrappers.",
+    )
+    parser.add_argument(
         "--live-relations",
         "--evidence-relations",
         dest="live_relations",
@@ -676,6 +732,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Pass the pilot's --preliminary-context (bounded source-bound context for "
         "preliminary classification; requires the built-in --live-tagging).",
+    )
+    parser.add_argument(
+        "--preliminary-actor-role",
+        action="store_true",
+        help="Use the actor/goal-period classification profile for a NEW run. "
+        "Includes its required context/table/goal options; no rule approval or paid "
+        "call is enabled by this flag. Existing saved runs are unchanged.",
     )
     parser.add_argument(
         "--ai-project-review",
@@ -708,6 +771,23 @@ def build_parser() -> argparse.ArgumentParser:
         "the span is restored from the original offsets. Exact-source matching is "
         "unchanged; a selected sentence is a whole source sentence (atomicity "
         "unreviewed); off by default.",
+    )
+    parser.add_argument(
+        "--extraction-assertion-prompt",
+        action="store_true",
+        help="Require the selected source sentence itself to assert a claim. "
+        "Requires --extraction-source-ids; off by default.",
+    )
+    parser.add_argument(
+        "--extraction-complete-selection",
+        action="store_true",
+        help="Review every source sentence; requires --extraction-assertion-prompt.",
+    )
+    parser.add_argument(
+        "--extraction-content-bounds",
+        action="store_true",
+        help="Use exact source spans without a nonnumeric terminal stop; "
+        "requires --extraction-source-ids. New-run opt-in only.",
     )
     parser.add_argument(
         "--invoke",

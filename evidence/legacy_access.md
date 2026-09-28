@@ -13,7 +13,7 @@
 | Repo visibility | public, not private | `gh api repos/... --jq .private` == false; `.license == null` |
 | DNS/clone restriction (docs/26 §1) | **not reproduced in this run** | clone succeeded from Orca runner; prior audit noted DNS-limited environment — now cleared, but recorded as environment-dependent |
 | Product model / secrets / cloud access | **not used** | No Bedrock/AWS calls, no secrets read; verified via read-only GitHub API + local git |
-| Commit metadata |  | `sha=70da628a401b89b5ea2c08ee4243523ce99acb50`, `tree=bde94913807aacdb9d2ce92100346fa373668c76`, `author=takawk111 <ss020312@naver.com>`, `date=2026-08-12T15:57:17Z`, `message="Ignore generated package metadata"`, `parents=[529ee359456f4d8f5d3550a4a3fe00b89a718ad5]`, `verified=false (unsigned)` |
+| Commit metadata |  | `sha=70da628a401b89b5ea2c08ee4243523ce99acb50`, `tree=bde94913807aacdb9d2ce92100346fa373668c76`, `author=takawk111 <[owner-email-redacted]>`, `date=2026-08-12T15:57:17Z`, `message="Ignore generated package metadata"`, `parents=[529ee359456f4d8f5d3550a4a3fe00b89a718ad5]`, `verified=false (unsigned)` |
 
 **Access method:** GitHub REST API (`gh api`) + `git clone https://github.com/tskwak111/esg-evidence-audit.git` with detached checkout. No write/push/branch/PR performed on legacy repo (per §5 of 26).
 

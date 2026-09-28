@@ -44,6 +44,7 @@ def _args(**overrides):
         extraction_context=False,
         extraction_table_context=False,
         extraction_source_ids=False,
+        extraction_assertion_prompt=False,
         tagging_max_calls=12,
         extraction_total_calls=None,
         max_calls=8,
@@ -124,3 +125,123 @@ def test_analyze_report_passes_the_flag_through_to_the_pilot_argv():
     )
     assert "--extraction-source-ids" in build_pilot_argv(**common, extraction_source_ids=True)
     assert "--extraction-source-ids" not in build_pilot_argv(**common)
+
+
+# ---------------------------------------------------------------------------
+# R20 fix 2 wiring: assertion prompt is NEW-run only, requires source-ids, and
+# the frozen settings profile must equal what composition reconstructs.
+# ---------------------------------------------------------------------------
+
+
+def test_resume_restores_and_defaults_the_assertion_prompt_flag():
+    restored = _args()
+    apply_resume_metadata(
+        restored,
+        {
+            "source_path": "/tmp/elsewhere.pdf",
+            "extraction_source_ids": True,
+            "extraction_assertion_prompt": True,
+        },
+    )
+    assert restored.extraction_assertion_prompt is True
+    legacy = _args()
+    apply_resume_metadata(legacy, {"source_path": "/tmp/elsewhere.pdf"})
+    assert legacy.extraction_assertion_prompt is False
+
+
+def test_assertion_prompt_requires_source_ids_at_the_pilot(tmp_path, monkeypatch):
+    """--extraction-assertion-prompt without --extraction-source-ids exits before
+    any state or paid work."""
+    import evaluation.local_upstage_pilot as pilot
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "local_upstage_pilot",
+            "--pdf",
+            str(tmp_path / "r.pdf"),
+            "--state",
+            str(tmp_path / "run"),
+            "--key-file",
+            str(tmp_path / "absent.key"),
+            "--pages",
+            "1",
+            "--report-year",
+            "2025",
+            "--period-start",
+            "2025-01-01",
+            "--period-end",
+            "2025-12-31",
+            "--extraction-assertion-prompt",
+        ],
+    )
+    with pytest.raises(SystemExit):
+        pilot.main()
+
+
+def test_resume_cannot_add_the_assertion_prompt_to_a_legacy_run(tmp_path, monkeypatch):
+    import evaluation.local_upstage_pilot as pilot
+
+    state = tmp_path / "legacy-run"
+    state.mkdir()
+    (state / "pilot.json").write_text(
+        json.dumps({"source_path": "/tmp/elsewhere.pdf", "extraction_source_ids": True})
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "local_upstage_pilot",
+            "--resume",
+            "--state",
+            str(state),
+            "--extraction-source-ids",
+            "--extraction-assertion-prompt",
+            "--key-file",
+            str(tmp_path / "absent.key"),
+        ],
+    )
+    with pytest.raises(SystemExit):
+        pilot.main()
+
+
+def test_the_new_run_assertion_profile_matches_what_composition_reconstructs():
+    from proofops_agent.upstage_extraction import _profile_with_options
+
+    frozen = asdict(_profile_with_options("solar-pro3", source_ids=True, assertion_prompt=True))
+    assert frozen != asdict(_profile_with_options("solar-pro3", source_ids=True))
+    settings = {"extraction_source_ids": True, "extraction_assertion_prompt": True}
+    assert frozen == asdict(
+        _profile_with_options(
+            "solar-pro3",
+            year_notation=settings.get("extraction_year_notation") is True,
+            extraction_context=settings.get("extraction_context") is True,
+            extraction_table_context=settings.get("extraction_table_context") is True,
+            source_ids=settings.get("extraction_source_ids") is True,
+            assertion_prompt=settings.get("extraction_assertion_prompt") is True,
+        )
+    )
+
+
+def test_analyze_report_passes_the_assertion_flag_through_to_the_pilot_argv():
+    from scripts.analyze_report import build_pilot_argv
+
+    common = dict(
+        pdf=Path("/tmp/report.pdf"),
+        pages=[1],
+        claim_pages=None,
+        report_year=2025,
+        period_start="2025-01-01",
+        period_end="2025-12-31",
+        state=Path("/tmp/state"),
+        key_file=Path("/tmp/key"),
+        invoke=False,
+        serve=False,
+        port=8000,
+    )
+    argv = build_pilot_argv(**common, extraction_source_ids=True, extraction_assertion_prompt=True)
+    assert "--extraction-assertion-prompt" in argv
+    assert "--extraction-assertion-prompt" not in build_pilot_argv(
+        **common, extraction_source_ids=True
+    )

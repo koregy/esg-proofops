@@ -53,7 +53,7 @@ export function errorMessage(reason: unknown, fallback: string): string {
     case "OIDC_UNAVAILABLE":
       return "로그인 서비스를 사용할 수 없습니다. 관리자에게 구성을 요청해 주세요.";
     case "UPLOAD_LIMIT_EXCEEDED":
-      return "파일이 100MiB 제한을 초과했습니다.";
+      return "PDF가 파일 크기·페이지 수 또는 내부 처리 한도를 초과했습니다. 100MiB 이하인 파일도 내부 구조에 따라 처리되지 않을 수 있습니다.";
     case "PDF_INVALID":
       return "서버가 유효한 PDF로 확인하지 못했습니다.";
     case "UPLOAD_INTEGRITY_MISMATCH":

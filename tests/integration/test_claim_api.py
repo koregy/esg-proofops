@@ -355,3 +355,159 @@ def test_review_projection_raw_candidates_and_guards(tmp_path, monkeypatch):
     legacy = http.get(f"/v1/runs/{run_id}/claims/{claim_id}")
     assert legacy.status_code == 200
     assert legacy.json()["review_projection"]["raw_candidates"] == []
+
+
+def _preliminary_unresolved_setup(tmp_path, monkeypatch):
+    """Build a claims API bound to a run that has a real tag snapshot.
+
+    Returns the http client, the loaded envelope, the claim record and the
+    claim_id so a test can inject a PRELIMINARY_TAGS_UNRESOLVED item shape and
+    read it back through the trusted API boundary.
+    """
+    from proofops_api.routers.claims import build_claims_router
+
+    from tests.integration.test_local_tag_runner import verified_setup
+
+    service, run_id, runner, now, _ = verified_setup(tmp_path, monkeypatch)
+    http, auth = client(service)
+    http.app.include_router(
+        build_claims_router(runner.claims, auth, tags=runner.tags, clock=lambda: now[0])
+    )
+    assert runner.run_once(tenant_id=TENANT, run_id=run_id) == "needs_review"
+    envelope = runner.tags.load_snapshot(TENANT, run_id)
+    record = envelope["claims"][0]
+    claim_id = record["claim_id"]
+    return http, run_id, runner, envelope, record, claim_id
+
+
+def _agreement(track_values, *, validated=3, replicates=3, dimensions=None):
+    """A preliminary_field_agreement_v1 shape matching live_tagging output.
+
+    ``dimensions`` maps an axis name to a list of per-replica values so a test
+    can assert that a dimension conflict (with an agreed-null track) is treated
+    as a conflict, not a clean agreement.
+    """
+
+    def state(reported):
+        distinct = {repr(v) for v in reported}
+        return dict(
+            state=(
+                "unresolved"
+                if validated != 3 or len(reported) != validated
+                else "agreed"
+                if len(distinct) == 1
+                else "conflict"
+            ),
+            replicate_values=reported,
+            distinct_count=len(distinct),
+        )
+
+    return dict(
+        schema="preliminary_field_agreement_v1",
+        claim_id="00000000-0000-0000-0000-000000000000",
+        replicates=replicates,
+        validated_replicates=validated,
+        fields=dict(
+            track=state(track_values),
+            safe_harbor_category=state([None] * len(track_values)),
+        ),
+        dimensions={axis: state(values) for axis, values in (dimensions or {}).items()},
+    )
+
+
+def test_preliminary_unresolved_action_distinguishes_agreed_conflict_missing(tmp_path, monkeypatch):
+    """R20 fix 1: PRELIMINARY_TAGS_UNRESOLVED must not always say "retry".
+
+    - All three validated replicas agreed (e.g. all null): advise reviewing the
+      source/context or tagging manually, never a blind retry.
+    - Validated replicas disagree: advise comparing the per-response replies.
+    - A missing/incomplete preliminary set must not read as three agreed nulls;
+      it must be reported as incomplete.
+    All three keep reason=PRELIMINARY_TAGS_UNRESOLVED and the immutable snapshot.
+    """
+    http, run_id, runner, envelope, record, claim_id = _preliminary_unresolved_setup(
+        tmp_path, monkeypatch
+    )
+
+    def project_with(agreement):
+        record["reason"] = "PRELIMINARY_TAGS_UNRESOLVED"
+        record["preliminary_agreement"] = agreement
+        envelope["claims"][0] = record
+        monkeypatch.setattr(runner.tags, "load_snapshot", lambda tenant, run: envelope)
+        detail = http.get(f"/v1/runs/{run_id}/claims/{claim_id}")
+        assert detail.status_code == 200, detail.text
+        validate("ClaimDetail", detail.json())
+        proj = detail.json()["review_projection"]
+        assert proj is not None
+        assert proj["blocked_reason"] == "PRELIMINARY_TAGS_UNRESOLVED"
+        return proj
+
+    # 1. All three replicas agreed on null -> review source/context, not retry.
+    agreed = project_with(_agreement([None, None, None]))
+    agreed_action = agreed["blocked_action"]
+    assert agreed_action is not None
+    assert "다시 태깅을 시도" not in agreed_action  # no blind-retry instruction
+    assert "유형을 정하지 못" in agreed_action
+    assert ("원문" in agreed_action) or ("검토" in agreed_action)
+    track_field = next(f for f in agreed["field_agreements"] if f["field_id"] == "track")
+    assert track_field["status"] == "agreed"
+
+    # 2. Validated replicas conflict -> compare the per-response replies.
+    conflict = project_with(_agreement(["management", "management", None]))
+    conflict_action = conflict["blocked_action"]
+    assert conflict_action is not None
+    assert conflict_action != agreed_action
+    assert "비교" in conflict_action
+    track_field = next(f for f in conflict["field_agreements"] if f["field_id"] == "track")
+    assert track_field["status"] == "conflict"
+
+    # 3. Missing/incomplete replicas must not masquerade as three agreed nulls.
+    missing = project_with(_agreement([None], validated=1, replicates=1))
+    missing_action = missing["blocked_action"]
+    assert missing_action is not None
+    assert missing_action != agreed_action
+    track_field = next(f for f in missing["field_agreements"] if f["field_id"] == "track")
+    assert track_field["status"] == "unresolved"
+
+    # 4. Track agreed on null but a DIMENSION conflicts -> compare, not "agreed".
+    #    An agreed-null track must not hide a conflicting dimension that also
+    #    blocked the claim.
+    dim_conflict = project_with(
+        _agreement([None, None, None], dimensions={"metric": ["a", "b", "c"]})
+    )
+    assert dim_conflict["blocked_action"] == conflict_action
+    assert dim_conflict["blocked_action"] != agreed_action
+    metric_field = next(f for f in dim_conflict["field_agreements"] if f["field_id"] == "metric")
+    assert metric_field["status"] == "conflict"
+
+    legacy = _agreement([None, None, None])
+    legacy.pop("validated_replicates")
+    legacy_action = project_with(legacy)["blocked_action"]
+    assert "확정할 수 없습니다" in legacy_action
+    assert "3건 미만" not in legacy_action
+    incomplete_axis = _agreement([None, None, None], dimensions={"metric": [None]})
+    assert "3건 미만" not in project_with(incomplete_axis)["blocked_action"]
+    assert "확정할 수 없습니다" in project_with(_agreement(["management"] * 3))["blocked_action"]
+
+    # The generic fallback must never reuse the old blind-retry wording.
+    for action in (agreed_action, conflict_action, missing_action):
+        assert "합의에 이르지 못했습니다. 다시 태깅을 시도" not in action
+
+
+def test_preliminary_unresolved_action_without_agreement_stays_generic(tmp_path, monkeypatch):
+    """A blocked record that predates preliminary_agreement keeps a safe generic
+    action and never fabricates an agreed/conflict claim it cannot support."""
+    http, run_id, runner, envelope, record, claim_id = _preliminary_unresolved_setup(
+        tmp_path, monkeypatch
+    )
+    record["reason"] = "PRELIMINARY_TAGS_UNRESOLVED"
+    record.pop("preliminary_agreement", None)
+    envelope["claims"][0] = record
+    monkeypatch.setattr(runner.tags, "load_snapshot", lambda tenant, run: envelope)
+    detail = http.get(f"/v1/runs/{run_id}/claims/{claim_id}")
+    assert detail.status_code == 200, detail.text
+    proj = detail.json()["review_projection"]
+    assert proj["blocked_reason"] == "PRELIMINARY_TAGS_UNRESOLVED"
+    assert proj["blocked_action"] is not None
+    # Neutral review line, never the old misleading blind-retry text.
+    assert "합의에 이르지 못했습니다. 다시 태깅을 시도" not in proj["blocked_action"]

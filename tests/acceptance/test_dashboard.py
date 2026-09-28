@@ -568,6 +568,13 @@ for (const text of ["등급 분포 분모 2건","미판정 2건","검토 필요 
 const unknown=renderToStaticMarkup(React.createElement(RunSummary,
 {summary:{...summary,undetermined_applicability_count:null}}));
 assert.ok(unknown.includes("산정 범위 미확정"));
+const ungraded=renderToStaticMarkup(React.createElement(RunSummary,
+{summary:{...summary,grade_counts:{E0:0,E1:0,E2:0,E3:0},missing_by_element:[]}}));
+assert.ok(ungraded.includes("아직 입증 판정이 없어 결손 여부를 확인할 수 없습니다."));
+assert.ok(!ungraded.includes("결손 요소가 없습니다"));
+const graded=renderToStaticMarkup(React.createElement(RunSummary,
+{summary:{...summary,missing_by_element:[]}}));
+assert.ok(graded.includes("판정된 주장에서는 확인된 결손 요소가 없습니다."));
 console.log("RunSummary denominator/status checks passed");
 """.replace("REACT", json.dumps(str(root / "apps/web/node_modules/react/index.js")))
         .replace("SERVER", json.dumps(str(root / "apps/web/node_modules/react-dom/server.node.js")))

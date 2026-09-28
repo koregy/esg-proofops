@@ -17,6 +17,7 @@ from proofops.application.assurance import ClaimContext as AssuranceContext
 from proofops.application.assurance import claim_context_from_review_inputs, match_assurance
 from proofops.application.runs import RunRejected
 from proofops.domain.provenance import canonical_hash
+from proofops.domain.rules.engine import MAPPINGS
 from proofops_api.auth import (
     SESSION_COOKIE_NAME,
     _authorize,
@@ -56,7 +57,7 @@ _BLOCKED_ACTION_TEXT: dict[str, str] = {
         "예비 태깅 런타임이 아직 연결되지 않았습니다. 운영 설정을 확인해 주세요."
     ),
     "PRELIMINARY_TAGS_UNRESOLVED": (
-        "예비 태깅 복제본이 합의에 이르지 못했습니다. 다시 태깅을 시도해 주세요."
+        "예비 태깅 결과를 확정할 수 없습니다. 원문과 항목별 응답을 검토해 주세요."
     ),
     "SOURCE_LOCATION_REQUIRED": "이 주장의 원문 위치를 다시 파싱하거나 범위를 추가해 주세요.",
     "RULEPACK_CATALOG_REQUIRED": (
@@ -64,6 +65,53 @@ _BLOCKED_ACTION_TEXT: dict[str, str] = {
     ),
     "EVIDENCE_PACKET_BLOCKED": "근거 패킷이 차단되었습니다. 근거 검색 범위를 다시 확인해 주세요.",
 }
+
+_PRELIMINARY_UNRESOLVED_ACTION = {
+    "agreed": (
+        "세 차례 분석 모두 주장 유형을 정하지 못했습니다. "
+        "원문 문맥과 주장 내용을 확인한 뒤 태깅을 검토해 주세요."
+    ),
+    "conflict": (
+        "예비 태깅 복제본의 응답이 서로 다릅니다. 항목별 응답을 비교해 태깅을 검토해 주세요."
+    ),
+    "incomplete": (
+        "예비 태깅에 필요한 응답이 모두 확인되지 않았습니다. 응답 상태를 검토해 주세요."
+    ),
+    "unknown": _BLOCKED_ACTION_TEXT["PRELIMINARY_TAGS_UNRESOLVED"],
+}
+
+
+def _preliminary_unresolved_action(agreement):
+    """Explain stored agreement without changing the blocked state or decision."""
+    if not isinstance(agreement, dict):
+        return _PRELIMINARY_UNRESOLVED_ACTION["unknown"]
+    validated = agreement.get("validated_replicates")
+    # Missing legacy counts cannot establish either completeness or agreement.
+    if type(validated) is not int or not 0 <= validated <= 3:
+        return _PRELIMINARY_UNRESOLVED_ACTION["unknown"]
+    if validated < 3:
+        return _PRELIMINARY_UNRESOLVED_ACTION["incomplete"]
+    fields = agreement.get("fields")
+    dimensions = agreement.get("dimensions")
+    states = [
+        entry.get("state")
+        for group in (fields, dimensions)
+        if isinstance(group, dict)
+        for entry in group.values()
+        if isinstance(entry, dict)
+    ]
+    if "conflict" in states:
+        return _PRELIMINARY_UNRESOLVED_ACTION["conflict"]
+    if "unresolved" in states:
+        return _PRELIMINARY_UNRESOLVED_ACTION["incomplete"]
+    track = fields.get("track") if isinstance(fields, dict) else None
+    if (
+        isinstance(track, dict)
+        and track.get("state") == "agreed"
+        and track.get("replicate_values") == [None, None, None]
+    ):
+        return _PRELIMINARY_UNRESOLVED_ACTION["agreed"]
+    return _PRELIMINARY_UNRESOLVED_ACTION["unknown"]
 
 
 class ClaimSummary(StrictDTO):
@@ -134,6 +182,49 @@ class ReviewProjection(StrictDTO):
     raw_candidates: list[RawCandidate] = Field(default_factory=list)
 
 
+class ReviewedDimensions(StrictDTO):
+    facility: SourceRef
+    reporting_period: SourceRef
+    metric: SourceRef
+    value: SourceRef
+    unit: SourceRef
+
+
+class NumericCandidateReview(StrictDTO):
+    source_ref: SourceRef
+    status: Literal["claim_source", "outside_reviewed_section", "unresolved"]
+
+
+class NumericContextCheck(StrictDTO):
+    status: Literal["needs_review"]
+    reason: Literal["no_comparable_table_observation"]
+    considered: list[NumericCandidateReview]
+
+
+class ReviewedContext(StrictDTO):
+    origin: Literal["ai_delegated"]
+    dimensions: ReviewedDimensions
+    numeric_check: NumericContextCheck
+
+
+class SubmittedReview(StrictDTO):
+    schema_version: Literal[1]
+    status: Literal["reference_only"]
+    origin: Literal["data_manager_submission", "ai_corrected_submission"]
+    tenant_id: UUID
+    run_id: UUID
+    document_version_id: UUID
+    claim_id: UUID
+    external_claim_id: str
+    reference_sha256: Annotated[str, Field(pattern="^[0-9a-f]{64}$")]
+    source_sha256: Annotated[str, Field(pattern="^[0-9a-f]{64}$")]
+    run_input_sha256: Annotated[str, Field(pattern="^[0-9a-f]{64}$")]
+    claim_snapshot_sha256: Annotated[str, Field(pattern="^[0-9a-f]{64}$")]
+    claim_source_quality: str
+    files_sha256: dict[str, Annotated[str, Field(pattern="^[0-9a-f]{64}$")]]
+    tables: dict[Literal["claims", "elements", "numeric", "assurance"], list[dict[str, str]]]
+
+
 class ClaimDetail(StrictDTO):
     claim: ClaimSummary
     source_refs: list[SourceRef]
@@ -146,6 +237,8 @@ class ClaimDetail(StrictDTO):
     tag_status: Literal["tagged", "untagged"] | None = None
     rulepack_approved_by: str | None = None
     review_projection: ReviewProjection | None = None
+    reviewed_context: ReviewedContext | None = None
+    submitted_reviews: list[SubmittedReview] = Field(default_factory=list)
 
 
 def build_claims_router(claims, auth_store, *, tags=None, assurance=None, clock=time.time):
@@ -273,7 +366,11 @@ def build_claims_router(claims, auth_store, *, tags=None, assurance=None, clock=
             schema_version=1,
             candidate_snippets=snippets,
             blocked_reason=blocked_reason,
-            blocked_action=_BLOCKED_ACTION_TEXT.get(blocked_reason),
+            blocked_action=(
+                _preliminary_unresolved_action(item.get("preliminary_agreement"))
+                if blocked_reason == "PRELIMINARY_TAGS_UNRESOLVED"
+                else _BLOCKED_ACTION_TEXT.get(blocked_reason)
+            ),
             field_agreements=agreements,
             raw_candidates=raw_candidates,
         )
@@ -397,15 +494,19 @@ def build_claims_router(claims, auth_store, *, tags=None, assurance=None, clock=
                 assurance.load(claim.tenant_id, str(run_id)) if assurance is not None else None
             )
 
+            # Reuse one verified read; only untagged context is best-effort.
+            try:
+                review_inputs = (
+                    tags.load_inputs(claim.tenant_id, str(run_id), claim.claim_id)
+                    if tags is not None
+                    else None
+                )
+            except Exception:
+                if current is not None and tags is not None:
+                    raise
+                review_inputs = None
+
             def _assurance_context():
-                try:
-                    review_inputs = (
-                        tags.load_inputs(claim.tenant_id, str(run_id), claim.claim_id)
-                        if tags is not None
-                        else None
-                    )
-                except Exception:
-                    review_inputs = None
                 try:
                     return claim_context_from_review_inputs(
                         review_inputs,
@@ -437,6 +538,9 @@ def build_claims_router(claims, auth_store, *, tags=None, assurance=None, clock=
                     claim=summary,
                     source_refs=[asdict(ref) for ref in claim.source_refs],
                     elements=[],
+                    submitted_reviews=claims.submitted_reviews(
+                        claim.tenant_id, str(run_id), claim.claim_id
+                    ),
                     assurance=match.to_dict(),
                     replicate_request_ids=[],
                     packet_sha256=None,
@@ -454,7 +558,8 @@ def build_claims_router(claims, auth_store, *, tags=None, assurance=None, clock=
                 )
             if tags is None:
                 raise RunRejected("TAGGING_NOT_PUBLISHED")
-            inputs = tags.load_inputs(claim.tenant_id, str(run_id), claim.claim_id)
+            assert review_inputs is not None
+            inputs = review_inputs
             tag = current["tag"]
             summary = claims.summary(claim, current)
             # Assurance reflects the run's published statement when present;
@@ -462,7 +567,30 @@ def build_claims_router(claims, auth_store, *, tags=None, assurance=None, clock=
             body = dict(
                 claim=summary,
                 source_refs=[asdict(ref) for ref in claim.source_refs],
-                elements=tag["elements"],
+                elements=[
+                    next(
+                        (
+                            element
+                            for element in tag["elements"]
+                            if element["element_id"] == element_id
+                        ),
+                        dict(
+                            element_id=element_id,
+                            state="unknown",
+                            evidence_refs=[],
+                            normalized_value=None,
+                            credited_from=None,
+                            reason_code=None,
+                        ),
+                    )
+                    for element_id in MAPPINGS[summary["track"]]
+                ]
+                if summary["track"]
+                else tag["elements"],
+                submitted_reviews=claims.submitted_reviews(
+                    claim.tenant_id, str(run_id), claim.claim_id
+                ),
+                reviewed_context=(tag.get("claim_context_review") or {}).get("projection"),
                 assurance=match.to_dict(),
                 replicate_request_ids=[run.request.request_id for run in inputs.tag_runs],
                 packet_sha256=inputs.packet.packet_sha256,

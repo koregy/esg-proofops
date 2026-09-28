@@ -22,11 +22,19 @@ _replays: OrderedDict[str, frozenset[str]] = OrderedDict()
 _raster_replays: OrderedDict[str, tuple[frozenset[str], str, str]] = OrderedDict()
 _claim_replays: OrderedDict[str, tuple] = OrderedDict()
 _claim_attestations: OrderedDict[str, bytes] = OrderedDict()
+_claim_wrapper_receipts: OrderedDict[str, bytes] = OrderedDict()
 _lock = Lock()
 _MAX_REPLAYS = 64
 _MAX_CLAIM_ATTESTATION_BYTES = 64 * 1024 * 1024
 # Projection below matches this reader's replay tail; other versions replay normally.
 _CLAIM_PROJECTION_VERIFIER = "8b95383c73d76b2bf838e51f208448c8b1995271a6639e5726df659e7cef2a61"
+# Same idea for the byte-pinned bullet-alignment wrapper: the tail below is that
+# module's own replay tail. Any other wrapper build replays normally.
+_BULLET_ALIGNMENT_WRAPPER = "b82a2023b0a42d3868fd21868fb3494c27a14f774a0479a3e20da6b1a1e4185d"
+_BULLET_ALIGNMENT_POLICY_SCHEMA = "claim_span_bullet_alignment_policy_v1"
+_BULLET_ALIGNMENT_SCHEMA = "claim_span_bullet_alignment_attestation_v1"
+# A reader that could not read at all, as opposed to a content verdict.
+_UNREADABLE_REASONS = frozenset({"rendered_reader_unavailable", "render_limit"})
 
 
 def _claim_attestation_key(reader, policy, graph, source, tenant_id):
@@ -231,17 +239,11 @@ def replay_raster_cached(
     )
 
 
-def _project_attested_claims(expected, graph, discovery, tenant_id):
-    """The pinned reader's deterministic replay tail, using its existing helpers."""
+def _promote_claims(discovery, scoped, tenant_id):
+    """Promote a claim only when EVERY one of its own refs verifies against the
+    scoped graph; a claim with one still-unresolved ref is left unchanged."""
     from proofops.application.evidence import span_citations
-    from proofops.domain.values import SourceRef
 
-    refs = tuple(
-        replace(SourceRef(**r["ref"]), verification_state="verified")
-        for r in expected["records"]
-        if r["status"] == "verified"
-    )
-    scoped = span_citations.span_verified_graph(graph, refs, expected["artifact_sha256"])
     claims = []
     for claim in discovery.claims:
         if claim.source_quality != "unverified":
@@ -256,7 +258,141 @@ def _project_attested_claims(expected, graph, discovery, tenant_id):
             if checked and all(ref.verification_state == "verified" for ref in checked)
             else claim
         )
-    return replace(discovery, claims=tuple(claims)), scoped
+    return replace(discovery, claims=tuple(claims))
+
+
+def _project_attested_claims(expected, graph, discovery, tenant_id):
+    """The pinned reader's deterministic replay tail, using its existing helpers."""
+    from proofops.application.evidence import span_citations
+    from proofops.domain.values import SourceRef
+
+    refs = tuple(
+        replace(SourceRef(**r["ref"]), verification_state="verified")
+        for r in expected["records"]
+        if r["status"] == "verified"
+    )
+    scoped = span_citations.span_verified_graph(graph, refs, expected["artifact_sha256"])
+    return _promote_claims(discovery, scoped, tenant_id), scoped
+
+
+def _unavailable_read(value):
+    """True when any nested reading reports a reader that could not read at all.
+
+    Such a receipt is never remembered or reused, so the next replay retries the
+    reader instead of freezing a transient failure.
+    """
+    if isinstance(value, dict):
+        if value.get("reason") in _UNREADABLE_REASONS or "error" in value:
+            return True
+        return any(_unavailable_read(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_unavailable_read(item) for item in value)
+    return False
+
+
+def _wrapper_projection_pinned(reader, policy, receipt):
+    """Only the byte-pinned bullet-alignment wrapper and its own receipt schema."""
+    from proofops.adapters.local import claim_span_bullet_alignment
+
+    return (
+        reader is claim_span_bullet_alignment
+        and isinstance(policy, dict)
+        and policy.get("schema") == _BULLET_ALIGNMENT_POLICY_SCHEMA
+        and policy.get("wrapper_sha256") == _BULLET_ALIGNMENT_WRAPPER
+        and policy == reader.claim_source_policy()
+        and isinstance(receipt, dict)
+        and receipt.get("schema") == _BULLET_ALIGNMENT_SCHEMA
+        and isinstance(receipt.get("base_records"), list)
+        and isinstance(receipt.get("records"), list)
+        and isinstance(receipt.get("artifact_sha256"), str)
+    )
+
+
+def _wrapper_receipt_key(reader, policy, graph, source, receipt, tenant_id):
+    """The existing attestation key plus this receipt's own ordered refs.
+
+    ``_claim_attestation_key`` already binds tenant, source bytes, graph, policy,
+    reader, platform, toolchain and the three reader versions; the refs come from
+    the receipt's own ``base_records`` because that is what the wrapper's replay
+    rebuilds its recompute from, so the publishing and the replaying side derive
+    the same key or none at all.
+    """
+    return canonical_hash(
+        dict(
+            attestation=_claim_attestation_key(reader, policy, graph, source, tenant_id),
+            refs=[record.get("ref") for record in receipt["base_records"]],
+            schema=receipt["schema"],
+        )
+    )
+
+
+def remember_wrapper_attestation(*, reader, policy, graph, source, tenant_id, receipt):
+    """Remember a whole wrapper receipt this process just read from real bytes.
+
+    The receipt is kept as its own canonical bytes, never as a hash alone: the
+    replay reuses it only after comparing the stored receipt's canonical bytes to
+    these. Nothing is composed per record, so the published whole-wrapper receipt
+    (``base_records``, ``render_retries``, ``bullet_alignments``) stays
+    byte-identical to a fresh recompute.
+    """
+    if not _wrapper_projection_pinned(reader, policy, receipt) or _unavailable_read(receipt):
+        return
+    encoded = compress(canonical_json(receipt).encode(), level=1)
+    if len(encoded) > _MAX_CLAIM_ATTESTATION_BYTES:
+        return
+    key = _wrapper_receipt_key(reader, policy, graph, source, receipt, tenant_id)
+    with _lock:
+        _claim_wrapper_receipts.pop(key, None)
+        _claim_wrapper_receipts[key] = encoded
+        while (
+            len(_claim_wrapper_receipts) > 8
+            or sum(map(len, _claim_wrapper_receipts.values())) > _MAX_CLAIM_ATTESTATION_BYTES
+        ):
+            _claim_wrapper_receipts.popitem(last=False)
+
+
+def _project_bullet_alignment(receipt, graph, discovery, tenant_id):
+    """The pinned wrapper's own replay tail, after its recompute was matched."""
+    from proofops.adapters.local import claim_source_verification
+    from proofops.application.evidence import span_citations
+    from proofops.domain.values import SourceRef
+
+    if canonical_hash([record.get("ref") for record in receipt["base_records"]]) != canonical_hash(
+        [asdict(ref) for ref in claim_source_verification.discovery_refs(discovery)]
+    ):
+        # The wrapper refuses this receipt for this discovery; let it say so.
+        return None
+    newly = tuple(
+        replace(SourceRef(**record["ref"]), verification_state="verified")
+        for record in receipt["records"]
+        if record["status"] == "verified"
+    )
+    existing = tuple(getattr(graph, "verified_spans", ()) or ())
+    seen = {(span.source_id, span.char_start, span.char_end) for span in existing}
+    merged = existing + tuple(
+        span for span in newly if (span.source_id, span.char_start, span.char_end) not in seen
+    )
+    scoped = span_citations.span_verified_graph(graph, merged, receipt["artifact_sha256"])
+    return _promote_claims(discovery, scoped, tenant_id), scoped
+
+
+def _reuse_wrapper_replay(reader, policy, receipt, graph, source, discovery, tenant_id):
+    """Reuse only a receipt that is canonically identical to an attestation this
+    process already recomputed from the original bytes under the same strict key.
+
+    A missing entry, any changed key input, a tampered receipt or an unavailable
+    read all return ``None``, which keeps the original frozen replay.
+    """
+    if not _wrapper_projection_pinned(reader, policy, receipt) or _unavailable_read(receipt):
+        return None
+    key = _wrapper_receipt_key(reader, policy, graph, source, receipt, tenant_id)
+    with _lock:
+        encoded = _claim_wrapper_receipts.get(key)
+        if encoded is not None:
+            _claim_wrapper_receipts.move_to_end(key)
+    if encoded is None or decompress(encoded) != canonical_json(receipt).encode():
+        return None
+    return _project_bullet_alignment(receipt, graph, discovery, tenant_id)
 
 
 def replay_claims_cached(*, reader, policy, receipt, graph, source, discovery, tenant_id):
@@ -300,10 +436,26 @@ def replay_claims_cached(*, reader, policy, receipt, graph, source, discovery, t
                 raise ValueError("CLAIM_SOURCE_RECEIPT_MISMATCH")
             result = _project_attested_claims(expected, graph, discovery, tenant_id)
         else:
-            # ponytail: unknown/frozen readers keep their original replay implementation.
-            result = reader.replay_claim_spans(
-                receipt, graph, source, discovery, tenant_id=tenant_id
+            reused = _reuse_wrapper_replay(
+                reader, policy, receipt, graph, source, discovery, tenant_id
             )
+            if reused is not None:
+                result = reused
+            else:
+                # ponytail: unknown/frozen readers keep their original replay implementation.
+                result = reader.replay_claim_spans(
+                    receipt, graph, source, discovery, tenant_id=tenant_id
+                )
+                # That replay accepted the whole receipt against the original
+                # bytes in this process, so a later identical replay may reuse it.
+                remember_wrapper_attestation(
+                    reader=reader,
+                    policy=policy,
+                    graph=graph,
+                    source=source,
+                    tenant_id=tenant_id,
+                    receipt=receipt,
+                )
         if receipt.get("schema") == "claim_source_attestation_v1":
             # Seed only after the original-byte replay accepted the entire receipt.
             attestation_key = _claim_attestation_key(reader, policy, graph, source, tenant_id)
@@ -311,6 +463,11 @@ def replay_claims_cached(*, reader, policy, receipt, graph, source, discovery, t
             if not all(_reusable_claim_record(r, receipt) for r in receipt["records"]):
                 # Unavailable/error reads (and other unresolved guards) must retry.
                 return deepcopy(result)
+        if _unavailable_read(receipt):
+            # Same rule for every other reader, including the wrappers, whose own
+            # schema does not reach the guard above: an unavailable or errored read
+            # must retry, so the full replay result is not retained either.
+            return deepcopy(result)
         cached = deepcopy(result)
         with _lock:
             _claim_replays[key] = cached

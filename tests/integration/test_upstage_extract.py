@@ -123,3 +123,43 @@ def test_png_input_preserves_one_image_charge_and_rejects_animated_image(tmp_pat
     with pytest.raises(ValueError):
         client.extract(animated.getvalue(), SCHEMA, request_id="animated")
     assert client.summary()["calls"] == 1
+
+
+@pytest.mark.parametrize("day,expired", [(25, False), (2, True)])
+def test_rechecked_document_price_window(tmp_path, monkeypatch, day, expired):
+    from datetime import UTC, datetime
+
+    from proofops.adapters.local import upstage_extract, upstage_parse
+
+    from tests.integration.test_upstage_parse import fake_response
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 10 if expired else 9, day, tzinfo=UTC)
+
+    for module in (upstage_extract, upstage_parse):
+        monkeypatch.setattr(module, "datetime", Clock)
+    extract = upstage_extract.UpstageExtractProbe("offline", tmp_path / "extract.sqlite3")
+    parse = upstage_parse.UpstageParseProbe("offline", tmp_path / "parse.sqlite3")
+    monkeypatch.setattr(
+        extract,
+        "_post_extract",
+        lambda body: {
+            "id": "test",
+            "model": upstage_extract.EXTRACT_MODEL,
+            "choices": [{"finish_reason": "stop", "message": {"content": "{}"}}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        },
+    )
+    monkeypatch.setattr(parse, "_post_parse", lambda pdf, mode: fake_response(1, mode))
+    for client, invoke in (
+        (extract, lambda: extract.extract(make_pdf(1), SCHEMA, request_id="extract-window")),
+        (parse, lambda: parse.parse(make_pdf(1), request_id="parse-window", mode="standard")),
+    ):
+        if expired:
+            with pytest.raises(ValueError, match="PRICE_RECHECK_REQUIRED"):
+                invoke()
+        else:
+            invoke()
+        assert client.summary()["calls"] == (0 if expired else 1)

@@ -130,14 +130,47 @@ def test_reviewed_false_excludes_and_engine_grades_immutable_management(tmp_path
         resolve(ws, review)
     assert stale.value.status == 412
 
+    # Chained human re-reviews retain the original AI applicability attestation.
+    for revision in (2, 3):
+        prior = service.store.history(TENANT, RUN, ws[3]["claim_id"])
+        repeated = service.resolve_review(
+            _actor(),
+            ws[3]["review_id"],
+            ws[4] | {"base_tag_revision": revision},
+            f'"{revision}"',
+            str(uuid4()),
+            reopen=True,
+        )
+        current = service.store.history(TENANT, RUN, ws[3]["claim_id"])
+        assert current["tags"][:-1] == prior["tags"]
+        assert current["decisions"][:-1] == prior["decisions"]
+        assert repeated["decision"]["evidence_grade"] == "E3"
+        assert set(current["decisions"][-1]["decision"]["excluded_elements"]) == {"M5", "M6"}
+        carried = current["tags"][-1]
+        assert carried["origin"] == "human"
+        assert carried["applicability_review"]["request"] == review
+        assert carried["applicability_review"]["carried_from"]["origin"] == "ai_delegated"
+        assert carried["applicability_review"]["carried_from"]["delegated_reviewer"] == (
+            "coordinator@orca.local"
+        )
+
+
+def assert_conditional_held(history, elements):
+    """GAP-003 (가): the ladder grade stands, but unminted triggers stay unresolved."""
+    decision = history["decisions"][-1]["decision"]
+    assert not set(elements) & set(decision["excluded_elements"])
+    assert set(elements) <= set(decision["unresolved_elements"])
+    assert decision["review_status"] == "needs_review"
+
 
 @pytest.mark.parametrize("value", [None, True])
 def test_unknown_or_true_trigger_with_unknown_element_remains_held(tmp_path, monkeypatch, value):
     ws = management_workspace(tmp_path, monkeypatch)
     result = resolve(ws, applicability(ws, value))
-    assert result["decision"]["evidence_grade"] is None
+    assert result["decision"]["evidence_grade"] == "E3"
     history = ws[1].store.history(TENANT, RUN, ws[3]["claim_id"])
     assert history["decisions"][-1]["decision"]["excluded_elements"] == []
+    assert_conditional_held(history, {"M5", "M6"})
 
 
 @pytest.mark.parametrize(
@@ -215,7 +248,8 @@ def test_http_cannot_mint_applicability(tmp_path, monkeypatch):
     assert post(ws, body=ws[4] | {"applicability_review": applicability(ws)}).status_code == 422
     result = post(ws)
     assert result.status_code == 200
-    assert result.json()["decision"]["evidence_grade"] is None
+    assert result.json()["decision"]["evidence_grade"] == "E3"
+    assert_conditional_held(ws[1].store.history(TENANT, RUN, ws[3]["claim_id"]), {"M5", "M6"})
 
 
 def test_reviewed_goal_and_omitted_trigger_stays_unknown(tmp_path, monkeypatch):
@@ -273,7 +307,8 @@ def test_reviewed_goal_and_omitted_trigger_stays_unknown(tmp_path, monkeypatch):
     other[4].update(ws[4])
     partial = applicability(other)
     partial["triggers"] = review["triggers"][:1]
-    assert resolve(other, partial)["decision"]["evidence_grade"] is None
+    assert resolve(other, partial)["decision"]["evidence_grade"] == "E3"
+    assert_conditional_held(other[1].store.history(TENANT, RUN, other[3]["claim_id"]), {"G8"})
 
 
 def test_track_change_drops_preexisting_incompatible_triggers(tmp_path, monkeypatch):
@@ -313,6 +348,42 @@ def test_track_change_drops_preexisting_incompatible_triggers(tmp_path, monkeypa
     monkeypatch.setattr(test_reviews, "consensus", lambda *a, **kw: seed(real_consensus(*a, **kw)))
     monkeypatch.setattr(reviews, "form_consensus", lambda *a, **kw: seed(real_form(*a, **kw)))
     ws = management_workspace(tmp_path, monkeypatch)
-    assert resolve(ws, None)["decision"]["evidence_grade"] is None
+    assert resolve(ws, None)["decision"]["evidence_grade"] == "E3"
+    assert_conditional_held(ws[1].store.history(TENANT, RUN, ws[3]["claim_id"]), {"M5", "M6"})
     tag = ws[1].store.history(TENANT, RUN, ws[3]["claim_id"])["tags"][-1]
     assert not any(f["name"].endswith("_claim") for f in tag["confirmed_tags"]["facts"])
+
+
+@pytest.mark.parametrize("value,state", [(False, "absent"), (True, "present"), (None, "unknown")])
+def test_management_review_records_willingness_only_from_the_whole_claim(
+    tmp_path, monkeypatch, value, state
+):
+    # The §4.4 management E0 branch ("의지 표현만") is a claim-local judgment; the
+    # review path is the only producer and it never infers report-wide absence.
+    ws = management_workspace(tmp_path, monkeypatch)
+    review = applicability(ws)
+    review["triggers"].append(
+        dict(
+            name="willingness_only",
+            value=value,
+            reason="Whole claim reviewed for intent-only wording.",
+        )
+    )
+    resolve(ws, review)
+    tag = ws[1].store.history(TENANT, RUN, ws[3]["claim_id"])["tags"][-1]
+    fact = {f["name"]: f for f in tag["confirmed_tags"]["facts"]}["willingness_only"]
+    assert fact["state"] == state and fact["source_scope"] == "local_claim"
+    assert fact["search_coverage_verified"] is (value is False)
+
+
+def test_willingness_only_is_rejected_where_the_track_ladder_does_not_use_it(tmp_path, monkeypatch):
+    from proofops.application.reviews import _review_applicability
+
+    ws = management_workspace(tmp_path, monkeypatch)
+    review = applicability(ws)
+    willingness = dict(name="willingness_only", value=False, reason="Whole claim reviewed.")
+    facts, _ = _review_applicability(ws[2], "management", review | {"triggers": [willingness]})
+    assert [f.name for f in facts] == ["willingness_only"]
+    goal = review | {"track": "goal", "triggers": [willingness]}
+    with pytest.raises(ReviewRejected, match="APPLICABILITY_REVIEW_INVALID"):
+        _review_applicability(ws[2], "goal", goal)

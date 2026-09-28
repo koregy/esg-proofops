@@ -22,7 +22,7 @@ Declared before implementation through Orca and adapter documentation: additive 
 
 ## Executed checks
 
-All paths/commands below were run in `/Users/ss020/Dev/ESG_ProofOps`.
+All paths/commands below were run in `<local-project-root>`.
 
 | Command | Actual result |
 |---|---|

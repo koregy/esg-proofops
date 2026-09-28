@@ -689,6 +689,7 @@ def native_attested_layout(
     *,
     tenant_id: str = _TENANT,
     verify_context: bool = False,
+    requested_values: bool = False,
     also=(),
 ):
     """Reviewed graph after the existing native attestation and its own replay.
@@ -696,7 +697,9 @@ def native_attested_layout(
     ``graph_from_review`` is called with its existing result shape; the graph it
     returns is handed to the existing selected-cell verifier and replay for values.
     Optional context proof/replay adds literal metric/unit/header cells; reviewed
-    role declarations alone never promote anything.
+    role declarations alone never promote anything. ``requested_values`` opts
+    into a separate bounded receipt for exactly the declared value cells; the
+    default and legacy context/header proofs remain unchanged.
 
     ``also`` is forwarded to ``graph_from_review`` so one combined snapshot can hold
     several reviewed grids. Every grid's value cells go through the same unchanged
@@ -712,8 +715,34 @@ def native_attested_layout(
         replay_tables,
     )
 
-    receipt = attest_tables(graph, source, tenant_id=tenant_id)
-    promoted = replay_tables(receipt, graph, source, tenant_id=tenant_id)
+    header_receipt = None
+    if requested_values:
+        from proofops.adapters.local import requested_table_verification as requested
+
+        canonical_input = {
+            c.source.source_native_id: b.source_id for b in graph.blocks for c in b.candidates
+        }
+        selected_values = sorted(
+            {
+                canonical_input[
+                    native_ids[("" if i == 0 else f"{i}:") + c["source_cells"]["value"]]
+                ]
+                for i, item in enumerate(reviews)
+                for c in item["candidates"]
+            }
+        )
+        receipt = requested.attest_tables(graph, source, selected_values, tenant_id=tenant_id)
+        promoted = requested.replay_tables(
+            receipt, graph, source, selected_values, tenant_id=tenant_id
+        )
+        if verify_context:
+            # Existing context reader revalidates its own legacy header proof;
+            # never disguise the requested-value receipt as a v3 receipt.
+            header_receipt = attest_tables(graph, source, tenant_id=tenant_id)
+    else:
+        receipt = attest_tables(graph, source, tenant_id=tenant_id)
+        promoted = replay_tables(receipt, graph, source, tenant_id=tenant_id)
+        header_receipt = receipt
     canonical = {
         candidate.source.source_native_id: block.source_id
         for block in promoted.blocks
@@ -747,10 +776,10 @@ def native_attested_layout(
         for offset in range(0, len(selected), MAX_CELLS):
             batch = selected[offset : offset + MAX_CELLS]
             proof = attest_context_cells(
-                graph, source, batch, tenant_id=tenant_id, header_receipt=receipt
+                graph, source, batch, tenant_id=tenant_id, header_receipt=header_receipt
             )
             checked = replay_context_cells(
-                proof, graph, source, batch, tenant_id=tenant_id, header_receipt=receipt
+                proof, graph, source, batch, tenant_id=tenant_id, header_receipt=header_receipt
             )
             verified = {block.source_id for block in checked.blocks if block.quality == "verified"}
             promoted = replace(
@@ -840,7 +869,12 @@ def _numeric_usability(
 
 
 def reviewed_numeric_inputs(
-    review: dict, source: bytes, *, tenant_id: str = _TENANT, verify_context: bool = False
+    review: dict,
+    source: bytes,
+    *,
+    tenant_id: str = _TENANT,
+    verify_context: bool = False,
+    requested_values: bool = False,
 ) -> ReviewedNumericInputs:
     """Normalize the reviewed roles over the natively attested graph.
 
@@ -852,7 +886,11 @@ def reviewed_numeric_inputs(
     normalizer's ``unverified`` quality and carries its blocking cells.
     """
     graph, receipt, cell_ids, table_id, promoted_ids, context_receipts = native_attested_layout(
-        review, source, tenant_id=tenant_id, verify_context=verify_context
+        review,
+        source,
+        tenant_id=tenant_id,
+        verify_context=verify_context,
+        requested_values=requested_values,
     )
     external_context = _external_review_context(review)
     observations, issues, candidates = [], list(graph.issues), []

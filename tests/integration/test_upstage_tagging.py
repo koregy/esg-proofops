@@ -1,16 +1,22 @@
 """Real ledger/fake HTTP: no paid calls or real source-quality approval."""
 
+import gzip
 import json
 from dataclasses import asdict, replace
 from datetime import UTC as _UTC
 from datetime import datetime as _RealDatetime
+from pathlib import Path
 from uuid import UUID
 
 import pytest
 from proofops.adapters.local.upstage import MODEL_PRO4, UpstageProbe
 from proofops.application.ports.models import ModelBinding
 from proofops.domain.provenance import canonical_hash
-from proofops_agent.upstage_tagging import MODEL_PROFILE, UpstageTaggingTransport
+from proofops_agent.upstage_tagging import (
+    MODEL_PROFILE,
+    QUOTE_V5_PROFILE,
+    UpstageTaggingTransport,
+)
 
 from tests.acceptance.test_tagging import setup
 
@@ -329,7 +335,100 @@ def test_invalid_input_count_is_not_a_cache_failure(tmp_path, monkeypatch, value
     runs = execute(inputs)
     assert all(run.status == "invalid_request" for run in runs)
     assert all(run.errors == ("TAGGING_INPUT_COUNT_INVALID",) for run in runs)
+    if value is None:
+        assert all(run.diagnostic_detail == "ValueError" for run in runs)
     assert not calls and probe.summary()["calls"] == 0
+
+
+def test_input_count_diagnostic_keeps_only_allowlisted_codes(tmp_path, monkeypatch):
+    from tests.acceptance.test_tagging import execute
+
+    adapter, _, _, _ = configured(tmp_path, monkeypatch)
+    inputs = setup(tmp_path)
+    inputs.update(settings=adapter._settings, invoke=adapter.invoke)
+    for detail, expected in (
+        ("PROBE_REQUEST_TOO_LARGE", "ValueError: PROBE_REQUEST_TOO_LARGE"),
+        ("FAKE_SECRET_AND_PII_SENTINEL", "ValueError"),
+    ):
+        inputs["count_input_tokens"] = lambda request, detail=detail: (_ for _ in ()).throw(
+            ValueError(detail)
+        )
+        runs = execute(inputs)
+        assert all(run.diagnostic_detail == expected for run in runs)
+        assert all("FAKE_SECRET" not in str(asdict(run)) for run in runs)
+
+
+def test_archived_element_wire_is_byte_identical_for_existing_profile():
+    from proofops.application.ports.models import ModelBinding
+    from proofops.application.tagging.service import TaggingSettings
+
+    with gzip.open(Path(__file__).with_name("element_wire_receipts.json.gz"), "rt") as stream:
+        receipts = json.load(stream)
+    assert {item["run"] for item in receipts} == {"r52-naver-p2", "r67-naver-typography"}
+    for item in receipts:
+        settings = item["settings"] | {"binding": ModelBinding(**item["settings"]["binding"])}
+        transport = object.__new__(UpstageTaggingTransport)
+        transport._settings = TaggingSettings(**settings)
+        transport._authorize_request = lambda request: None
+        system, user, _, _ = transport._wire_request(item["request"])
+        assert user.encode() == item["wire_user_json"].encode()
+        assert system.encode() == item["wire_system"].encode()
+
+
+def test_element_wire_compacts_provenance_before_size_check(tmp_path, monkeypatch):
+    adapter, probe, calls, request = configured(tmp_path, monkeypatch, QUOTE_V5_PROFILE)
+    assert adapter.TRANSPORT_VERSION == "compact-source-quotes-v5"
+    original = setup(tmp_path)["packet"].to_dict()["evidence_candidates"][0]["source_refs"][0]
+    user = json.loads(request["user_json"])
+    data = user["untrusted_document_data"]
+    data["atomic_quote"] = original["quote"]
+    data["claim_source_refs"] = [original]
+    data["evidence_candidates"] = [
+        dict(
+            source_id=str(UUID(int=index + 1)),
+            source_scope="local_claim",
+            allowed_elements=[f"P{i}" for i in range(1, 7)],
+            source_refs=[original | {"source_id": str(UUID(int=index + 1))}],
+        )
+        for index in range(20)
+    ]
+    request["user_json"] = json.dumps(user, ensure_ascii=False)
+    adapter.count_input_tokens(request, counter=lambda *_: 100)
+    _, wire, refs, _ = adapter._wire_request(request)
+    sent = json.loads(wire)["untrusted_document_data"]
+    assert sent["claim_source_refs"] == [
+        {"quote": original["quote"], "page_num": original["page_num"]}
+    ]
+    assert all("source_id" not in candidate for candidate in sent["evidence_candidates"])
+    assert len(refs) == 20 and not calls and probe.summary()["calls"] == 0
+
+
+def test_compact_element_profile_has_distinct_cache_request_identity(tmp_path, monkeypatch):
+    from proofops.adapters.cache.aws import CacheNamespace, cache_request
+
+    adapter, _, _, request = configured(tmp_path, monkeypatch, "upstage-compact-source-quotes-v4")
+    old = adapter._settings
+    new = replace(old, model_profile=QUOTE_V5_PROFILE)
+    namespace = CacheNamespace(request["tenant_id"], "consent", str(UUID(int=88)), "tagger")
+    signatures = [
+        cache_request(
+            namespace=namespace,
+            request_id=request["request_id"],
+            temperature=0,
+            model_id=settings.model_id,
+            model_profile=settings.model_sha256,
+            prompt_sha256=settings.prompt_sha256,
+            schema_sha256=canonical_hash(settings.schema_json),
+            packet_sha256=request["packet_sha256"],
+            tools=[],
+            max_tokens=settings.max_tokens,
+            replicate_id=1,
+            extraction_epoch=1,
+        ).request_signature
+        for settings in (old, new)
+    ]
+    assert old.model_sha256 != new.model_sha256
+    assert signatures[0] != signatures[1]
 
 
 def test_incomplete_receipt_blocks_new_paid_replica_after_restart(tmp_path, monkeypatch):

@@ -186,3 +186,111 @@ def test_module_has_no_ambient_clock_network_file_or_env_imports():
         elif isinstance(node, ast.ImportFrom):
             imported.add((node.module or "").split(".")[0])
     assert imported <= allowed | {"proofops"}, imported
+
+
+REFRESHED_CAPTURED = datetime(2026, 9, 25, 10, 57, tzinfo=UTC)
+REFRESHED_EXPIRES = datetime(2026, 10, 2, tzinfo=UTC)
+
+EXPECTED_REFRESHED_POLICY = dict(
+    EXPECTED_POLICY,
+    captured_at="2026-09-25T10:57:00Z",
+    expires_at="2026-10-02T00:00:00Z",
+)
+
+
+def test_old_policy_historical_valid_and_now_expired():
+    legacy = solar_pro4_capacity_policy()
+    assert legacy == EXPECTED_POLICY
+    # Historically valid within its window
+    historical = datetime(2026, 9, 20, 12, 0, tzinfo=UTC)
+    assert validate_capacity_policy(legacy, model_id="solar-pro4", checked_at=historical) == 1048576
+    # Now expired on/after 2026-09-25T00:00:00Z
+    now_expired = datetime(2026, 9, 25, 10, 55, tzinfo=UTC)
+    with pytest.raises(ValueError):
+        validate_capacity_policy(legacy, model_id="solar-pro4", checked_at=now_expired)
+
+
+def test_refreshed_policy_opt_in_and_validity_window():
+    refreshed = solar_pro4_capacity_policy(refreshed=True)
+    assert refreshed == EXPECTED_REFRESHED_POLICY
+    # Valid at exact captured_at
+    assert (
+        validate_capacity_policy(refreshed, model_id="solar-pro4", checked_at=REFRESHED_CAPTURED)
+        == 1048576
+    )
+    # Valid mid-window
+    mid = datetime(2026, 9, 28, 12, 0, tzinfo=UTC)
+    assert validate_capacity_policy(refreshed, model_id="solar-pro4", checked_at=mid) == 1048576
+    # Valid just before expiry
+    just_before = REFRESHED_EXPIRES - timedelta(microseconds=1)
+    assert (
+        validate_capacity_policy(refreshed, model_id="solar-pro4", checked_at=just_before)
+        == 1048576
+    )
+
+
+def test_refreshed_policy_expiry_and_pre_capture_rejected():
+    refreshed = solar_pro4_capacity_policy(refreshed=True)
+    # Rejected at exactly expires_at
+    with pytest.raises(ValueError):
+        validate_capacity_policy(refreshed, model_id="solar-pro4", checked_at=REFRESHED_EXPIRES)
+    # Rejected after expires_at
+    with pytest.raises(ValueError):
+        validate_capacity_policy(
+            refreshed, model_id="solar-pro4", checked_at=REFRESHED_EXPIRES + timedelta(days=1)
+        )
+    # Rejected before captured_at
+    with pytest.raises(ValueError):
+        validate_capacity_policy(
+            refreshed,
+            model_id="solar-pro4",
+            checked_at=REFRESHED_CAPTURED - timedelta(microseconds=1),
+        )
+
+
+def test_validator_recognizes_only_the_two_exact_pinned_versions_and_rejects_malformed():
+    # Mismatched/mixed timestamps between revisions
+    mixed_1 = dict(
+        EXPECTED_POLICY,
+        captured_at="2026-09-18T16:53:00Z",
+        expires_at="2026-10-02T00:00:00Z",
+    )
+    with pytest.raises(ValueError):
+        validate_capacity_policy(
+            mixed_1, model_id="solar-pro4", checked_at=datetime(2026, 9, 20, tzinfo=UTC)
+        )
+
+    mixed_2 = dict(
+        EXPECTED_POLICY,
+        captured_at="2026-09-25T10:57:00Z",
+        expires_at="2026-09-25T00:00:00Z",
+    )
+    with pytest.raises(ValueError):
+        validate_capacity_policy(
+            mixed_2, model_id="solar-pro4", checked_at=datetime(2026, 9, 25, 11, 0, tzinfo=UTC)
+        )
+
+    # Extended expiry without capture refresh (bypass attempt)
+    tampered_extension = dict(
+        EXPECTED_POLICY,
+        captured_at="2026-09-18T16:53:00Z",
+        expires_at="2026-09-26T00:00:00Z",
+    )
+    with pytest.raises(ValueError):
+        validate_capacity_policy(
+            tampered_extension,
+            model_id="solar-pro4",
+            checked_at=datetime(2026, 9, 25, 12, 0, tzinfo=UTC),
+        )
+
+    # Invalid argument type to helper
+    with pytest.raises(ValueError):
+        solar_pro4_capacity_policy(refreshed="invalid")
+
+
+@pytest.mark.parametrize("field", ["captured_at", "expires_at"])
+@pytest.mark.parametrize("value", [[], {}, None, 2026])
+def test_capacity_timestamp_non_text_is_validation_error(field, value):
+    policy = dict(EXPECTED_REFRESHED_POLICY, **{field: value})
+    with pytest.raises(ValueError):
+        validate_capacity_policy(policy, model_id="solar-pro4", checked_at=REFRESHED_CAPTURED)

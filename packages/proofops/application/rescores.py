@@ -6,8 +6,11 @@ the existing pure engine remains the sole producer of grades and labels.
 """
 
 from dataclasses import asdict, dataclass
+from inspect import signature
 from typing import Literal
 
+from proofops.application.evidence.report_level import POLICIES as REPORT_LEVEL_POLICIES
+from proofops.application.tagging.consensus import PARTIAL_FACTS_V1
 from proofops.domain.audit import AuditConflict
 from proofops.domain.errors import DomainValidationError
 from proofops.domain.provenance import canonical_hash
@@ -20,6 +23,8 @@ from proofops.domain.rules.engine import (
     _validate_inputs,
     evaluate,
 )
+
+REVIEWED_TAG_ORIGINS = ("human", "ai_delegated")
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,8 +147,9 @@ class RescoreRejected(Exception):
 class RescoreService:
     """Prepare with verified original inputs, then atomically CAS every decision."""
 
-    def __init__(self, store, *, load_inputs):
+    def __init__(self, store, *, load_inputs, verify_context_sources=None):
         self.store, self.load_inputs = store, load_inputs
+        self.verify_context_sources = verify_context_sources
 
     def create_rescore(self, actor, run_id, body, idempotency_key, if_match=None):
         import re
@@ -173,6 +179,11 @@ class RescoreService:
         if "response" in captured:
             return captured["response"]
         target = RulePackSnapshot(**captured["target_pack"])
+        # Real (non-synthetic) runs may be rescored only into an active pack with a
+        # recorded approver; synthetic runs keep the original local-only behaviour.
+        target_approved = bool(
+            target.status == "active" and target.approved_by and target.approved_at
+        )
         prepared = {}
         for claim_id, current in captured["claims"].items():
             raw = current["tag"].get("confirmed_tags")
@@ -190,13 +201,15 @@ class RescoreService:
                 )
                 if (
                     snapshot_hash != pinned_hash
+                    or tag.get("fact_assembly") != inputs.snapshot().get("fact_assembly")
                     or inputs.run_id != run_id
                     or inputs.context.claim.claim_id != claim_id
                     or inputs.rulepack.sha256 != captured["run_snapshot"]["rulepack"]["sha256"]
                     or inputs.original.document_version_id != captured["run"]["document_version_id"]
-                    or not inputs.rule_context.local_synthetic
                 ):
                     raise RescoreRejected("RESCORE_INPUT_MISMATCH")
+                if not inputs.rule_context.local_synthetic and not target_approved:
+                    raise RescoreRejected("RULEPACK_APPROVAL_REQUIRED")
                 tags = ConfirmedTags(
                     **(
                         raw
@@ -225,13 +238,72 @@ class RescoreService:
                     or tags.prompt_sha256 != first.prompt_sha256
                     or tags.replicate_hashes != inputs.consensus.replicate_hashes
                     or tags.product_variant != first.product_variant
-                    or tags.track != inputs.packet.to_dict()["track"]
+                    # A review revision may correct the track (original §4.2); an
+                    # unreviewed tag must still match its original packet.
+                    or (
+                        tags.track != inputs.packet.to_dict()["track"]
+                        and tag.get("origin") not in REVIEWED_TAG_ORIGINS
+                    )
                 ):
                     raise RescoreRejected("RESCORE_INPUT_MISMATCH")
+                report_graphs = {}
+                seen_report_elements = set()
+                for receipt in tag.get("report_level_review", ()):
+                    element_id = receipt["element_id"]
+                    policy = receipt["policy"]
+                    element = next(
+                        (e for e in tag["elements"] if e["element_id"] == element_id), None
+                    )
+
+                    if (
+                        self.verify_context_sources is None
+                        or element_id in seen_report_elements
+                        or REPORT_LEVEL_POLICIES.get(element_id) != policy
+                        or element is None
+                        or element["state"] != "present"
+                        or element["reason_code"] != policy
+                        or element["credited_from"] != receipt["credited_from"]
+                    ):
+                        raise RescoreRejected("RESCORE_SOURCE_REJECTED")
+                    refs = tuple(_source_ref_from_dict(ref) for ref in receipt["refs"])
+                    if not 1 <= len(refs) <= 6:
+                        raise RescoreRejected("RESCORE_SOURCE_REJECTED")
+                    verified_refs = tuple(
+                        replace(ref, verification_state="verified") for ref in refs
+                    )
+                    if (
+                        tuple(_source_ref_from_dict(ref) for ref in element["evidence_refs"])
+                        != verified_refs
+                    ):
+                        raise RescoreRejected("RESCORE_SOURCE_REJECTED")
+                    seen_report_elements.add(element_id)
+                    try:
+                        replay = (
+                            {"replay_receipt": receipt["source_receipt"]}
+                            if "replay_receipt" in signature(self.verify_context_sources).parameters
+                            else {}
+                        )
+                        graph, replayed = self.verify_context_sources(inputs, refs, **replay)
+                    except (KeyError, TypeError, ValueError) as exc:
+                        raise RescoreRejected("RESCORE_SOURCE_REJECTED") from exc
+                    if canonical_hash(replayed) != canonical_hash(receipt["source_receipt"]):
+                        raise RescoreRejected("RESCORE_SOURCE_REJECTED")
+                    for name in MAPPINGS[tags.track][element_id]:
+                        fact = next((f for f in tags.facts if f.name == name), None)
+                        if (
+                            fact is None
+                            or fact.state != "present"
+                            or fact.source_scope != "global_bound"
+                            or fact.evidence_refs != verified_refs
+                        ):
+                            raise RescoreRejected("RESCORE_SOURCE_REJECTED")
+                        report_graphs[name] = graph
                 for fact in tags.facts:
                     for ref in fact.evidence_refs:
                         verified = verify_source_ref(
-                            ref, inputs.original, tenant_id=actor.tenant_id
+                            ref,
+                            report_graphs.get(fact.name, inputs.original),
+                            tenant_id=actor.tenant_id,
                         )
                         if verified != ref or verified.verification_state != "verified":
                             raise RescoreRejected("RESCORE_SOURCE_REJECTED")
@@ -252,6 +324,12 @@ class RescoreService:
                 raise RescoreRejected("RESCORE_INPUT_UNAVAILABLE") from error
             if isinstance(decision, RetagRequired):
                 raise RescoreRejected(decision.code)
+            if (
+                inputs.fact_assembly_profile == PARTIAL_FACTS_V1
+                and tag["origin"] not in REVIEWED_TAG_ORIGINS
+                and decision.decision_status == "decided"
+            ):
+                raise RescoreRejected("HUMAN_REVIEW_REQUIRED")
             api = decision.to_api_dict()
             if tag["origin"] == "human":
                 api["review_status"] = "human_confirmed"
@@ -265,6 +343,7 @@ class RescoreService:
                 api=api,
                 input_snapshot_sha256=snapshot_hash,
                 tag_record_sha256=canonical_hash(tag),
+                **({"fact_assembly": tag["fact_assembly"]} if "fact_assembly" in tag else {}),
             )
         try:
             return self.store.commit(actor, run_id, body, captured, prepared)

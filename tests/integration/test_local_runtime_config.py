@@ -266,6 +266,33 @@ def test_tagging_mode_requires_explicit_typed_settings_without_defaults(tmp_path
     assert runtime["tagging_mode"] == "local_synthetic"
 
 
+def test_m2_auto_link_error_survives_local_settings_wrapper(tmp_path: Path) -> None:
+    from proofops.application.tagging.report_level_link import POLICY, POLICY_HASH
+    from proofops_api.local_runtime import load_local_runtime
+
+    parser_path = _write_json(tmp_path / "parser.json", _parser_snapshot())
+    settings_path = _write_json(
+        tmp_path / "run.json",
+        {
+            "build_root": str(tmp_path),
+            "budget_limits": _budget_limits(),
+            "report_level_link": {
+                "policy": POLICY,
+                "policy_hash": POLICY_HASH,
+                "refs": {"M2": [{}]},
+            },
+        },
+    )
+    with pytest.raises(ValueError, match="REPORT_LEVEL_LINK_M3_ONLY"):
+        load_local_runtime(
+            {
+                "LOCAL_PARSER_PROFILE_PATH": str(parser_path),
+                "LOCAL_RUN_SETTINGS_PATH": str(settings_path),
+                "LOCAL_TAGGING_MODE": "local_synthetic",
+            }
+        )
+
+
 def test_settings_reject_duplicate_json_keys(tmp_path: Path) -> None:
     from proofops_api.local_runtime import load_local_runtime
 
@@ -319,6 +346,39 @@ def test_run_settings_accept_approved_extraction_opt_ins(tmp_path: Path) -> None
     assert runtime["extraction_profile"].synthetic is False
 
 
+@pytest.mark.parametrize("content_bounds", [False, True])
+@pytest.mark.parametrize("complete_selection", [False, True])
+def test_run_settings_accept_the_assertion_prompt_opt_in(
+    tmp_path: Path, complete_selection, content_bounds
+) -> None:
+    """R20 fix 2: assertion prompt validates when paired with source-ids in probe mode."""
+    from proofops_api.local_runtime import load_local_runtime
+
+    parser_path = _write_json(tmp_path / "parser.json", _parser_snapshot())
+    settings_path = _write_json(
+        tmp_path / "run.json",
+        {
+            "build_root": str(tmp_path),
+            "budget_limits": _budget_limits(),
+            "extraction_profile": _probe_extraction_profile(),
+            "extraction_limits": {"max_calls": 2, "max_output_tokens": 128},
+            "extraction_source_ids": True,
+            "extraction_assertion_prompt": True,
+            **({"extraction_complete_selection": True} if complete_selection else {}),
+            **({"extraction_content_bounds": True} if content_bounds else {}),
+        },
+    )
+    runtime = load_local_runtime(
+        {
+            "LOCAL_PARSER_PROFILE_PATH": str(parser_path),
+            "LOCAL_RUN_SETTINGS_PATH": str(settings_path),
+            "LOCAL_EXTRACTION_MODE": "upstage_probe",
+        }
+    )
+    assert runtime["extraction_mode"] == "upstage_probe"
+    assert runtime["extraction_profile"].synthetic is False
+
+
 @pytest.mark.parametrize(
     "settings,mode",
     [
@@ -331,6 +391,28 @@ def test_run_settings_accept_approved_extraction_opt_ins(tmp_path: Path) -> None
         ({"extraction_year_notation": True}, "local_synthetic"),
         ({"extraction_context": True}, "local_synthetic"),
         ({"extraction_context": True}, ""),
+        # R20 fix 2: assertion prompt is a real-probe opt-in that requires
+        # source-id selection; every invalid shape fails closed.
+        ({"extraction_assertion_prompt": "yes", "extraction_source_ids": True}, "upstage_probe"),
+        ({"extraction_assertion_prompt": False, "extraction_source_ids": True}, "upstage_probe"),
+        ({"extraction_assertion_prompt": True, "extraction_source_ids": True}, "local_synthetic"),
+        ({"extraction_assertion_prompt": True}, "upstage_probe"),
+        ({"extraction_content_bounds": True}, "upstage_probe"),
+        ({"extraction_content_bounds": False, "extraction_source_ids": True}, "upstage_probe"),
+        ({"extraction_content_bounds": "yes", "extraction_source_ids": True}, "upstage_probe"),
+        ({"extraction_content_bounds": True, "extraction_source_ids": True}, "local_synthetic"),
+        ({"extraction_complete_selection": True}, "upstage_probe"),
+        ({"extraction_complete_selection": True, "extraction_source_ids": True}, "upstage_probe"),
+        ({"extraction_complete_selection": False}, "upstage_probe"),
+        ({"extraction_complete_selection": "yes"}, "upstage_probe"),
+        (
+            {
+                "extraction_complete_selection": True,
+                "extraction_source_ids": True,
+                "extraction_assertion_prompt": True,
+            },
+            "local_synthetic",
+        ),
     ],
 )
 def test_run_settings_reject_bad_extraction_opt_ins(

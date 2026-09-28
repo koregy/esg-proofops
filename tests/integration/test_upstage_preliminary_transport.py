@@ -1,6 +1,7 @@
 """Bounded preliminary transport over real ledger/fake HTTP: no paid calls, no grades."""
 
 import json
+from copy import deepcopy
 from dataclasses import asdict, replace
 from datetime import UTC as _UTC
 from datetime import datetime as _RealDatetime
@@ -493,4 +494,62 @@ def test_legacy_profile_rejects_a_context_shaped_packet(tmp_path, monkeypatch):
     smuggled["packet_sha256"] = canonical_hash(context_envelope)
     with pytest.raises(ValueError, match="UPSTAGE_PRELIMINARY_PACKET_INVALID"):
         adapter.invoke(smuggled)
+    assert calls == [] and probe.summary()["calls"] == 0
+
+
+def test_oversize_context_is_bounded_before_hashing_without_losing_sources(tmp_path, monkeypatch):
+    adapter, probe, calls, request, envelope, _, _ = configured_with_context(tmp_path, monkeypatch)
+    # Korean UTF-8 plus context provenance exceeds the real wire ceiling.
+    blocks = envelope["untrusted_document_data"]["context_blocks"]
+    assert blocks
+    blocks[-1]["text"] = "한글 문맥 " * 2000
+    original = deepcopy(envelope)
+    bounded = adapter.bound_context(envelope)
+    assert envelope == original
+    assert (
+        bounded["untrusted_document_data"]["sources"]
+        == original["untrusted_document_data"]["sources"]
+    )
+    assert blocks[-1]["source_id"] in bounded["untrusted_document_data"]["omitted_source_ids"]
+    assert canonical_hash(bounded) != canonical_hash(envelope)
+    request["user_json"] = json.dumps(bounded, ensure_ascii=False)
+    request["packet_sha256"] = canonical_hash(bounded)
+    system, wire, _, _ = adapter._wire_request(request)
+    probe.request_body(
+        system, wire, request_id=request["request_id"], max_tokens=100, json_mode=True
+    )
+    assert calls == [] and probe.summary()["calls"] == 0
+    assert adapter.bound_context(bounded) == bounded
+
+
+def test_context_bound_does_not_hide_oversize_numbered_sources(tmp_path, monkeypatch):
+    adapter, probe, calls, request, envelope, _, _ = configured_with_context(tmp_path, monkeypatch)
+    envelope["untrusted_document_data"]["sources"][0]["text"] = "인용 근거 " * 4000
+    bounded = adapter.bound_context(envelope)
+    assert (
+        bounded["untrusted_document_data"]["sources"]
+        == envelope["untrusted_document_data"]["sources"]
+    )
+    request["user_json"] = json.dumps(bounded, ensure_ascii=False)
+    request["packet_sha256"] = canonical_hash(bounded)
+    system, wire, _, _ = adapter._wire_request(request)
+    with pytest.raises(ValueError, match="PROBE_REQUEST_TOO_LARGE"):
+        probe.request_body(
+            system, wire, request_id=request["request_id"], max_tokens=100, json_mode=True
+        )
+    assert calls == [] and probe.summary()["calls"] == 0
+
+
+def test_context_sizing_leaves_price_stop_to_authorized_dispatch(tmp_path, monkeypatch):
+    adapter, probe, calls, request, envelope, _, _ = configured_with_context(tmp_path, monkeypatch)
+
+    class ExpiredClock(_RealDatetime):
+        @classmethod
+        def now(cls, tz=None):
+            return _RealDatetime(2026, 10, 2, tzinfo=_UTC).astimezone(tz)
+
+    monkeypatch.setattr("proofops.adapters.local.upstage.datetime", ExpiredClock)
+    assert adapter.bound_context(envelope) == envelope
+    with pytest.raises(ValueError, match="PRICE_RECHECK_REQUIRED"):
+        adapter.count_input_tokens(request, counter=lambda system, user: 100)
     assert calls == [] and probe.summary()["calls"] == 0

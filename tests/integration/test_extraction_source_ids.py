@@ -285,3 +285,163 @@ def test_context_mode_still_requires_its_graph_and_plain_mode_refuses_one(tmp_pa
     _, plain = id_extractor(tmp_path / "plain", json.dumps({"sentence_ids": []}))
     with pytest.raises(ValueError, match="EXTRACTION_CONTEXT_UNEXPECTED"):
         plain.extract(packet(plain), context_graph=graph)
+
+
+# ---------------------------------------------------------------------------
+# R20 fix 2: opt-in assertion prompt suffix, proven in 4 paid coordinator calls.
+# The suffix is appended AFTER the whole source-ID(+context/table) prompt and
+# requires extraction_source_ids. It pins its own prompt/rule hash and never
+# mutates the existing SOURCE_ID_SYSTEM_PROMPT bytes or the existing hashes.
+# ---------------------------------------------------------------------------
+
+
+def test_assertion_prompt_requires_source_ids_before_any_call(tmp_path):
+    """The assertion suffix has no meaning without source-ID selection, so the
+    invalid combination is rejected at construction, before any paid call."""
+    from proofops_agent.upstage_extraction import UpstageClaimExtractor
+
+    probe = FakeProbe(json.dumps({"claims": []}))
+    with pytest.raises(ValueError, match="UPSTAGE_EXTRACTION_ASSERTION_PROMPT_INVALID"):
+        UpstageClaimExtractor(
+            probe,
+            tmp_path / "receipts",
+            extraction_source_ids=False,
+            extraction_assertion_prompt=True,
+        )
+    # And a non-bool is rejected too, like every other option flag.
+    with pytest.raises(ValueError, match="UPSTAGE_EXTRACTION_ASSERTION_PROMPT_INVALID"):
+        UpstageClaimExtractor(
+            probe,
+            tmp_path / "receipts",
+            extraction_source_ids=True,
+            extraction_assertion_prompt="yes",
+        )
+    assert not probe.calls
+
+
+def test_assertion_profile_is_distinct_and_leaves_existing_hashes_unchanged():
+    """New prompt+rule hash for the assertion mode; every legacy hash is intact."""
+    from proofops_agent.upstage_extraction import _profile, _profile_with_options
+
+    assertion = _profile_with_options(source_ids=True, assertion_prompt=True)
+    plain_source_ids = _profile_with_options(source_ids=True)
+    assert assertion.prompt_sha256 != plain_source_ids.prompt_sha256
+    assert assertion.rule_sha256 != plain_source_ids.rule_sha256
+    assert assertion.synthetic is False
+    # Legacy and every previously-pinned option hash are byte-for-byte unchanged.
+    assert _profile() == _profile_with_options()
+    for other in (
+        _profile(),
+        _profile_with_options(year_notation=True),
+        _profile_with_options(extraction_context=True),
+        _profile_with_options(extraction_context=True, extraction_table_context=True),
+        plain_source_ids,
+        _profile_with_options(extraction_context=True, source_ids=True),
+    ):
+        assert assertion.rule_sha256 != other.rule_sha256
+        assert assertion.prompt_sha256 != other.prompt_sha256
+    # Assertion mode composes with context/table and stays distinct there too.
+    combo = _profile_with_options(
+        extraction_context=True,
+        extraction_table_context=True,
+        source_ids=True,
+        assertion_prompt=True,
+    )
+    assert combo.prompt_sha256 != assertion.prompt_sha256
+    assert combo.rule_sha256 != assertion.rule_sha256
+    # The assertion flag requires source_ids at the profile layer as well.
+    with pytest.raises(ValueError, match="UPSTAGE_PROFILE_OPTION_INVALID"):
+        _profile_with_options(assertion_prompt=True)
+
+
+def test_assertion_wire_is_exactly_source_id_prompt_plus_the_proven_suffix(tmp_path):
+    """The sent system prompt is the source-ID prompt with the exact proven
+    suffix appended last; user wire and id semantics are unchanged."""
+    from proofops_agent.upstage_extraction import (
+        ASSERTION_SYSTEM_SUFFIX,
+        SOURCE_ID_SYSTEM_PROMPT,
+    )
+
+    probe, extractor = id_extractor(
+        tmp_path, json.dumps({"sentence_ids": []}), extraction_assertion_prompt=True
+    )
+    extractor.extract(packet(extractor))
+    call = probe.calls[0]
+    assert call["system"] == SOURCE_ID_SYSTEM_PROMPT + ASSERTION_SYSTEM_SUFFIX
+    # The user wire is still the id-only wire (no source text echoed back).
+    sent = json.loads(call["user_json"])["untrusted_document_data"]
+    assert set(sent) == {"source_id", "source_sentences"}
+    assert json.loads(call["user_json"])["untrusted_document_data"].get("text") is None
+
+
+def test_assertion_mode_replays_the_same_expected_ids_and_spans(tmp_path):
+    """With the assertion suffix on, the same stored id response restores the
+    same exact expected spans as plain source-ID mode: the suffix changes only
+    the prompt bytes/hash, never the id-restoration contract."""
+    probe, extractor = id_extractor(
+        tmp_path, REAL_PRO4_ID_RESPONSE, extraction_assertion_prompt=True
+    )
+    spans = extractor.extract(packet(extractor))["spans"]
+    assert [span["quote"] for span in spans] == list(LOTTE_SENTENCES)
+    assert [(span["char_start"], span["char_end"]) for span in spans] == [
+        (0, 99),
+        (100, 157),
+        (158, 208),
+        (209, 296),
+    ]
+    # Replay serves the stored response with no second paid call.
+    again = extractor.extract(packet(extractor))
+    assert again["spans"] == spans
+    assert len(probe.calls) == 1
+    stored = json.loads(
+        (tmp_path / "receipts" / probe.calls[0]["request_id"] / "result.json").read_text()
+    )
+    assert stored["profile"] == asdict(extractor.profile)
+
+
+def test_assertion_receipt_rejects_replay_under_the_wrong_profile(tmp_path):
+    """A receipt written under the assertion profile must not be replayed by an
+    extractor without the assertion suffix (different prompt hash, id, request)."""
+    probe, extractor = id_extractor(
+        tmp_path / "shared", REAL_PRO4_ID_RESPONSE, extraction_assertion_prompt=True
+    )
+    extractor.extract(packet(extractor))
+    # A plain source-ID extractor over the SAME receipt directory recomputes a
+    # different request id (its prompt differs), so it never serves this receipt.
+    plain_probe = FakeProbe(REAL_PRO4_ID_RESPONSE)
+    plain = UpstageClaimExtractor(plain_probe, tmp_path / "shared", extraction_source_ids=True)
+    plain.extract(packet(plain))
+    # Two distinct request ids -> two distinct receipt directories, no crossover.
+    assert probe.calls[0]["request_id"] != plain_probe.calls[0]["request_id"]
+    assert probe.calls[0]["system"] != plain_probe.calls[0]["system"]
+
+
+def test_complete_selection_restores_all_three_kakao_sentences_and_replays(tmp_path):
+    # R34 real paragraph and selected indices from the three-replica wire probe.
+    text = (
+        "카카오는 2040년 RE100 및 탄소중립 달성을 목표로 재생에너지 조달을 확대하고 있습니다."
+        " 당사의 온실가스 배출량 대부분은 전력 사용에 기인하고 있어, 재생에너지 조달 확대 과정에서 "
+        "발생할 수 있는 전력 비용 상승 및 재생에너지 공급 환경 변화는 주요 전환 리스크로 식별됩니다"
+        ". 이에 카카오는 기후변화 시나리오를 기반으로 RE100 이행에 따른 재무적 영향을 분석하고 "
+        "있으며, 사업계획에 따른 전력 사용 전망, 에너지 효율화 계획 및 재생에너지 조달 비용 전망을"
+        " 반영하여 영향을 산정하였습니다. 분석 결과, 2030년까지의 연도별 재무영향은 예상 매출액 "
+        "대비 0.4% 미만 수준으로 분석되었습니다."
+    )
+    source_id = "74cd1f38-eb66-52c6-8c6a-f45b044b8638"
+    probe, extractor = id_extractor(
+        tmp_path,
+        json.dumps({"sentence_ids": [f"{source_id}:{i}" for i in (0, 2, 3)]}),
+        extraction_assertion_prompt=True,
+        extraction_complete_selection=True,
+    )
+    data = packet(extractor, text=text, source_id=source_id)
+    result = extractor.extract(data)
+    sentences = json.loads(probe.calls[0]["user_json"])["untrusted_document_data"][
+        "source_sentences"
+    ]
+    expected = [sentences[i]["text"] for i in (0, 2, 3)]
+    assert [span["quote"] for span in result["spans"]] == expected
+    for span in result["spans"]:
+        assert text[span["char_start"] : span["char_end"]] == span["quote"]
+    assert extractor.extract(data) == result
+    assert len(probe.calls) == 1

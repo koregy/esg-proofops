@@ -41,6 +41,40 @@ def test_relation_boundary_exists():
     assert importlib.util.find_spec("proofops.application.tagging.relations") is not None
 
 
+@pytest.mark.parametrize(
+    ("selection", "code"),
+    [
+        ("not a span", "RELATION_SPAN_SHAPE"),
+        (
+            {"source_index": 0, "quote": "source text that is absent"},
+            "RELATION_QUOTE_ABSENT",
+        ),
+        ({"source_index": 0, "quote": "A"}, "RELATION_QUOTE_AMBIGUOUS"),
+    ],
+)
+def test_invalid_relation_span_reports_safe_code_and_field(selection, code):
+    graph, _, refs = corpus()
+    raw = response(DIMENSIONS, DIMENSIONS)
+    raw["relations"][0]["dimensions"]["entity"] = selection
+    with pytest.raises(DomainValidationError) as error:
+        validate(refs, graph, raw)
+    assert error.value.code == code
+    assert error.value.field == "relations[0].dimensions.entity"
+    assert "source text that is absent" not in str(error.value)
+
+
+def test_overlapping_relation_quote_is_reported_as_ambiguous():
+    dimensions = DIMENSIONS | {"entity": "AAA"}
+    graph, _, refs = corpus(claim_dimensions=dimensions)
+    raw = response(dimensions, dimensions)
+    raw["relations"][0]["dimensions"]["entity"]["quote"] = "AA"
+    with pytest.raises(DomainValidationError) as error:
+        validate(refs, graph, raw)
+    assert error.value.code == "RELATION_QUOTE_AMBIGUOUS"
+    assert error.value.field == "relations[0].dimensions.entity"
+    assert "AA" not in repr((error.value.args, vars(error.value)))
+
+
 def test_two_verified_catalog_sources_restore_literal_roles_and_nulls():
     graph, _, refs = corpus()
     result = validate(refs, graph, response(DIMENSIONS, DIMENSIONS))

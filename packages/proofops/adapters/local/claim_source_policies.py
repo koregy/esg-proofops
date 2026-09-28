@@ -21,6 +21,10 @@ RENDER_RESOLUTION_POLICY_SCHEMA = "claim_span_render_resolution_policy_v1"
 # than replacing it, so pinning it preserves render resolution instead of
 # trading one recovery for the other.
 BULLET_ALIGNMENT_POLICY_SCHEMA = "claim_span_bullet_alignment_policy_v1"
+# R24 rendered-side-only typography wrapper. It WRAPS the bullet-alignment
+# wrapper rather than replacing it, so pinning it preserves both inner
+# recoveries. Its native gate is the base verifier's, unfolded.
+TYPOGRAPHY_POLICY_SCHEMA = "claim_span_typography_policy_v1"
 # Accepted in a run snapshot. The two base schemas are the base verifier's own;
 # the others are each wrapper's distinct schema, so no receipt or policy of one
 # kind can ever be read as the other.
@@ -30,6 +34,7 @@ CLAIM_SOURCE_POLICY_SCHEMAS = frozenset(
         "claim_source_policy_v2",
         RENDER_RESOLUTION_POLICY_SCHEMA,
         BULLET_ALIGNMENT_POLICY_SCHEMA,
+        TYPOGRAPHY_POLICY_SCHEMA,
     }
 )
 
@@ -46,10 +51,16 @@ def _bullet_alignment():
     return claim_span_bullet_alignment
 
 
+def _typography():
+    from proofops.adapters.local import claim_span_typography
+
+    return claim_span_typography
+
+
 def _wrappers():
     """Every wrapper module, outermost first. Additive: the base verifier's own
     dispatch is untouched and each wrapper keeps its own distinct policy."""
-    return (_bullet_alignment(), _render_resolution())
+    return (_typography(), _bullet_alignment(), _render_resolution())
 
 
 def claim_source_reader(policy):
@@ -65,6 +76,7 @@ def claim_source_reader(policy):
 
     if isinstance(policy, Mapping):
         for schema, module in (
+            (TYPOGRAPHY_POLICY_SCHEMA, _typography),
             (BULLET_ALIGNMENT_POLICY_SCHEMA, _bullet_alignment),
             (RENDER_RESOLUTION_POLICY_SCHEMA, _render_resolution),
         ):
@@ -101,12 +113,19 @@ def attest_claims(*, reader, graph, source, refs, tenant_id, cache):
     the base reader's incremental per-ref attestation cache, the single-shot
     path does not. No wrapper is ever routed through that cache regardless:
     a wrapper receipt carries whole-receipt fields (``base_records``,
-    ``render_retries``, ``bullet_alignments``) that a per-record cache
-    composition would leave inconsistent with a fresh recompute, and every
+    ``render_retries``, ``bullet_alignments``, ``typography_reads``) that a
+    per-record cache composition would leave inconsistent with a fresh
+    recompute, and every
     wrapper's replay recomputes the receipt in full, so a composed receipt
     would be refused at load time. The separate replay cache in
     ``native_replay_cache`` is keyed on the whole receipt and stays usable for
     both readers.
+
+    A wrapper receipt is therefore recomputed in full here and then remembered
+    whole, not composed: ``remember_wrapper_attestation`` stores these exact
+    canonical bytes so the strict replay that immediately follows the batch
+    publication can match them instead of repeating the same whole-ref read.
+    The published bytes are unchanged either way.
     """
     if cache and reader not in _wrappers():
         from proofops.adapters.local.native_replay_cache import attest_claims_cached
@@ -114,4 +133,16 @@ def attest_claims(*, reader, graph, source, refs, tenant_id, cache):
         return attest_claims_cached(
             reader=reader, graph=graph, source=source, refs=refs, tenant_id=tenant_id
         )
-    return reader.attest_claim_spans(graph, source, tuple(refs), tenant_id=tenant_id)
+    receipt = reader.attest_claim_spans(graph, source, tuple(refs), tenant_id=tenant_id)
+    if cache:
+        from proofops.adapters.local.native_replay_cache import remember_wrapper_attestation
+
+        remember_wrapper_attestation(
+            reader=reader,
+            policy=reader.claim_source_policy(),
+            graph=graph,
+            source=source,
+            tenant_id=tenant_id,
+            receipt=receipt,
+        )
+    return receipt

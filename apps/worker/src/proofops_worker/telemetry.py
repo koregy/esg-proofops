@@ -7,10 +7,10 @@ from collections.abc import Callable, Mapping
 from time import perf_counter
 from typing import Any
 
-from proofops.application.ports.jobs import JobLease
+from proofops.application.ports.jobs import JobLease, LeaseLost
 from proofops.application.telemetry import Telemetry, TraceContext
 
-from proofops_worker.consumer import StageFailure
+from proofops_worker.consumer import StageFailure, TagHeartbeatFailed
 
 
 def worker_context(lease: JobLease, propagated: Mapping[str, str]) -> TraceContext:
@@ -35,6 +35,7 @@ def observe_job(
     operation: Callable[[JobLease], tuple[bytes, dict[str, Any]]],
     *,
     context: TraceContext,
+    heartbeat_state=None,
 ) -> tuple[bytes, dict[str, Any]]:
     if (context.tenant_id, context.run_id, context.job_id) != (
         lease.message.tenant_id,
@@ -55,7 +56,11 @@ def observe_job(
         event.update(event="operation_completed", code="OK")
         return result
     except BaseException as error:
-        event.update(event="operation_failed", code="INTERNAL_ERROR")
+        event.update(event="operation_failed", code="UNEXPECTED_ERROR")
+        error_type = type(error).__name__
+        event["exception_type"] = (
+            error_type if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", error_type) else "Exception"
+        )
         if isinstance(error, StageFailure):
             event.update(
                 {
@@ -69,6 +74,10 @@ def observe_job(
                 }
             )
             event["code"] = error.error_code
+        elif isinstance(error, LeaseLost) or error_type == "_TagFenceLost":
+            event["code"] = "LEASE_LOST"
+        elif isinstance(error, TagHeartbeatFailed):
+            event["code"] = "LEASE_HEARTBEAT_FAILED"
         raise
     finally:
         event.update(
@@ -76,5 +85,8 @@ def observe_job(
             attempt=lease.attempt,
             fencing_token=lease.fencing_token,
             latency_ms=(perf_counter() - started) * 1000,
+            last_successful_heartbeat_at=(
+                heartbeat_state.last_successful_at if heartbeat_state is not None else None
+            ),
         )
         telemetry.emit(event, context=context)

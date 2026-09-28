@@ -7,6 +7,26 @@ from proofops.application.tagging.service import TaggingSettings
 from evaluation.local_upstage_pilot import live_tagging_settings
 
 
+def test_pilot_company_identity_is_explicit_and_new_run_only():
+    from evaluation.local_upstage_pilot import pilot_company_body
+
+    assert pilot_company_body(None, None, existing=False) == dict(
+        legal_name="실제 보고서 검토 시험", aliases=[], registration_identifier=None
+    )
+    assert pilot_company_body("네이버 주식회사", "DART:00266961", existing=False) == dict(
+        legal_name="네이버 주식회사", aliases=[], registration_identifier="DART:00266961"
+    )
+    for name, identifier, existing in (
+        ("네이버 주식회사", None, False),
+        (None, "DART:00266961", False),
+        (" ", "DART:00266961", False),
+        ("네이버 주식회사", " ", False),
+        ("네이버 주식회사", "DART:00266961", True),
+    ):
+        with pytest.raises(ValueError):
+            pilot_company_body(name, identifier, existing=existing)
+
+
 def test_live_pilot_settings_have_independent_real_profiles():
     result = live_tagging_settings(12)
     preliminary, tagging = (
@@ -17,8 +37,39 @@ def test_live_pilot_settings_have_independent_real_profiles():
     assert preliminary.binding.synthetic is tagging.binding.synthetic is False
     assert preliminary.model_id == tagging.model_id == "solar-pro4"
     assert preliminary.model_profile == "upstage-preliminary-source-quotes-v1"
-    assert tagging.model_profile == "upstage-compact-source-quotes-v3"
+    assert tagging.model_profile == "upstage-compact-source-quotes-v4"
     assert set(result) == {"preliminary_settings", "tagging_settings", "input_reservation_policy"}
+
+
+def test_compact_element_wire_is_explicit_and_pinned_on_resume():
+    from evaluation.local_upstage_pilot import apply_resume_metadata
+    from tests.unit.test_extraction_source_id_wiring import _args
+
+    old = live_tagging_settings(12)["tagging_settings"]
+    new = live_tagging_settings(12, compact_element_wire=True)["tagging_settings"]
+    assert old["model_profile"] == "upstage-compact-source-quotes-v4"
+    assert new["model_profile"] == "upstage-compact-source-quotes-v5"
+    assert old["system_prompt"] == new["system_prompt"]
+    args = _args()
+    apply_resume_metadata(args, {"source_path": "/tmp/example.pdf", "compact_element_wire": True})
+    assert args.compact_element_wire is True
+
+
+def test_resume_cannot_add_compact_element_wire(tmp_path, monkeypatch, capsys):
+    import json
+    import sys
+
+    from evaluation import local_upstage_pilot as pilot
+
+    state = tmp_path / "legacy"
+    state.mkdir()
+    (state / "pilot.json").write_text(json.dumps({"source_path": "/tmp/example.pdf"}))
+    monkeypatch.setattr(
+        sys, "argv", ["pilot", "--resume", "--state", str(state), "--compact-element-wire"]
+    )
+    with pytest.raises(SystemExit):
+        pilot.main()
+    assert "--resume cannot add compact element wire" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("calls", [True, 0, 5, 2001, 12.5])
@@ -123,7 +174,7 @@ def test_preliminary_context_pilot_settings_are_opt_in_with_distinct_profile_and
     assert preliminary["model_profile"] == "upstage-preliminary-source-quotes-context-v1"
     assert preliminary["system_prompt"] == SYSTEM_PROMPT + CONTEXT_SYSTEM_SUFFIX
     # Everything else (tagging profile, binding independence) stays unaffected.
-    assert result["tagging_settings"]["model_profile"] == "upstage-compact-source-quotes-v3"
+    assert result["tagging_settings"]["model_profile"] == "upstage-compact-source-quotes-v4"
     assert (
         preliminary["binding"]["binding_id"] != result["tagging_settings"]["binding"]["binding_id"]
     )
@@ -170,3 +221,184 @@ def test_extraction_batch_and_run_budget_are_separate_and_bounded():
     for invalid in (True, 0, 7, 2001, 8.5):
         with pytest.raises(ValueError, match="extraction total"):
             extraction_budget_settings(8, invalid)
+
+
+def test_element_prompt_requires_literal_value_quotes_without_changing_wire_schema():
+    result = live_tagging_settings(12)
+    settings = TaggingSettings(
+        **(
+            result["tagging_settings"]
+            | {"binding": ModelBinding(**result["tagging_settings"]["binding"])}
+        )
+    )
+    assert "at least one selected quote MUST be exactly that value" in settings.system_prompt
+    assert "citing the whole sentence alone is invalid" in settings.system_prompt
+    assert settings.model_profile == "upstage-compact-source-quotes-v4"
+    import json
+
+    assert json.loads(settings.schema_json)["$defs"]["SourceRef"]["type"] == "object"
+
+
+def test_element_prompt_distinguishes_target_deadline_from_event_date():
+    prompt = live_tagging_settings(6)["tagging_settings"]["system_prompt"]
+    assert "G1 requires a deadline for the claimed goal" in prompt
+    assert "designation, registration, publication or reporting year" in prompt
+    assert "a goal track assignment does not establish a target deadline" in prompt
+
+
+def test_pilot_oversized_pdf_rejected_before_state_creation(tmp_path, monkeypatch, capsys):
+    import sys
+
+    from proofops.application.uploads_security import PdfLimits
+
+    from evaluation import local_upstage_pilot as pilot
+
+    source = tmp_path / "oversized.pdf"
+    with source.open("wb") as stream:
+        stream.truncate(PdfLimits().max_bytes + 1)
+    state = tmp_path / "new-state"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "pilot",
+            "--pdf",
+            str(source),
+            "--state",
+            str(state),
+            "--pages",
+            "1",
+            "--report-year",
+            "2025",
+            "--period-start",
+            "2024-01-01",
+            "--period-end",
+            "2024-12-31",
+        ],
+    )
+    with pytest.raises(SystemExit) as error:
+        pilot.main()
+    assert error.value.code == 2
+    assert "104857600 bytes" in capsys.readouterr().err
+    assert not state.exists()
+
+
+def test_local_login_link_mints_fresh_session_after_expiry(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from proofops.adapters.local.auth_store import InMemorySessionStore
+    from proofops_api.auth import SESSION_COOKIE_NAME
+
+    from evaluation import local_upstage_pilot as pilot
+
+    sessions = InMemorySessionStore()
+    app = FastAPI()
+    app.get("/__local/test-secret")(
+        lambda: pilot.local_login_response(sessions, "user", "tenant", "run")
+    )
+    client = TestClient(app, base_url="https://localhost", follow_redirects=False)
+    monkeypatch.setattr(pilot.time, "time", lambda: 1000.0)
+    first = client.get("/__local/test-secret")
+    first_id = client.cookies[SESSION_COOKIE_NAME]
+    first_record = sessions.get(first_id)
+    assert first.status_code == 303 and first.headers["location"] == "/runs/run/claims"
+    monkeypatch.setattr(pilot.time, "time", lambda: 5000.0)
+    second = client.get("/__local/test-secret")
+    second_id = client.cookies[SESSION_COOKIE_NAME]
+    second_record = sessions.get(second_id)
+    assert first_id != second_id
+    assert first_record.expires_at == 4600.0
+    assert second_record.expires_at == second_record.idle_deadline == 8600.0
+    assert second_record.user_sub == "user" and second_record.active_tenant_id == "tenant"
+    assert sessions.csrf_token_for(first_id) != sessions.csrf_token_for(second_id)
+    assert all(
+        flag in second.headers["set-cookie"] for flag in ("Secure", "HttpOnly", "SameSite=strict")
+    )
+
+
+def test_live_pilot_settings_capacity_refresh_opt_in():
+    default = live_tagging_settings(12)
+    assert default["input_reservation_policy"]["captured_at"] == "2026-09-18T16:53:00Z"
+    assert default["input_reservation_policy"]["expires_at"] == "2026-09-25T00:00:00Z"
+
+    opted = live_tagging_settings(12, capacity_refresh=True)
+    assert opted["input_reservation_policy"]["captured_at"] == "2026-09-25T10:57:00Z"
+    assert opted["input_reservation_policy"]["expires_at"] == "2026-10-02T00:00:00Z"
+
+    for invalid in ("yes", 1, None, 0):
+        with pytest.raises(ValueError):
+            live_tagging_settings(12, capacity_refresh=invalid)
+
+
+def test_new_local_approval_profiles_use_bounded_24h_lifetime(tmp_path, monkeypatch):
+    import json
+    import sqlite3
+    import sys
+    from datetime import datetime, timedelta
+
+    from pypdf import PdfWriter
+
+    from evaluation import local_upstage_pilot as pilot
+
+    pdf_path = tmp_path / "sample.pdf"
+    writer = PdfWriter()
+    writer.add_blank_page(width=72, height=72)
+    with pdf_path.open("wb") as stream:
+        writer.write(stream)
+
+    state = tmp_path / "pilot-state"
+    argv = [
+        "pilot",
+        "--pdf",
+        str(pdf_path),
+        "--state",
+        str(state),
+        "--pages",
+        "1",
+        "--report-year",
+        "2025",
+        "--period-start",
+        "2024-01-01",
+        "--period-end",
+        "2024-12-31",
+    ]
+    monkeypatch.setattr(sys, "argv", argv)
+    exit_code = pilot.main()
+    assert exit_code == 0
+
+    # Inspect registered profiles in state.sqlite3
+    db_path = state / "state.sqlite3"
+    assert db_path.exists()
+    conn = sqlite3.connect(str(db_path))
+    row = conn.execute("SELECT value FROM registry_state WHERE key = 'state'").fetchone()
+    conn.close()
+
+    assert row is not None
+    data = json.loads(row[0])
+    options = data["options"]
+    assert len(options) > 0
+    checked_profiles = 0
+    for opt in options:
+        artifact = opt.get("artifact") or {}
+        if "approved_at" in artifact and "expires_at" in artifact:
+            approved_dt = datetime.fromisoformat(artifact["approved_at"].replace("Z", "+00:00"))
+            expires_dt = datetime.fromisoformat(artifact["expires_at"].replace("Z", "+00:00"))
+            # Bounded 24h lifetime from creation instant
+            diff = expires_dt - approved_dt
+            assert diff == timedelta(
+                hours=24
+            ), f"Expected 24h difference, got {diff} on {opt.get('kind')}/{opt.get('id')}"
+            checked_profiles += 1
+
+    assert checked_profiles >= 3  # rights, runtime, consent (+ tagger runtime)
+
+    # Resume must never renew stored/resumed profiles
+    resume_argv = ["pilot", "--state", str(state), "--resume"]
+    monkeypatch.setattr(sys, "argv", resume_argv)
+    exit_code_resume = pilot.main()
+    assert exit_code_resume == 0
+
+    conn = sqlite3.connect(str(db_path))
+    resumed_row = conn.execute("SELECT value FROM registry_state WHERE key = 'state'").fetchone()
+    conn.close()
+    assert resumed_row == row  # Exact match, untouched

@@ -1,6 +1,6 @@
 [
   {
-    "source_path": "/Users/ss020/Dev/ESG_ProofOps/기업보고서/배터리 에너지/Hanwha_Aerospace_Sustainability_Report_2025.pdf",
+    "source_path": "./기업보고서/배터리 에너지/Hanwha_Aerospace_Sustainability_Report_2025.pdf",
     "source_sha256": "ddd0858100c039f5c1a9dda2ad2bc5a50fd3a119c02d6f9bff106af5e7b9610c",
     "page_count": 114,
     "method": "pdf_navigation",
@@ -152,7 +152,7 @@
     "status": "candidate_only"
   },
   {
-    "source_path": "/Users/ss020/Dev/ESG_ProofOps/기업보고서/은행 보험 증권/2025 KB금융그룹 지속가능경영보고서-KSSB 지속가능성 공시기준 적용.pdf",
+    "source_path": "./기업보고서/은행 보험 증권/2025 KB금융그룹 지속가능경영보고서-KSSB 지속가능성 공시기준 적용.pdf",
     "source_sha256": "498e5db603e72bd488d0fbaf0cedaa122ef29e16e63da903f6d88a2086b35a8a",
     "page_count": 112,
     "method": "large_heading_fallback",
@@ -284,7 +284,7 @@
     "status": "candidate_only"
   },
   {
-    "source_path": "/Users/ss020/Dev/ESG_ProofOps/기업보고서/배터리 에너지/LGChem_Sustainability_Report_2025_KOR.pdf",
+    "source_path": "./기업보고서/배터리 에너지/LGChem_Sustainability_Report_2025_KOR.pdf",
     "source_sha256": "c6395dd2be7948d85fa2b52c6edb61367fa6610c6f389c2478b44cb4cfcb5bde",
     "page_count": 119,
     "method": "pdf_navigation",
@@ -460,7 +460,7 @@
     "status": "candidate_only"
   },
   {
-    "source_path": "/Users/ss020/Dev/ESG_ProofOps/기업보고서/배터리 에너지/Samsung_SDI_Sustainability_Report_2025_KR_fn.pdf",
+    "source_path": "./기업보고서/배터리 에너지/Samsung_SDI_Sustainability_Report_2025_KR_fn.pdf",
     "source_sha256": "ad80a96597cf388709d06417b950b122a701a822477c77d59994c7a28065b138",
     "page_count": 139,
     "method": "large_heading_fallback",
@@ -640,7 +640,7 @@
     "status": "candidate_only"
   },
   {
-    "source_path": "/Users/ss020/Dev/ESG_ProofOps/기업보고서/반도체 전자/Samsung_Electronics_Sustainability_Report_2025_KOR.pdf",
+    "source_path": "./기업보고서/반도체 전자/Samsung_Electronics_Sustainability_Report_2025_KOR.pdf",
     "source_sha256": "342a99a14d7c32b4e66cbbf977cc89dc79044ccc7c5e71367fb476c14538c8c5",
     "page_count": 87,
     "method": "large_heading_fallback",

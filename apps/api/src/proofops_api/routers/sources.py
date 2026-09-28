@@ -8,11 +8,12 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import Annotated, Literal
 from urllib.parse import urlencode
-from uuid import UUID
+from uuid import UUID, uuid5
 
 from fastapi import APIRouter, Query, Request, Security
 from fastapi.responses import JSONResponse, Response
 from fastapi.security import APIKeyCookie
+from proofops.adapters.local.claim_store import LocalClaimStore
 from proofops.adapters.local.run_artifacts import load_run_graph
 from proofops.adapters.parsing.source_preview import SourcePreviewFailure, render_page_preview
 from proofops.application.runs import RunRejected
@@ -299,11 +300,16 @@ def build_sources_router(
             )
             if page["manifest"] != graph.parse_manifest_id:
                 raise RunRejected("INVALID_CURSOR", 400)
-            issues = sorted(graph.issues, key=lambda issue: issue.issue_id)
+            discovery = None
+            if store.jobs.get_run(graph.tenant_id, str(run_id)).get("claim_snapshot_sha256"):
+                _, discovery, graph = LocalClaimStore(store, uploads, parser).load_evidence(
+                    graph.tenant_id, str(run_id)
+                )
+            issues = _quality_items(graph, discovery)
             after = page["after"] + limit
             return JSONResponse(
                 dict(
-                    items=[issue.to_dict() for issue in issues[page["after"] : after]],
+                    items=issues[page["after"] : after],
                     next_cursor=store._encode_cursor(dict(page, after=after))
                     if after < len(issues)
                     else None,
@@ -337,3 +343,50 @@ def _highlight_allowed(block, issues) -> bool:
         and source_ref.bbox == candidate.bbox
         and all(item.geometry == candidate.geometry for item in block.candidates)
     )
+
+
+def _quality_items(graph, discovery=None):
+    """Read-time warnings; never rewrite the pinned graph or its coverage."""
+    items = {issue.issue_id: issue.to_dict() for issue in graph.issues}
+    for block in graph.blocks:
+        if block.kind == "figure" and not any(s.raw_text.strip() for s in block.sources):
+            issue_id = str(uuid5(UUID(block.source_id), "image-text-not-extracted-v1"))
+            items.setdefault(
+                issue_id,
+                dict(
+                    issue_id=issue_id,
+                    kind="image_text_not_extracted",
+                    page_num=block.page_num,
+                    source_ids=[block.source_id],
+                    state="open",
+                    reason=(
+                        "이미지 영역에서 텍스트가 추출되지 않았습니다. "
+                        "사진일 수도 있으므로 원문을 열어 글·표 누락 여부를 확인하세요. "
+                        "근거 부재나 판독 불가가 확정된 것은 아닙니다."
+                    ),
+                ),
+            )
+    if discovery is not None:
+        for exclusion in discovery.exclusions:
+            if exclusion.reason != "unprocessed_span" or exclusion.state != "unknown":
+                continue
+            issue_id = str(uuid5(UUID(exclusion.source_id), "extraction-span-unprocessed-v1"))
+            ref = exclusion.source_ref
+            excerpt = ref.quote[:120] if ref is not None else ""
+            items.setdefault(
+                issue_id,
+                dict(
+                    issue_id=issue_id,
+                    kind="extraction_span_unprocessed",
+                    page_num=exclusion.page_num,
+                    source_ids=[exclusion.source_id],
+                    state="open",
+                    reason=(
+                        "추출기가 처리하지 않은 텍스트 구간이 있습니다. "
+                        "주장 여부가 미확정이며 근거 부재를 뜻하지 않습니다. "
+                        "원문에서 확인하세요."
+                        + (f" 미처리 구간 일부: {excerpt}" if excerpt else "")
+                    ),
+                ),
+            )
+    return sorted(items.values(), key=lambda item: item["issue_id"])

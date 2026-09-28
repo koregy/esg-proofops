@@ -780,7 +780,7 @@ class LocalSQLiteJobStore:
                 self._enqueue(db, next_job, now)
             if publish is not None:
                 publish(db)
-            self._bump_run(db, run)
+            self._bump_run(db, run, refresh_claim_counts=publish is not None)
             if publish is not None:
                 append_audit_transaction(
                     connection=db,

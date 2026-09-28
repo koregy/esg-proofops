@@ -49,6 +49,7 @@ from typing import Any
 
 from proofops.application.claims import Claim
 from proofops.domain.errors import DomainValidationError
+from proofops.domain.reconciliation.common import validate_packet
 from proofops.domain.rules.engine import ConfirmedFact, ConfirmedTags
 from proofops.domain.values import SourceRef, _require_sha256, _require_uuid
 
@@ -66,7 +67,30 @@ FACT_KINDS = (
 # trigger name). This maps EXACT fact ids, never an arbitrary/unknown field
 # name: a fact whose name is not one of these keys contributes no trigger,
 # regardless of its state. See `_verified_triggers`.
+#
+# `org_boundary` is the CANONICAL fact name every real producer emits for the
+# organisational-boundary element (`management.M2` and `goal.G4` in
+# packages/proofops/domain/rules/; `config/rubric/{management,goal}.yaml` name
+# the same primitive). The contract's own conversion note
+# (handoff/team-v2/contract/SCHEMA_GUIDE.md: "organizational_boundary: 기존
+# org_boundary/calculation_boundary의 검증된 조직경계 내용을 확인해 생성") makes it
+# the source of the `organizational_boundary` trigger, so this is a spelling
+# alias for one identical element -- not a widening of what counts as a
+# boundary. Without it an accepted M2/G4 review was silently dropped here. The
+# older `organizational_boundary` key is kept so any pre-existing stored fact
+# under that spelling keeps resolving.
+#
+# Deliberately NOT mapped, and left as explicit gaps rather than guesses:
+#   * `calculation_boundary` (`performance.P3`) -- a calculation boundary is not
+#     proven to be an organisational boundary; the contract requires the
+#     organisational content to be confirmed first.
+#   * `scope` (`goal.G4`'s other primitive, i.e. GHG Scope 1/2/3) -- the
+#     contract forbids creating `implementation_scope` from a generic scope or
+#     region mention, and no producer emits `implementation_scope` itself.
+#   * `currency_amount` / `revenue_share` -- no producer emits these fact names
+#     at all, and no approved currency/revenue primitive exists to alias.
 TRIGGER_TAG_MAP: dict[str, str] = {
+    "org_boundary": "organizational_boundary",
     "organizational_boundary": "organizational_boundary",
     "implementation_scope": "implementation_scope",
     "quantitative_or_qualified_ordinal": "quantitative_value",
@@ -86,14 +110,15 @@ TRIGGER_TO_FACT_KIND: dict[str, str] = {
     "revenue_share": "classification",
 }
 
-# CONTRACT.md item-specific trigger rules:
+# CONTRACT.md / RECONCILIATION_SPEC item-specific trigger rules:
 # C1: boundary / scope (entity_set, facility_set)
-# C2: scope / timing difference explanation (facility_set)
+# C2: quantitative performance trigger; compare explicit source-bound periods.
+#     Fact normalized_value remains a source literal; C2PeriodContext carries ISO dates.
 # C3: currency / capex amount (currency_amount)
 # C4: revenue share / classification (classification)
 ITEM_TRIGGERS: dict[str, tuple[str, ...]] = {
     "C1": ("organizational_boundary", "implementation_scope"),
-    "C2": ("implementation_scope",),
+    "C2": ("quantitative_value",),
     "C3": ("currency_amount",),
     "C4": ("revenue_share",),
 }
@@ -160,6 +185,47 @@ class FinancialFact:
                 raise DomainValidationError(
                     f"financial fact {name} must be a nonempty string or null"
                 )
+
+
+@dataclass(frozen=True, slots=True)
+class C2PeriodContext:
+    """Explicit normalization; authority comes from confirmed fact refs, never this input."""
+
+    normalized: str
+    source_id: str
+    quote: str
+
+    def __post_init__(self) -> None:
+        from proofops.domain.reconciliation.common import parse_period
+
+        parse_period(self.normalized, "c2_period_context.normalized")
+        if not isinstance(self.source_id, str) or not self.source_id:
+            raise DomainValidationError("c2_period_context.source_id required")
+        if not isinstance(self.quote, str) or not self.quote:
+            raise DomainValidationError("c2_period_context.quote required")
+
+
+def period_from_literal(quote: str) -> str:
+    """Normalize one explicit ordered range; never combine dates across ranges."""
+    import re
+
+    # ponytail: Korean full dates and ISO only; add formats after source-backed examples.
+    dates = list(
+        re.finditer(
+            r"(?<![0-9])(?:([0-9]{4})년\s*([0-9]{1,2})월\s*([0-9]{1,2})일"
+            r"|([0-9]{4})-([0-9]{2})-([0-9]{2}))(?![0-9])",
+            quote,
+        )
+    )
+    if len(dates) != 2:
+        raise DomainValidationError("period requires exactly two explicit dates")
+    delimiter = quote[dates[0].end() : dates[1].start()].strip()
+    if delimiter not in {"~", "～", "–", "—", "-", "/", "부터", "to"}:
+        raise DomainValidationError("period range delimiter required")
+    start, end = [date(*map(int, m.groups()[:3] if m[1] else m.groups()[3:])) for m in dates]
+    if start > end:
+        raise DomainValidationError("period start must be <= end")
+    return f"{start.isoformat()}/{end.isoformat()}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -310,6 +376,16 @@ def _verified_triggers(tags: ConfirmedTags) -> tuple[VerifiedTrigger, ...]:
     return tuple(sorted(triggers, key=lambda t: t.fact_name))
 
 
+def _context_to_contract_dict(context: C3Context | C4Context | None) -> dict[str, Any] | None:
+    """Emit tuple-backed context fields as arrays required by the packet contract."""
+    if context is None:
+        return None
+    return {
+        key: list(value) if isinstance(value, tuple) else value
+        for key, value in asdict(context).items()
+    }
+
+
 def build_packet(
     *,
     claim: Claim,
@@ -321,6 +397,7 @@ def build_packet(
     period_end: str | None,
     sr_published_at: str | None,
     trusted_company_id: str | None = None,
+    c2_period_context: C2PeriodContext | None = None,
 ) -> dict[str, Any] | BlockedPacket:
     """Build one strict1.1 input packet from a trusted claim + caller context.
 
@@ -445,6 +522,53 @@ def build_packet(
         return BlockedPacket(claim.claim_id, item, "missing_c3_context", "C3 requires c3_context")
     if item == "C4" and financial_context.c4_context is None:
         return BlockedPacket(claim.claim_id, item, "missing_c4_context", "C4 requires c4_context")
+    if item == "C2":
+        import re
+
+        from proofops.domain.numeric import unit_note_literal
+
+        # P1 includes categorical certifications; a year or ISO number is not a quantity.
+        # ponytail: accept existing explicit numeric-unit literals; other formats stay blocked.
+        numeric = any(
+            unit_note_literal("unit: " + match[1]) is not None
+            for match in re.finditer(
+                r"[0-9][0-9,.]*\s*([A-Za-z₂³%가-힣㎥][A-Za-z0-9₂³%가-힣㎥]*)(?![A-Za-z가-힣])",
+                primary_trigger.normalized_value or "",
+            )
+        )
+        if tags.track != "performance" or not numeric:
+            return BlockedPacket(
+                claim.claim_id,
+                item,
+                "quantitative_trigger_unresolved",
+                "C2 requires a verified quantitative performance literal",
+            )
+        if c2_period_context is None:
+            return BlockedPacket(
+                claim.claim_id,
+                item,
+                "missing_c2_period_context",
+                "C2 requires an explicit source-bound C2PeriodContext; refusing to fabricate "
+                "a reporting period from a fact's normalized_value or an arbitrary ISO date",
+            )
+        if not isinstance(c2_period_context, C2PeriodContext):
+            return BlockedPacket(
+                claim.claim_id,
+                item,
+                "invalid_c2_period_context",
+                "c2_period_context must be a C2PeriodContext",
+            )
+        try:
+            supported_period = period_from_literal(c2_period_context.quote)
+        except (DomainValidationError, ValueError):
+            supported_period = None
+        if supported_period != c2_period_context.normalized:
+            return BlockedPacket(
+                claim.claim_id,
+                item,
+                "c2_period_not_supported_by_source",
+                "period must match one explicit range in the cited literal",
+            )
 
     sustainability_document_version = claim.document_version_id
     sources: list[dict[str, Any]] = []
@@ -553,23 +677,55 @@ def build_packet(
         "period",
         "classification",
     }
-    sustainability_kind = TRIGGER_TO_FACT_KIND.get(primary_trigger.trigger_element)
-    if (
-        sustainability_kind is None
-        or sustainability_kind not in SUPPORTED_SUSTAINABILITY_KINDS
-        or primary_trigger.normalized_value is None
-    ):
-        return BlockedPacket(
-            claim.claim_id,
-            item,
-            "unsupported_trigger_value",
-            f"trigger {primary_trigger.trigger_element!r} has unsupported kind "
-            f"{sustainability_kind!r} or no "
-            "normalized_value on its confirmed fact; refusing to assert a fabricated "
-            "normalized sustainability value",
-        )
-    primary_evidence = primary_trigger.evidence_refs[0]
-    sustainability_source_id = "sr-" + primary_evidence.source_id
+    if item == "C2":
+        # Period normalization must cite the selected quantitative fact's own evidence.
+        assert c2_period_context is not None  # guaranteed by the C2 checks above
+        period_source_id = "sr-" + c2_period_context.source_id
+        # A random claim/global-report ref cannot authorize a quantitative fact's period.
+        if c2_period_context.source_id not in {r.source_id for r in primary_trigger.evidence_refs}:
+            return BlockedPacket(
+                claim.claim_id,
+                item,
+                "c2_period_source_not_cited",
+                f"c2_period_context.source_id ({c2_period_context.source_id}) does not resolve "
+                "to any trusted sustainability source cited on this packet; refusing to bind a "
+                "period to an uncited source",
+            )
+        # Byte/locator verification stays in the CLI's existing source reader.
+        cited_quote, _cited_locator = seen_sources[period_source_id]
+        if cited_quote != c2_period_context.quote:
+            return BlockedPacket(
+                claim.claim_id,
+                item,
+                "c2_period_quote_mismatch",
+                "c2_period_context.quote does not match the literal quote cited for its "
+                f"source_id ({c2_period_context.source_id}); refusing an unbound period literal",
+            )
+        sustainability_kind = "period"
+        sustainability_normalized: str | None = c2_period_context.normalized
+        sustainability_source_id = period_source_id
+        primary_evidence_quote = cited_quote
+    else:
+        sustainability_kind_opt = TRIGGER_TO_FACT_KIND.get(primary_trigger.trigger_element)
+        if (
+            sustainability_kind_opt is None
+            or sustainability_kind_opt not in SUPPORTED_SUSTAINABILITY_KINDS
+            or primary_trigger.normalized_value is None
+        ):
+            return BlockedPacket(
+                claim.claim_id,
+                item,
+                "unsupported_trigger_value",
+                f"trigger {primary_trigger.trigger_element!r} has unsupported kind "
+                f"{sustainability_kind_opt!r} or no "
+                "normalized_value on its confirmed fact; refusing to assert a fabricated "
+                "normalized sustainability value",
+            )
+        sustainability_kind = sustainability_kind_opt
+        primary_evidence = primary_trigger.evidence_refs[0]
+        sustainability_source_id = "sr-" + primary_evidence.source_id
+        sustainability_normalized = primary_trigger.normalized_value
+        primary_evidence_quote = primary_evidence.quote
 
     claim_source = claim.source_refs[0]
     claim_sr_id = "sr-" + claim_source.source_id
@@ -599,8 +755,8 @@ def build_packet(
         item=item,
         sources=sources,
         sustainability=dict(
-            raw=primary_evidence.quote,
-            normalized=primary_trigger.normalized_value,
+            raw=primary_evidence_quote,
+            normalized=sustainability_normalized,
             kind=sustainability_kind,
             unit=None,
             source_id=sustainability_source_id,
@@ -614,7 +770,7 @@ def build_packet(
         ),
         comparability="unknown",
         explanation=dict(source_id=None, search_complete=False),
-        c3_context=asdict(financial_context.c3_context) if financial_context.c3_context else None,
+        c3_context=_context_to_contract_dict(financial_context.c3_context),
         claim=dict(
             track=tags.track,
             quote=claim_source.quote,
@@ -632,6 +788,16 @@ def build_packet(
             failed_document_ids=[],
             receipt_id=None,
         ),
-        c4_context=asdict(financial_context.c4_context) if financial_context.c4_context else None,
+        c4_context=_context_to_contract_dict(financial_context.c4_context),
     )
+    # Reject malformed typed values at the producer boundary using B's validator.
+    try:
+        validate_packet(packet)
+    except DomainValidationError as exc:
+        return BlockedPacket(
+            claim.claim_id,
+            item,
+            "invalid_reconciliation_packet",
+            f"packet violates the shared reconciliation contract: {exc}",
+        )
     return packet

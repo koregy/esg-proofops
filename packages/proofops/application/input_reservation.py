@@ -38,11 +38,20 @@ _SOURCE_CONTEXT_LABEL: Final = "512K"
 _SOURCE_QUOTE: Final = "Solar Pro 4 supports a 512K context with up to 128K output tokens."
 _CAPTURED_AT: Final = "2026-09-18T16:53:00Z"
 _EXPIRES_AT: Final = "2026-09-25T00:00:00Z"
+_REFRESHED_CAPTURED_AT: Final = "2026-09-25T10:57:00Z"
+_REFRESHED_EXPIRES_AT: Final = "2026-10-02T00:00:00Z"
 _NOTE: Final = (
     "Conservative input reservation ceiling above both decimal and binary "
     "readings of the published 512K bound; not the actual model window and "
     "not experimentally proven tokenizer parity. Actual provider usage must "
     "settle separately."
+)
+
+_PINNED_TIMESTAMPS: Final = frozenset(
+    {
+        (_CAPTURED_AT, _EXPIRES_AT),
+        (_REFRESHED_CAPTURED_AT, _REFRESHED_EXPIRES_AT),
+    }
 )
 
 _POLICY_KEYS: Final = frozenset(
@@ -61,8 +70,15 @@ _POLICY_KEYS: Final = frozenset(
 )
 
 
-def solar_pro4_capacity_policy() -> dict[str, Any]:
-    """Return a detached copy of the exact Solar Pro 4 capacity policy."""
+def solar_pro4_capacity_policy(refreshed: bool = False) -> dict[str, Any]:
+    """Return the legacy policy, or explicitly opt into the 2026-09-25 revision."""
+    if type(refreshed) is not bool:
+        raise DomainValidationError("refreshed must be a boolean")
+    captured, expires = (
+        (_REFRESHED_CAPTURED_AT, _REFRESHED_EXPIRES_AT)
+        if refreshed
+        else (_CAPTURED_AT, _EXPIRES_AT)
+    )
     return {
         "schema": _SCHEMA,
         "model_id": _MODEL_ID,
@@ -71,8 +87,8 @@ def solar_pro4_capacity_policy() -> dict[str, Any]:
         "source_url": _SOURCE_URL,
         "source_context_label": _SOURCE_CONTEXT_LABEL,
         "source_quote": _SOURCE_QUOTE,
-        "captured_at": _CAPTURED_AT,
-        "expires_at": _EXPIRES_AT,
+        "captured_at": captured,
+        "expires_at": expires,
         "note": _NOTE,
     }
 
@@ -126,10 +142,10 @@ def validate_capacity_policy(policy: dict[str, Any], *, model_id: str, checked_a
     _require_exact("source_quote", quote, _SOURCE_QUOTE)
     captured_raw = policy["captured_at"]
     expires_raw = policy["expires_at"]
-    if captured_raw != _CAPTURED_AT or expires_raw != _EXPIRES_AT:
-        raise DomainValidationError("capacity policy timestamps do not match the pinned policy")
     captured = _parse_policy_instant("captured_at", captured_raw)
     expires = _parse_policy_instant("expires_at", expires_raw)
+    if (captured_raw, expires_raw) not in _PINNED_TIMESTAMPS:
+        raise DomainValidationError("capacity policy timestamps do not match the pinned policy")
     _require_exact("note", policy["note"], _NOTE)
     if not isinstance(checked_at, datetime):
         raise DomainValidationError("checked_at must be a timezone-aware datetime")

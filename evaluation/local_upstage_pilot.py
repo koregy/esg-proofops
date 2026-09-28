@@ -15,7 +15,7 @@ import socket
 import sys
 import time
 from dataclasses import asdict
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
 from typing import cast
@@ -25,6 +25,39 @@ import yaml  # type: ignore[import-untyped]
 from fastapi import Request
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def local_login_response(sessions, user: str, tenant: str, run_id: str):
+    """The secret loopback login link renews an expired demo session on each visit."""
+    from fastapi.responses import RedirectResponse
+    from proofops.adapters.local.auth_store import hash_token, new_session_id
+    from proofops.application.authorization import SessionRecord
+    from proofops_api.auth import SESSION_COOKIE_NAME
+
+    session, csrf, now = new_session_id(), secrets.token_urlsafe(32), time.time()
+    sessions.put_with_token(
+        SessionRecord(session, user, tenant, hash_token(csrf), now + 3600, now + 3600, False), csrf
+    )
+    response = RedirectResponse(f"/runs/{run_id}/claims", status_code=303)
+    response.set_cookie(
+        SESSION_COOKIE_NAME, session, secure=True, httponly=True, samesite="strict", path="/"
+    )
+    return response
+
+
+def pilot_company_body(legal_name, registration_identifier, *, existing: bool) -> dict:
+    """Explicit company identity belongs to a new run, never a stored snapshot."""
+    if legal_name is None and registration_identifier is None:
+        return dict(legal_name="실제 보고서 검토 시험", aliases=[], registration_identifier=None)
+    if existing:
+        raise ValueError("company identity cannot change on an existing run")
+    if any(not isinstance(v, str) or not v.strip() for v in (legal_name, registration_identifier)):
+        raise ValueError("--company-name and --company-registration are required together")
+    return dict(
+        legal_name=legal_name.strip(),
+        aliases=[],
+        registration_identifier=registration_identifier.strip(),
+    )
 
 
 def extraction_budget_settings(batch_calls: int, total_calls: int | None = None) -> dict:
@@ -61,12 +94,20 @@ def live_tagging_settings(
     preliminary_context: bool = False,
     preliminary_table_context: bool = False,
     preliminary_table_role: bool = False,
+    preliminary_goal_role: bool = False,
+    preliminary_actor_role: bool = False,
+    preliminary_p2: bool = False,
+    compact_element_wire: bool = False,
+    position_context_order: bool = False,
+    capacity_refresh: bool = False,
 ) -> dict:
     """Explicit bounded pilot config; grants are registered separately by main."""
     from proofops.application.input_reservation import solar_pro4_capacity_policy
     from proofops.application.ports.models import ModelBinding
     from proofops.application.tagging.preliminary import (
         CONTEXT_SYSTEM_SUFFIX,
+        GOAL_ROLE_SYSTEM_SUFFIX,
+        P2_SYSTEM_PROMPT,
         SYSTEM_PROMPT,
         TABLE_ROLE_SYSTEM_SUFFIX,
         TABLE_SYSTEM_SUFFIX,
@@ -78,12 +119,30 @@ def live_tagging_settings(
         or type(preliminary_context) is not bool
         or type(preliminary_table_context) is not bool
         or type(preliminary_table_role) is not bool
+        or type(preliminary_goal_role) is not bool
+        or type(preliminary_actor_role) is not bool
+        or type(preliminary_p2) is not bool
+        or type(compact_element_wire) is not bool
+        or type(position_context_order) is not bool
+        or type(capacity_refresh) is not bool
     ):
         raise ValueError("relation/preliminary-context stage must be explicit boolean")
     if preliminary_table_context and not preliminary_context:
         raise ValueError("preliminary table context requires preliminary context")
     if preliminary_table_role and not preliminary_table_context:
         raise ValueError("preliminary table role resolution requires preliminary table context")
+    if preliminary_goal_role and not preliminary_table_role:
+        raise ValueError("preliminary goal role requires preliminary table role")
+    if preliminary_actor_role and not preliminary_goal_role:
+        raise ValueError("preliminary actor role requires preliminary goal role")
+    if preliminary_p2 and (
+        not preliminary_table_role or preliminary_goal_role or preliminary_actor_role
+    ):
+        raise ValueError("preliminary P2 requires only preliminary table role")
+    if position_context_order and (
+        not preliminary_table_role or preliminary_goal_role or preliminary_actor_role
+    ):
+        raise ValueError("position context order requires only preliminary table role")
     if type(max_calls) is not int or not 6 <= max_calls <= 2000:
         raise ValueError("live tagging requires 6..2000 bounded calls")
     rubric = yaml.safe_load((ROOT / "config/rubric/elements.yaml").read_text())
@@ -116,6 +175,15 @@ def live_tagging_settings(
         "contract. credited_from must be null: it is reserved "
         "for server-validated cross-claim credit, not an evidence catalog ID. "
         "Return every requested element, with null for unsupported normalized values. "
+        "G1 requires a deadline for the claimed goal, not merely a year in the sentence. "
+        "A designation, registration, publication or reporting year does not establish "
+        "a target deadline; a goal track assignment does not establish a target deadline "
+        "either. If no goal deadline is supported, keep G1 unknown. "
+        "Fictional contrasting examples, never document evidence: "
+        "'가상기업은 2024년 관리업체로 지정되었으며 향후 규제 대상이 될 가능성이 있다.' "
+        "contains an event year and a possibility, not a goal deadline; G1 stays unknown. "
+        "'가상기업은 2035년까지 재생에너지 100% 전환을 목표로 한다.' explicitly provides "
+        "a goal deadline; G1 may cite '2035년'. "
         "M3 is external verification, distinct from M1's named means or standard. "
         "Naming or following a framework/standard does not by itself state that external "
         "verification or certification occurred. Require literal evidence of that external "
@@ -131,10 +199,56 @@ def live_tagging_settings(
         "No grades, legal conclusions, inferred numbers or invented evidence. "
         "This rule reference is tagging guidance, not an approval of the draft rulepack.\n"
         + json.dumps(reference, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        + "\nBefore returning JSON, check each non-null normalized_value against its "
+        "evidence_refs: at least one selected quote MUST be exactly that value, not the "
+        "containing sentence. Example for an unrelated source "
+        '"2035년까지 20% 감축을 목표로 합니다.": normalized_value="2035년" requires '
+        '{"id":"e0","quote":"2035년"}; citing the whole sentence alone is invalid. '
+        "Keep additional full-sentence context citations if useful. For qualitative "
+        "elements use normalized_value=null unless an exact quoted value is needed. "
+        "Do not invent values or quote identifiers; ambiguous or unsupported elements "
+        "remain unknown. This changes citation granularity only, never evidence admission "
+        "or grading. Validate this equality for every element before submitting."
     )
     settings = {}
-    if preliminary_table_role:
-        preliminary_profile = "upstage-preliminary-source-quotes-table-role-v1"
+    if preliminary_p2:
+        preliminary_profile = (
+            "upstage-preliminary-source-quotes-table-role-v2-p2-position-v1"
+            if position_context_order
+            else "upstage-preliminary-source-quotes-table-role-v2-p2"
+        )
+        preliminary_prompt = P2_SYSTEM_PROMPT
+    elif preliminary_actor_role:
+        from proofops.application.tagging.preliminary import (
+            ACTOR_ROLE_SYSTEM_SUFFIX,
+            PERIOD_ROLE_SYSTEM_SUFFIX,
+        )
+
+        preliminary_profile = "upstage-preliminary-source-quotes-actor-role-v2"
+        preliminary_prompt = (
+            SYSTEM_PROMPT
+            + CONTEXT_SYSTEM_SUFFIX
+            + TABLE_SYSTEM_SUFFIX
+            + TABLE_ROLE_SYSTEM_SUFFIX
+            + GOAL_ROLE_SYSTEM_SUFFIX
+            + ACTOR_ROLE_SYSTEM_SUFFIX
+            + PERIOD_ROLE_SYSTEM_SUFFIX
+        )
+    elif preliminary_goal_role:
+        preliminary_profile = "upstage-preliminary-source-quotes-goal-role-v1"
+        preliminary_prompt = (
+            SYSTEM_PROMPT
+            + CONTEXT_SYSTEM_SUFFIX
+            + TABLE_SYSTEM_SUFFIX
+            + TABLE_ROLE_SYSTEM_SUFFIX
+            + GOAL_ROLE_SYSTEM_SUFFIX
+        )
+    elif preliminary_table_role:
+        preliminary_profile = (
+            "upstage-preliminary-source-quotes-table-role-v1-position-v1"
+            if position_context_order
+            else "upstage-preliminary-source-quotes-table-role-v1"
+        )
         preliminary_prompt = (
             SYSTEM_PROMPT + CONTEXT_SYSTEM_SUFFIX + TABLE_SYSTEM_SUFFIX + TABLE_ROLE_SYSTEM_SUFFIX
         )
@@ -157,7 +271,9 @@ def live_tagging_settings(
         ),
         (
             "tagging",
-            "upstage-compact-source-quotes-v3",
+            "upstage-compact-source-quotes-v5"
+            if compact_element_wire
+            else "upstage-compact-source-quotes-v4",
             element_prompt,
             (ROOT / "contracts/jsonschema/llm_tags.schema.json").read_text(),
             4096,
@@ -187,7 +303,7 @@ def live_tagging_settings(
                 max_tokens=output,
             )
         )
-    settings["input_reservation_policy"] = solar_pro4_capacity_policy()
+    settings["input_reservation_policy"] = solar_pro4_capacity_policy(refreshed=capacity_refresh)
     return settings
 
 
@@ -218,7 +334,11 @@ def claim_source_policy_for(args):
     Existing runs and their stored receipts are untouched either way; rolling
     back is simply not passing the flag on a future run.
     """
-    if getattr(args, "claim_span_bullet_spacing", False):
+    if getattr(args, "claim_span_typography", False):
+        # Wraps the bullet-alignment wrapper, so it ADDS to both inner
+        # recoveries rather than replacing either; the CLI requires the chain.
+        from proofops.adapters.local.claim_span_typography import claim_source_policy
+    elif getattr(args, "claim_span_bullet_spacing", False):
         # Wraps the render-resolution wrapper, so it ADDS to that recovery
         # rather than replacing it; the CLI already requires both flags.
         from proofops.adapters.local.claim_span_bullet_alignment import claim_source_policy
@@ -282,16 +402,26 @@ def apply_resume_metadata(args, saved: dict) -> None:
     args.verify_claim_spans = bool(saved.get("verify_claim_spans", False))
     args.claim_span_render_resolution = bool(saved.get("claim_span_render_resolution", False))
     args.claim_span_bullet_spacing = bool(saved.get("claim_span_bullet_spacing", False))
+    args.claim_span_typography = bool(saved.get("claim_span_typography", False))
     args.raster_ocr = bool(saved.get("raster_ocr", False))
     args.live_tagging = bool(saved.get("live_tagging", False))
     args.live_relations = bool(saved.get("live_relations", False))
     args.preliminary_context = bool(saved.get("preliminary_context", False))
     args.preliminary_table_context = bool(saved.get("preliminary_table_context", False))
     args.preliminary_table_role = bool(saved.get("preliminary_table_role", False))
+    args.preliminary_goal_role = bool(saved.get("preliminary_goal_role", False))
+    args.preliminary_actor_role = bool(saved.get("preliminary_actor_role", False))
+    args.preliminary_p2 = bool(saved.get("preliminary_p2", False))
+    args.compact_element_wire = bool(saved.get("compact_element_wire", False))
+    args.position_context_order = bool(saved.get("position_context_order", False))
+    args.capacity_refresh = bool(saved.get("capacity_refresh", False))
     args.extraction_year_notation = bool(saved.get("extraction_year_notation", False))
     args.extraction_context = bool(saved.get("extraction_context", False))
     args.extraction_table_context = bool(saved.get("extraction_table_context", False))
     args.extraction_source_ids = bool(saved.get("extraction_source_ids", False))
+    args.extraction_assertion_prompt = bool(saved.get("extraction_assertion_prompt", False))
+    args.extraction_complete_selection = bool(saved.get("extraction_complete_selection", False))
+    args.extraction_content_bounds = bool(saved.get("extraction_content_bounds", False))
     if saved.get("tagging_max_calls"):
         args.tagging_max_calls = saved["tagging_max_calls"]
     saved_total = saved.get("extraction_total_calls")
@@ -398,6 +528,8 @@ def main():
     parser.add_argument("--report-year", type=int)
     parser.add_argument("--period-start")
     parser.add_argument("--period-end")
+    parser.add_argument("--company-name", help="Explicit legal name for a NEW run")
+    parser.add_argument("--company-registration", help="Verified identifier, e.g. DART:00266961")
     parser.add_argument(
         "--resume",
         action="store_true",
@@ -448,6 +580,22 @@ def main():
         "unchanged.",
     )
     parser.add_argument(
+        "--claim-span-typography",
+        action="store_true",
+        help="Opt-in (R24), NEW-run only (never applies on --resume or an "
+        "existing state directory): additionally re-check a claim span the "
+        "wrapped verifiers already READ successfully but left unresolved only "
+        "because the rendered reader spells the document's own typography "
+        "differently. The native gate stays the base verifier's UNFOLDED "
+        "unique-quote check; a finite five-entry fold (the shipped curly-quote "
+        "map plus U+00B7 -> U+2022) is applied to the rendered text and the "
+        "quote only. No digit, space, case, dash, subscript or fuzzy "
+        "normalization, and the token-boundary refusal is not relaxed. "
+        "Requires --claim-span-bullet-spacing, whose recovery it preserves and "
+        "wraps. Pins its own policy and receipt schema; existing runs and "
+        "receipts are unchanged.",
+    )
+    parser.add_argument(
         "--claim-span-render-resolution",
         action="store_true",
         help="Opt-in (R13/R15), NEW-run only (never applies on --resume or an "
@@ -476,6 +624,12 @@ def main():
         "into the receipt; quotes still resolve from the focal source only.",
     )
     parser.add_argument(
+        "--position-context-order",
+        action="store_true",
+        help="New-run opt-in: page/top-left/content context order for extraction "
+        "and table-role preliminary.",
+    )
+    parser.add_argument(
         "--ai-project-review",
         action="store_true",
         help="Opt-in, NEW-run only (never applies on --resume or an existing "
@@ -492,6 +646,11 @@ def main():
     parser.add_argument("--invoke", action="store_true")
     parser.add_argument("--live-tagging", action="store_true")
     parser.add_argument("--live-relations", action="store_true")
+    parser.add_argument(
+        "--compact-element-wire",
+        action="store_true",
+        help="Opt-in v5 element wire; pins a distinct model/cache identity for new runs.",
+    )
     parser.add_argument(
         "--preliminary-context",
         action="store_true",
@@ -523,6 +682,36 @@ def main():
         "cannot be added on --resume.",
     )
     parser.add_argument(
+        "--preliminary-goal-role",
+        action="store_true",
+        help="Opt-in (R34): keep the exact --preliminary-table-role wire shape and "
+        "validator, and send one additive prompt suffix that clarifies goal-track "
+        "metric extraction when source 0 states a named company target or standard "
+        "(e.g. RE100, carbon-neutrality). A regulatory designation or predicted future "
+        "external inclusion is not itself a commitment; a stated future risk is not "
+        "automatically goal. Adds no wire field, no new schema, and no new grade rule. "
+        "Requires --preliminary-table-role; selects its own model_profile/prompt pair "
+        "and cannot be added on --resume.",
+    )
+    parser.add_argument(
+        "--preliminary-actor-role",
+        action="store_true",
+        help="Use R34 actor-role prompt",
+    )
+    parser.add_argument(
+        "--preliminary-p2",
+        action="store_true",
+        help="Opt-in P2 preliminary prompt; requires --preliminary-table-role.",
+    )
+    parser.add_argument(
+        "--capacity-policy-refresh",
+        dest="capacity_refresh",
+        action="store_true",
+        help="Opt-in: use refreshed 2026-09-25 capacity reservation policy revision "
+        "(expires 2026-10-02).",
+    )
+
+    parser.add_argument(
         "--extraction-source-ids",
         action="store_true",
         help="Opt-in (R14), NEW-run only in effect (pinned on --resume): send each "
@@ -539,6 +728,24 @@ def main():
         help="Opt-in (R12): give claim extraction a table cell's own row/column header "
         "context instead of the nearest numeric neighbours. Requires "
         "--extraction-context; pins its own extraction rule/prompt hash.",
+    )
+    parser.add_argument(
+        "--extraction-assertion-prompt",
+        action="store_true",
+        help="Require the selected source sentence itself to assert a claim. "
+        "Requires --extraction-source-ids; new-run opt-in, pinned on --resume.",
+    )
+    parser.add_argument(
+        "--extraction-complete-selection",
+        action="store_true",
+        help="Review every source sentence for claims; requires --extraction-assertion-prompt. "
+        "New-run opt-in, pinned on resume.",
+    )
+    parser.add_argument(
+        "--extraction-content-bounds",
+        action="store_true",
+        help="Excludes a single terminal period for proven OCR mismatches; requires "
+        "--extraction-source-ids.",
     )
     parser.add_argument("--tagging-max-calls", type=int, default=12)
     parser.add_argument("--serve", action="store_true")
@@ -567,6 +774,14 @@ def main():
         parser.error(str(exc))
     resume_state = args.state.resolve()
     resume_manifest = resume_state / "pilot.json"
+    try:
+        company_body = pilot_company_body(
+            args.company_name,
+            args.company_registration,
+            existing=args.resume or resume_manifest.exists(),
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
     if args.resume:
         if args.invoke:
             parser.error("--resume is read-only for model calls; omit --invoke")
@@ -578,10 +793,20 @@ def main():
         requested_context = args.extraction_context
         requested_table_context = args.extraction_table_context
         requested_source_ids = args.extraction_source_ids
+        requested_assertion_prompt = args.extraction_assertion_prompt
+        requested_complete_selection = args.extraction_complete_selection
+        requested_content_bounds = args.extraction_content_bounds
         requested_preliminary_table = args.preliminary_table_context
         requested_preliminary_role = args.preliminary_table_role
+        requested_preliminary_goal_role = args.preliminary_goal_role
+        requested_preliminary_actor_role = args.preliminary_actor_role
+        requested_preliminary_p2 = args.preliminary_p2
+        requested_compact_element_wire = args.compact_element_wire
+        requested_position_order = args.position_context_order
+        requested_capacity_refresh = getattr(args, "capacity_refresh", False)
         requested_render_resolution = args.claim_span_render_resolution
         requested_bullet_spacing = args.claim_span_bullet_spacing
+        requested_typography = args.claim_span_typography
         try:
             apply_resume_metadata(args, json.loads(resume_manifest.read_text()))
         except ValueError as exc:
@@ -594,14 +819,34 @@ def main():
             parser.error("--resume cannot add extraction table context; create a new run")
         if requested_source_ids and not args.extraction_source_ids:
             parser.error("--resume cannot add extraction source-id selection; create a new run")
+        if requested_assertion_prompt and not args.extraction_assertion_prompt:
+            parser.error("--resume cannot add extraction assertion prompt; create a new run")
+        if requested_complete_selection and not args.extraction_complete_selection:
+            parser.error("--resume cannot add extraction complete selection; create a new run")
+        if requested_content_bounds and not args.extraction_content_bounds:
+            parser.error("--resume cannot add extraction content bounds; create a new run")
         if requested_preliminary_table and not args.preliminary_table_context:
             parser.error("--resume cannot add preliminary table context; create a new run")
         if requested_preliminary_role and not args.preliminary_table_role:
             parser.error("--resume cannot add preliminary table role resolution; create a new run")
+        if requested_preliminary_goal_role and not args.preliminary_goal_role:
+            parser.error("--resume cannot add preliminary goal role; create a new run")
+        if requested_preliminary_actor_role and not args.preliminary_actor_role:
+            parser.error("--resume cannot add preliminary actor role; create a new run")
+        if requested_preliminary_p2 and not args.preliminary_p2:
+            parser.error("--resume cannot add preliminary P2; create a new run")
+        if requested_compact_element_wire and not args.compact_element_wire:
+            parser.error("--resume cannot add compact element wire; create a new run")
+        if requested_position_order and not args.position_context_order:
+            parser.error("--resume cannot add position context order; create a new run")
+        if requested_capacity_refresh and not args.capacity_refresh:
+            parser.error("--resume cannot add capacity refresh; create a new run")
         if requested_render_resolution and not args.claim_span_render_resolution:
             parser.error("--resume cannot add claim-span render resolution; create a new run")
         if requested_bullet_spacing and not args.claim_span_bullet_spacing:
             parser.error("--resume cannot add claim-span bullet spacing; create a new run")
+        if requested_typography and not args.claim_span_typography:
+            parser.error("--resume cannot add claim-span typography; create a new run")
     elif (
         args.pdf is None
         or args.report_year is None
@@ -611,19 +856,43 @@ def main():
         parser.error("--pdf, --report-year, --period-start and --period-end are required")
     if args.live_relations and not args.live_tagging:
         parser.error("--live-relations requires --live-tagging")
+    if args.compact_element_wire and not args.live_tagging:
+        parser.error("--compact-element-wire requires --live-tagging")
     if args.preliminary_context and not args.live_tagging:
         parser.error("--preliminary-context requires --live-tagging")
     if args.preliminary_table_context and not args.preliminary_context:
         parser.error("--preliminary-table-context requires --preliminary-context")
     if args.preliminary_table_role and not args.preliminary_table_context:
         parser.error("--preliminary-table-role requires --preliminary-table-context")
+    if args.preliminary_goal_role and not args.preliminary_table_role:
+        parser.error("--preliminary-goal-role requires --preliminary-table-role")
+    if args.preliminary_p2 and (
+        not args.preliminary_table_role or args.preliminary_goal_role or args.preliminary_actor_role
+    ):
+        parser.error("--preliminary-p2 requires only --preliminary-table-role")
+    if args.position_context_order and not args.extraction_context:
+        parser.error("--position-context-order requires --extraction-context")
+    if args.position_context_order and args.live_tagging and not args.preliminary_table_role:
+        parser.error("--position-context-order with live tagging requires --preliminary-table-role")
+    if args.position_context_order and (args.preliminary_goal_role or args.preliminary_actor_role):
+        parser.error("--position-context-order requires only preliminary table role")
     if args.claim_span_render_resolution and not args.verify_claim_spans:
         parser.error("--claim-span-render-resolution requires --verify-claim-spans")
     if args.claim_span_bullet_spacing and not args.claim_span_render_resolution:
         # Refused rather than silently overriding one recovery with the other.
         parser.error("--claim-span-bullet-spacing requires --claim-span-render-resolution")
+    if args.claim_span_typography and not args.claim_span_bullet_spacing:
+        # Same reason: the typography wrapper wraps the bullet wrapper's own
+        # rendered read, so it cannot replace it.
+        parser.error("--claim-span-typography requires --claim-span-bullet-spacing")
     if args.extraction_table_context and not args.extraction_context:
         parser.error("--extraction-table-context requires --extraction-context")
+    if args.extraction_content_bounds and not args.extraction_source_ids:
+        parser.error("--extraction-content-bounds requires --extraction-source-ids")
+    if args.extraction_assertion_prompt and not args.extraction_source_ids:
+        parser.error("--extraction-assertion-prompt requires --extraction-source-ids")
+    if args.extraction_complete_selection and not args.extraction_assertion_prompt:
+        parser.error("--extraction-complete-selection requires --extraction-assertion-prompt")
     if args.raster_ocr and not args.verify_paragraphs:
         parser.error("--raster-ocr requires --verify-paragraphs")
     if args.native_quote_typography and (not args.verify_paragraphs or args.raster_ocr):
@@ -645,6 +914,15 @@ def main():
         claim_pages = sorted(set(int(p) for p in args.claim_pages.split(",")))
         if not claim_pages or not set(claim_pages) <= set(pages):
             parser.error("--claim-pages must be a non-empty subset of --pages")
+    from proofops.application.uploads_security import PdfLimits
+
+    limit = PdfLimits().max_bytes
+    try:
+        source_size = args.pdf.stat().st_size
+    except OSError as exc:
+        parser.error(f"Cannot read --pdf: {exc}")
+    if source_size > limit:
+        parser.error(f"--pdf exceeds the supported upload limit of {limit} bytes (100 MiB)")
     state = args.state.resolve()
     state.mkdir(parents=True, exist_ok=True, mode=0o700)
     manifest_path = state / "pilot.json"
@@ -679,7 +957,13 @@ def main():
             table_structure_repair="odl_header_v2" if args.repair_table_headers else None,
         )
         (state / "parser.json").write_text(json.dumps(config.config_snapshot()))
-        if args.extraction_year_notation or args.extraction_context or args.extraction_source_ids:
+        if (
+            args.extraction_year_notation
+            or args.extraction_context
+            or args.position_context_order
+            or args.extraction_source_ids
+            or args.extraction_content_bounds
+        ):
             from proofops_agent.upstage_extraction import _profile_with_options
 
             extraction_profile = asdict(
@@ -689,6 +973,10 @@ def main():
                     extraction_context=args.extraction_context,
                     extraction_table_context=args.extraction_table_context,
                     source_ids=args.extraction_source_ids,
+                    assertion_prompt=args.extraction_assertion_prompt,
+                    complete_selection=args.extraction_complete_selection,
+                    extraction_content_bounds=args.extraction_content_bounds,
+                    position_order=args.position_context_order,
                 )
             )
         else:
@@ -707,10 +995,20 @@ def main():
             settings["extraction_year_notation"] = True
         if args.extraction_context:
             settings["extraction_context"] = True
+        if args.position_context_order:
+            from proofops.application.tagging.preliminary import CONTEXT_POSITION_ORDER
+
+            settings["position_context_order"] = CONTEXT_POSITION_ORDER
         if args.extraction_table_context:
             settings["extraction_table_context"] = True
         if args.extraction_source_ids:
             settings["extraction_source_ids"] = True
+        if args.extraction_assertion_prompt:
+            settings["extraction_assertion_prompt"] = True
+        if args.extraction_complete_selection:
+            settings["extraction_complete_selection"] = True
+        if args.extraction_content_bounds:
+            settings["extraction_content_bounds"] = True
         settings.update(raster)
         if args.verify_claim_spans:
             settings["claim_source_policy"] = claim_source_policy_for(args)
@@ -722,6 +1020,12 @@ def main():
                     preliminary_context=args.preliminary_context,
                     preliminary_table_context=args.preliminary_table_context,
                     preliminary_table_role=args.preliminary_table_role,
+                    preliminary_goal_role=args.preliminary_goal_role,
+                    preliminary_actor_role=args.preliminary_actor_role,
+                    preliminary_p2=args.preliminary_p2,
+                    compact_element_wire=args.compact_element_wire,
+                    position_context_order=args.position_context_order,
+                    capacity_refresh=getattr(args, "capacity_refresh", False),
                 )
             )
             bound = settings["input_reservation_policy"]["reservation_input_tokens"]
@@ -785,7 +1089,9 @@ def main():
         return response.json()
 
     if not manifest_path.exists():
-        approved_at = datetime.now(UTC).isoformat()
+        now_dt = datetime.now(UTC)
+        approved_at = now_dt.isoformat()
+        expires_at = (now_dt + timedelta(hours=24)).isoformat()
         rights, runtime, consent, pack_id = (str(uuid4()) for _ in range(4))
         common = dict(
             tenant_id=tenant,
@@ -795,7 +1101,7 @@ def main():
             approved_at=approved_at,
             purpose="local_test",
             provider="upstage",
-            expires_at="2026-09-25T00:00:00Z",
+            expires_at=expires_at,
         )
         profiles = [
             (
@@ -927,10 +1233,7 @@ def main():
         else:
             c.rulepack_store.add_pack(draft_pack, files)
             run_rule_pack_id = pack_id
-        company = post(
-            "/v1/companies",
-            dict(legal_name="실제 보고서 검토 시험", aliases=[], registration_identifier=None),
-        )
+        company = post("/v1/companies", company_body)
         document = post(
             "/v1/documents",
             dict(
@@ -977,6 +1280,9 @@ def main():
         )
         manifest = dict(
             tenant_id=tenant,
+            company_id=company["company_id"],
+            company_legal_name=company_body["legal_name"],
+            company_registration_identifier=company_body["registration_identifier"],
             run_id=run["run_id"],
             document_version_id=version["resource_id"],
             source_path=str(args.pdf.resolve()),
@@ -1011,12 +1317,26 @@ def main():
             manifest["preliminary_table_context"] = True
         if args.preliminary_table_role:
             manifest["preliminary_table_role"] = True
+        if args.preliminary_goal_role:
+            manifest["preliminary_goal_role"] = True
+        if args.preliminary_actor_role:
+            manifest["preliminary_actor_role"] = True
+        if args.preliminary_p2:
+            manifest["preliminary_p2"] = True
+        if args.compact_element_wire:
+            manifest["compact_element_wire"] = True
+        if args.position_context_order:
+            from proofops.application.tagging.preliminary import CONTEXT_POSITION_ORDER
+
+            manifest["position_context_order"] = CONTEXT_POSITION_ORDER
         if args.verify_selected_cells:
             manifest["verify_selected_cells"] = True
         if args.claim_span_render_resolution:
             manifest["claim_span_render_resolution"] = True
         if args.claim_span_bullet_spacing:
             manifest["claim_span_bullet_spacing"] = True
+        if args.claim_span_typography:
+            manifest["claim_span_typography"] = True
         if args.native_quote_typography:
             manifest["native_quote_typography"] = True
         if args.extraction_year_notation:
@@ -1027,10 +1347,20 @@ def main():
             manifest["extraction_table_context"] = True
         if args.extraction_source_ids:
             manifest["extraction_source_ids"] = True
+        if args.extraction_assertion_prompt:
+            manifest["extraction_assertion_prompt"] = True
+        if args.extraction_complete_selection:
+            manifest["extraction_complete_selection"] = True
+        if args.extraction_content_bounds:
+            manifest["extraction_content_bounds"] = True
+        if args.capacity_refresh:
+            manifest["capacity_refresh"] = True
         with manifest_path.open("x") as stream:
             json.dump(manifest, stream, ensure_ascii=False, indent=2)
     else:
         manifest = json.loads(manifest_path.read_text())
+        if manifest.get("capacity_refresh", False) != getattr(args, "capacity_refresh", False):
+            raise ValueError("pilot capacity refresh policy changed; create a new state directory")
         if args.extraction_total_calls is not None and (
             manifest.get("extraction_total_calls") != args.extraction_total_calls
         ):
@@ -1049,6 +1379,19 @@ def main():
             raise ValueError("pilot preliminary table policy changed; create a new state directory")
         if manifest.get("preliminary_table_role", False) != args.preliminary_table_role:
             raise ValueError("pilot preliminary table role policy changed; create a new state dir")
+        if manifest.get("preliminary_goal_role", False) != args.preliminary_goal_role:
+            raise ValueError("pilot preliminary goal role policy changed; create a new state dir")
+        if manifest.get("preliminary_p2", False) != args.preliminary_p2:
+            raise ValueError("pilot preliminary P2 policy changed; create a new state dir")
+        if manifest.get("compact_element_wire", False) != args.compact_element_wire:
+            raise ValueError("pilot element wire policy changed; create a new state dir")
+        if args.position_context_order:
+            from proofops.application.tagging.preliminary import CONTEXT_POSITION_ORDER
+
+            if manifest.get("position_context_order") != CONTEXT_POSITION_ORDER:
+                raise ValueError("pilot context order policy changed; create a new state dir")
+        elif manifest.get("position_context_order") is not None:
+            raise ValueError("pilot context order policy changed; create a new state dir")
         if manifest.get("live_tagging", False) != args.live_tagging or (
             args.live_tagging and manifest.get("tagging_max_calls") != args.tagging_max_calls
         ):
@@ -1081,6 +1424,10 @@ def main():
             raise ValueError(
                 "pilot extraction source-id policy changed; create a new state directory"
             )
+        if manifest.get("extraction_content_bounds", False) != args.extraction_content_bounds:
+            raise ValueError(
+                "pilot extraction content-bounds policy changed; create a new state directory"
+            )
         if manifest["source_sha256"] != digest:
             raise ValueError("pilot source changed")
         if manifest.get("claim_pages") != claim_pages:
@@ -1091,6 +1438,8 @@ def main():
             parser.error("Existing state has a different claim span render-resolution policy")
         if manifest.get("claim_span_bullet_spacing", False) != args.claim_span_bullet_spacing:
             parser.error("Existing state has a different claim span bullet-spacing policy")
+        if manifest.get("claim_span_typography", False) != args.claim_span_typography:
+            parser.error("Existing state has a different claim span typography policy")
         if manifest.get("verify_paragraphs", False) != args.verify_paragraphs:
             raise ValueError("pilot verification policy changed; create a new state directory")
         if manifest.get("model", "solar-pro3") != args.model:
@@ -1163,23 +1512,14 @@ def main():
             )
         import uvicorn
         from fastapi import HTTPException
-        from fastapi.responses import FileResponse, RedirectResponse
+        from fastapi.responses import FileResponse
         from fastapi.staticfiles import StaticFiles
 
         login_token = secrets.token_urlsafe(24)
 
         @app.get("/__local/" + login_token, include_in_schema=False)
         def login():
-            response = RedirectResponse(f"/runs/{run_id}/claims", status_code=303)
-            response.set_cookie(
-                SESSION_COOKIE_NAME,
-                session,
-                secure=True,
-                httponly=True,
-                samesite="strict",
-                path="/",
-            )
-            return response
+            return local_login_response(c.auth_store.sessions, user, tenant, run_id)
 
         app.mount("/assets", StaticFiles(directory=ROOT / "apps/web/dist/assets"))
 

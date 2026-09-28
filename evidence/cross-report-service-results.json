@@ -240,7 +240,7 @@
         }
       },
       "selection": {
-        "source_path": "/Users/ss020/Dev/ESG_ProofOps/기업보고서/기계 조선 건설/두산밥캣_2025_Sustainability Report_KOR_final.pdf",
+        "source_path": "./기업보고서/기계 조선 건설/두산밥캣_2025_Sustainability Report_KOR_final.pdf",
         "source_sha256": "dc59b2b1c5bbf02e33bb901f94aef7cd984dc62547708e92aa1332ac550102e9",
         "tenant_id": "e59bc570-074d-4158-84e8-e39d05cc4b69",
         "document_id": "517b1f5e-358a-493b-9079-c4563fedb3f6",
@@ -648,7 +648,7 @@
         }
       },
       "selection": {
-        "source_path": "/Users/ss020/Dev/ESG_ProofOps/기업보고서/자동차/2025_기아_지속가능경영보고서.pdf",
+        "source_path": "./기업보고서/자동차/2025_기아_지속가능경영보고서.pdf",
         "source_sha256": "d0d814d98c4aeedbbdb2bf8631b8981ae5cde94dec32aa32c57510420274da1f",
         "tenant_id": "8e04dd32-d080-4e83-a409-323e9733f53f",
         "document_id": "fd5bfec9-a21f-4c53-b681-0471981086aa",
@@ -1433,7 +1433,7 @@
         }
       },
       "selection": {
-        "source_path": "/Users/ss020/Dev/ESG_ProofOps/기업보고서/은행 보험 증권/2025 KB금융그룹 지속가능경영보고서-KSSB 지속가능성 공시기준 적용.pdf",
+        "source_path": "./기업보고서/은행 보험 증권/2025 KB금융그룹 지속가능경영보고서-KSSB 지속가능성 공시기준 적용.pdf",
         "source_sha256": "498e5db603e72bd488d0fbaf0cedaa122ef29e16e63da903f6d88a2086b35a8a",
         "tenant_id": "5751e0ed-1f3c-44f2-94c9-7ab9fcce966a",
         "document_id": "4e71d633-a78a-4ac7-99f9-ee9cf620f704",
@@ -1865,7 +1865,7 @@
         }
       },
       "selection": {
-        "source_path": "/Users/ss020/Dev/ESG_ProofOps/기업보고서/통신 인터넷/Kakao_SustainabilityReport2025_KR.pdf",
+        "source_path": "./기업보고서/통신 인터넷/Kakao_SustainabilityReport2025_KR.pdf",
         "source_sha256": "43804a2d5eccfc6aa9c5b5480ec6714c7d07bea13ed68729c0af7a3b622ce76d",
         "tenant_id": "f71a75ce-9b64-4344-9ca9-e1ab6650eee2",
         "document_id": "c18a4051-43fa-4fba-b9be-22f1caa0e81a",

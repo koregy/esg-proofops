@@ -4,14 +4,13 @@
 
 ## 저장된 실제 결과 열기 — API 비용 없음
 
-프로젝트 최상위 `start_submission.command`를 실행합니다. 터미널에서라면:
+권리가 확인된 저장 상태(`pilot.json` 포함)를 준비하고 저장소 루트에서 실행합니다. 공개 저장소에는 원본 PDF와 저장 상태가 포함되지 않습니다.
 
 ```bash
-cd /Users/ss020/Dev/ESG_ProofOps
-./start_submission.command
+uv run python scripts/submission_demo.py --seed .local/saved-pilot-state --port 8794
 ```
 
-터미널에 출력되는 `http://localhost:8794/__local/...` 주소를 엽니다. 주소는 실행할 때마다 바뀝니다. 종료는 실행한 터미널에서 Ctrl+C입니다. 포트를 이미 사용 중이면 `PROOFOPS_DEMO_PORT=8795 ./start_submission.command`로 실행합니다.
+터미널에 출력되는 `http://localhost:8794/__local/...` 주소를 엽니다. 주소는 실행할 때마다 바뀝니다. 종료는 실행한 터미널에서 Ctrl+C입니다. 포트를 이미 사용 중이면 `--port 8795`로 실행합니다.
 
 1. **주장**: 추출한 문장과 트랙·판정/보류를 봅니다.
 2. 주장을 열고 **원문 위치 열기**: 실제 PDF 페이지를 확인합니다. 검증되지 않은 위치에는 하이라이트를 붙이지 않습니다.
@@ -21,19 +20,47 @@ cd /Users/ss020/Dev/ESG_ProofOps
 실행기는 원본 상태를 `<seed>-demo`로 복사합니다. 같은 실행의 복사본은 재사용하며, 원본·기존 디렉터리를 삭제하지 않습니다. 다시 깨끗한 복사본이 필요하면 아래 명령의 `--demo-state`에 새로운 경로를 지정합니다.
 
 ```bash
-cd /Users/ss020/Dev/ESG_ProofOps/.local/team-publication-20260918
-.venv/bin/python scripts/submission_demo.py \
-  --seed /Users/ss020/Dev/ESG_ProofOps/.local/submission-a-20260920/kb-cpu \
-  --demo-state /Users/ss020/Dev/ESG_ProofOps/.local/submission-a-20260920/review-copy-2 \
+uv run python scripts/submission_demo.py \
+  --seed .local/saved-pilot-state \
+  --demo-state .local/review-copy-2 \
   --port 8795
 ```
 
-## 새로운 PDF 분석 — 실제 API 호출
+### 서버 없이 상태만 확인 — `--no-serve` (부분 결과·재개 명시)
 
-프로젝트 최상위의 `analyze_report.command`로 새 보고서를 실행할 수 있습니다. 아래 명령은 **입력 계획만 확인**하며 모델 호출·상태 생성이 없습니다. PDF 경로·물리 페이지·보고기간은 실제 문서에 맞게 입력합니다.
+`--no-serve`를 붙이면 서버를 띄우지 않고 저장된 실행 상태만 확인합니다. 실행기는 pilot이
+스스로 출력한 `pipeline_outcome`(stage·status)를 **그대로** 보이고, pilot이 저장한
+이번 실행에서 새로 저장된 `inspection-*.json`을 **읽어** 반환된 주장 페이지의 등급 확정·보류·적용 제외 수를
+표시합니다. 이는 전체 보고서 건수가 아니며 다음 페이지가 있으면 별도로 알립니다. 로그는 느린 원문 재생 중에도 실시간으로 출력합니다. pending 주장이 하나라도 있으면 다음을 명시합니다.
+
+- **REMAINING**: 아직 규칙엔진 등급이 없는 주장 수를 정확히 보고합니다. 생성된 ZIP이나 열린
+  검토 화면은 **부분 결과**이며 보고서 완료가 아닙니다.
+- 주장 상세에서 원문 검증·선행분류·요소 태깅·규칙 보류 사유를 확인하고 해당 단계부터 보완합니다.
+  실제 모델 호출에는 기존 공용 USD20 장부가 적용됩니다. 읽기 전용 재개는 채점하지 않습니다.
+- 결과를 다시 브라우저로 여는 **읽기 전용 재개 명령**(항상 `--resume --serve`, 유료 `--invoke` 아님)을 출력합니다.
+
+pilot 상태를 재분류하거나 보증 상태를 단정하지 않으며, 상태 줄을 찾지 못하면 완료 상태를
+만들어 내지 않고 저장된 `inspection-*.json`을 직접 확인하도록 안내합니다.
+
+## 개발자 B 재무 연계 반환 검증 — `linkage_exchange_cli.py verify-return`
+
+개발자 B가 실제로 생성한 반환 3종(packet/policy/result)이 있으면 기존 `handoff/team-v3/contract/validate.py`의 구조 검증에 더해 원문 바이트 대조까지 수행합니다. 인터페이스는 지금 실행 가능합니다.
 
 ```bash
-./analyze_report.command --pdf '/absolute/path/report.pdf' \
+PYTHONPATH=. uv run python scripts/linkage_exchange_cli.py verify-return \
+  --input <packet.json> --policy <policy.json> --output <result.json> \
+  --database-path <trusted-run-state>
+```
+
+- 합성 예시로 구조 검증만 실행하려면 `--skip-byte-verification`를 붙이고 `outputs/agent-fixtures/linkage-contract/`의 예시 triple을 사용합니다. 이는 **합성 확인**이며 실제 반환 검증이 아닙니다.
+- 실제 B가 생성한 input/policy/output와 재무 원문 로컬 경로가 없으면 실제 반환 검증은 **not_run**으로 남깁니다. 예시·템플릿을 실제 반환으로 표시하지 않습니다.
+
+## 새로운 PDF 분석 — 실제 API 호출
+
+저장소의 `scripts/analyze_report.py`로 새 보고서를 실행할 수 있습니다. 아래 명령은 **입력 계획만 확인**하며 모델 호출·상태 생성이 없습니다. PDF 경로·물리 페이지·보고기간은 실제 문서에 맞게 입력합니다.
+
+```bash
+uv run python scripts/analyze_report.py --pdf '/absolute/path/report.pdf' \
   --pages 25,117,138 --report-year 2025 \
   --period-start 2025-01-01 --period-end 2025-12-31
 ```
@@ -45,7 +72,7 @@ cd /Users/ss020/Dev/ESG_ProofOps/.local/team-publication-20260918
 `--pages`에 E 본문·환경 데이터·부록을 함께 지정하면 세 영역이 모두 파싱되지만, 주장(claim) 추출도 세 영역 전부에서 일어납니다. 주장 추출을 특정 페이지로 좁히려면 `--pages`의 부분집합으로 `--claim-pages`를 추가합니다.
 
 ```bash
-./analyze_report.command --pdf '/absolute/path/report.pdf' \
+uv run python scripts/analyze_report.py --pdf '/absolute/path/report.pdf' \
   --pages 25,117,138 --claim-pages 25 --report-year 2025 \
   --period-start 2025-01-01 --period-end 2025-12-31
 ```
@@ -57,14 +84,13 @@ cd /Users/ss020/Dev/ESG_ProofOps/.local/team-publication-20260918
 - 좁힌 실행에서도 커버리지는 선택하지 않은 페이지까지 추출했다고 주장하지 않습니다(`chunks_processed < chunks_discovered`).
 
 
-서로 다른 보고서를 처음 등록할 때는 아래 **CLI**로 문서별 권리·동의·실행 구성을 만듭니다. 이미 승인된 동일 PDF의 새 분석은 `start_analysis.command`의 웹 업로드에서 시작할 수 있습니다. 워커 없이 저장된 결과만 여는 모드에서는 새 분석이 비활성화됩니다. 아래의 문서 경로·연도·기간·페이지를 해당 보고서에 맞게 바꾸고, 항상 새 상태 디렉터리를 사용합니다. 페이지는 인쇄 쪽번호가 아닌 PDF의 물리 페이지입니다. E 본문, 환경 데이터, 부록 관련 페이지를 함께 지정합니다. 선택하지 않은 페이지까지 분석했다고 주장하면 안 됩니다.
+서로 다른 보고서를 처음 등록할 때는 아래 **CLI**로 문서별 권리·동의·실행 구성을 만듭니다. 이미 승인된 동일 PDF의 새 분석은 아래 `--serve-worker` 웹 업로드에서 시작할 수 있습니다. 워커 없이 저장된 결과만 여는 모드에서는 새 분석이 비활성화됩니다. 아래의 문서 경로·연도·기간·페이지를 해당 보고서에 맞게 바꾸고, 항상 새 상태 디렉터리를 사용합니다. 페이지는 인쇄 쪽번호가 아닌 PDF의 물리 페이지입니다. E 본문, 환경 데이터, 부록 관련 페이지를 함께 지정합니다. 선택하지 않은 페이지까지 분석했다고 주장하면 안 됩니다.
 
 ```bash
-cd /Users/ss020/Dev/ESG_ProofOps/.local/team-publication-20260918
-.venv/bin/python -m evaluation.local_upstage_pilot \
+uv run python -m evaluation.local_upstage_pilot \
   --pdf '/absolute/path/report.pdf' \
   --state '/absolute/path/new-report-state' \
-  --key-file /Users/ss020/Dev/ESG_ProofOps/.env.upstage.local \
+  --key-file .env.upstage.local \
   --pages 30,100,120 --report-year 2025 \
   --period-start 2024-01-01 --period-end 2024-12-31 \
   --verify-paragraphs --verify-claim-spans --verify-merged-tables \
@@ -78,14 +104,14 @@ pilot CLI도 동일한 `--claim-pages`(선택, `--pages`의 부분집합)를 받
 
 ### 웹에서 새 분석 시작 — `--serve-worker` (선택, 유료)
 
-프로젝트 최상위에서 `./start_analysis.command`를 실행하고 출력되는 로그인 주소를 엽니다(기본 포트 8796). **새 분석 → 기존 회사·권리·동의·실행 환경 선택 → 동일한 승인 PDF 등록 → 분석 페이지 확인 → 사전 점검 후 분석 시작** 순서입니다. 기본 예시는 KB 보고서 물리 페이지 30입니다. 초안 규칙집으로는 추출·태깅과 부분 보고서를 볼 수 있지만 등급 확정과 검토 수정은 보류됩니다. 이 버튼은 실제 API 비용을 사용합니다.
+아래 `--resume --serve --serve-worker` 명령으로 기존 승인 상태를 열고 출력되는 로그인 주소에서 **새 분석 → 기존 회사·권리·동의·실행 환경 선택 → 동일한 승인 PDF 등록 → 분석 페이지 확인 → 사전 점검 후 분석 시작** 순서로 진행합니다. 초안 규칙집으로는 추출·태깅과 부분 보고서를 볼 수 있지만 등급 확정과 검토 수정은 보류됩니다. 이 버튼은 실제 API 비용을 사용합니다.
 
 웹의 문서 업로드·RunForm에서 만든 **새로 대기열에 오른 실행**을 같은 프로세스에서 자동으로 진행하려면 `--serve`에 `--serve-worker`를 함께 지정합니다. 이 플래그는 유료 신규 실행을 구동하는 명시적 동의이며, 읽기 전용 `--resume` 재열람과 구분됩니다. `--serve-worker`는 `--serve`를 요구합니다.
 
 ```bash
-.venv/bin/python -m evaluation.local_upstage_pilot \
+uv run python -m evaluation.local_upstage_pilot \
   --resume --state '/absolute/path/existing-state' \
-  --key-file /Users/ss020/Dev/ESG_ProofOps/.env.upstage.local \
+  --key-file .env.upstage.local \
   --serve --serve-worker --port 8795
 ```
 
@@ -105,7 +131,7 @@ pilot CLI도 동일한 `--claim-pages`(선택, `--pages`의 부분집합)를 받
 - 서버는 127.0.0.1에만 연결합니다. 로그인 URL은 프로세스별 임시 비밀값이며 `browser.json`에 0600 권한으로 저장됩니다. CSRF·If-Match와 원문 해시 검증을 유지합니다.
 - 제출용 로컬 실행이며, 외부 배포·전체 보고서 자동 범위 선택·전문가 정확도 검증의 완료를 뜻하지 않습니다.
 
-실행 결과와 확인한 제한은 프로젝트 최상위 `outputs/submission-a-20260920/RESULTS.md`를 참고합니다.
+공개 가능한 부분 실행 결과와 제한은 [실행 기록](../evidence/developer-a-validation-20260918.md)과 [재생 기록](../evidence/source-linked-demo-verification.md)을 참고합니다.
 
 ## 로컬 웹 워커 연결 계약 (추가)
 

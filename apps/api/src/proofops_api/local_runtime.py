@@ -29,6 +29,10 @@ _SETTINGS_FIELDS = frozenset(
         "extraction_context",
         "extraction_table_context",
         "extraction_source_ids",
+        "extraction_assertion_prompt",
+        "extraction_complete_selection",
+        "extraction_content_bounds",
+        "position_context_order",
         "tagging_settings",
         "preliminary_settings",
         "relation_settings",
@@ -37,6 +41,7 @@ _SETTINGS_FIELDS = frozenset(
         "claim_source_policy",
         "raster_runtime_binding_id",
         "raster_policy",
+        "report_level_link",
     }
 )
 _REQUIRED_SETTINGS_FIELDS = frozenset({"build_root", "budget_limits"})
@@ -239,8 +244,11 @@ def load_local_runtime(env: Mapping[str, str]) -> dict[str, Any]:
     settings_path = env.get("LOCAL_RUN_SETTINGS_PATH")
     extraction_mode = env.get("LOCAL_EXTRACTION_MODE", "")
     tagging_mode = env.get("LOCAL_TAGGING_MODE", "")
+    fact_assembly_profile = env.get("LOCAL_FACT_ASSEMBLY_PROFILE", "strict-v1")
+    if fact_assembly_profile not in ("strict-v1", "partial-facts-v1"):
+        raise _invalid()
     if not parser_path:
-        if settings_path or extraction_mode or tagging_mode:
+        if settings_path or extraction_mode or tagging_mode or fact_assembly_profile != "strict-v1":
             raise _invalid()
         return {}
     if extraction_mode not in {"", "local_synthetic", "upstage_probe"} or tagging_mode not in {
@@ -266,6 +274,19 @@ def load_local_runtime(env: Mapping[str, str]) -> dict[str, Any]:
     ):
         raise _invalid()
     runtime.update(_raster(settings, extraction_mode))
+    if "report_level_link" in settings:
+        from proofops.application.tagging.report_level_link import validate_config
+
+        if not tagging_mode:
+            raise _invalid()
+        try:
+            runtime["report_level_link"] = validate_config(settings["report_level_link"])
+        except ValueError as exc:
+            if str(exc) == "REPORT_LEVEL_LINK_M3_ONLY":
+                raise ValueError(
+                    "LOCAL_RUNTIME_CONFIG_INVALID: REPORT_LEVEL_LINK_M3_ONLY"
+                ) from None
+            raise _invalid() from None
     if "claim_source_policy" in settings:
         from proofops.adapters.local.claim_source_policies import claim_source_reader
 
@@ -289,8 +310,11 @@ def load_local_runtime(env: Mapping[str, str]) -> dict[str, Any]:
         "extraction_context",
         "extraction_table_context",
         "extraction_source_ids",
+        "extraction_assertion_prompt",
+        "extraction_complete_selection",
+        "extraction_content_bounds",
     ):
-        # Approved extraction opt-ins (R03d/R03f/R12/R14): explicit True only, and
+        # Approved extraction opt-ins (R03d/R03f/R12/R14/R20): explicit True only, and
         # only with the real probe mode. Validated here so the gate never rejects
         # a pilot-written value; the worker composition (not this runtime dict)
         # reconstructs the matching extractor profile from the settings file.
@@ -299,6 +323,42 @@ def load_local_runtime(env: Mapping[str, str]) -> dict[str, Any]:
     if "extraction_table_context" in settings and settings.get("extraction_context") is not True:
         # Table context refines the context profile; alone it has no wire.
         raise _invalid()
+    if (
+        "extraction_assertion_prompt" in settings
+        and settings.get("extraction_source_ids") is not True
+    ):
+        # The assertion prompt refines source-ID selection; alone it has no wire.
+        raise _invalid()
+    if (
+        "extraction_content_bounds" in settings
+        and settings.get("extraction_source_ids") is not True
+    ):
+        raise _invalid()
+    if "extraction_complete_selection" in settings and (
+        settings.get("extraction_source_ids") is not True
+        or settings.get("extraction_assertion_prompt") is not True
+    ):
+        raise _invalid()
+    if "position_context_order" in settings:
+        from proofops.application.tagging.preliminary import CONTEXT_POSITION_ORDER
+
+        if (
+            settings["position_context_order"] != CONTEXT_POSITION_ORDER
+            or settings.get("extraction_context") is not True
+            or (
+                tagging_mode == "upstage_local"
+                and (
+                    not isinstance(settings.get("preliminary_settings"), dict)
+                    or settings["preliminary_settings"].get("model_profile")
+                    not in {
+                        "upstage-preliminary-source-quotes-table-role-v1-position-v1",
+                        "upstage-preliminary-source-quotes-table-role-v2-p2-position-v1",
+                    }
+                )
+            )
+        ):
+            raise _invalid()
+        runtime["position_context_order"] = CONTEXT_POSITION_ORDER
     if "budget_limits" in settings:
         runtime["budget_limits"] = _budget(settings["budget_limits"])
     if extraction_mode:
@@ -368,6 +428,10 @@ def load_local_runtime(env: Mapping[str, str]) -> dict[str, Any]:
         runtime["tagging_mode"] = tagging_mode
     elif "tagging_settings" in settings or "relation_settings" in settings:
         raise _invalid()
+    if fact_assembly_profile != "strict-v1":
+        if not tagging_mode:
+            raise _invalid()
+        runtime["fact_assembly_profile"] = fact_assembly_profile
     if tagging_mode != "upstage_local" and (
         "preliminary_settings" in settings
         or "relation_settings" in settings

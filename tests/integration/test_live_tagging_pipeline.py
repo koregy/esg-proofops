@@ -156,7 +156,9 @@ def _fake_post_factory(calls):
     return post
 
 
-def _pipeline_setup(tmp_path, monkeypatch, *, relation_stage=False):
+def _pipeline_setup(
+    tmp_path, monkeypatch, *, relation_stage=False, fact_assembly_profile="strict-v1"
+):
     """Build a genuine upstage_local run plus parse/extract checkpoints."""
     from proofops.application.rulepacks import RulePackRecord
     from proofops_worker.extract_runner import LocalExtractRunner
@@ -170,6 +172,7 @@ def _pipeline_setup(tmp_path, monkeypatch, *, relation_stage=False):
 
     monkeypatch.setattr(lifecycle, "pdf", lambda count: pdf())
     service, body, _, _ = _live_service(tmp_path)
+    service.fact_assembly_profile = fact_assembly_profile
     if relation_stage:
         from tests.integration.test_relation_runtime_config import _relation
 
@@ -408,6 +411,58 @@ def test_live_pipeline_publishes_candidate_review_and_replays(tmp_path, monkeypa
     assert "1234 tCO2e" not in ctx["stream"].getvalue()
 
 
+@pytest.mark.parametrize("selected", ["strict-v1", "partial-facts-v1"])
+def test_fact_assembly_env_selection_is_pinned_and_replayed(tmp_path, monkeypatch, selected):
+    from proofops.adapters.local.run_store import LocalSQLiteRunStore
+    from proofops_api.local_runtime import load_local_runtime
+    from proofops_worker.tag_runner import LocalTagRunner
+
+    from tests.integration.test_live_tagging_runtime_config import (
+        POLICY,
+        _base_settings,
+        _config_paths,
+        _preliminary_dict,
+        _tagging_dict,
+    )
+
+    settings = _base_settings()
+    settings.update(
+        build_root=str(tmp_path),
+        preliminary_settings=_preliminary_dict(),
+        tagging_settings=_tagging_dict(synthetic=False),
+        input_reservation_policy=dict(POLICY),
+    )
+    env = _config_paths(tmp_path, settings) | {
+        "LOCAL_EXTRACTION_MODE": "upstage_probe",
+        "LOCAL_TAGGING_MODE": "upstage_local",
+    }
+    if selected != "strict-v1":
+        env["LOCAL_FACT_ASSEMBLY_PROFILE"] = selected
+    runtime = load_local_runtime(env)
+    assert runtime.get("fact_assembly_profile", "strict-v1") == selected
+    ctx = _pipeline_setup(
+        tmp_path,
+        monkeypatch,
+        fact_assembly_profile=runtime.get("fact_assembly_profile", "strict-v1"),
+    )
+    service, tenant, run_id = ctx["service"], ctx["tenant"], ctx["run_id"]
+    snapshot = service.store.snapshot(tenant, run_id)
+    assert snapshot.get("fact_assembly_profile", "strict-v1") == selected
+    assert ctx["tag_runner"].run_once(tenant_id=tenant, run_id=run_id) == "needs_review"
+    claim_id = ctx["tag_runner"].claims.list(tenant, run_id)[0].claim_id
+    reopened = LocalTagRunner(
+        LocalSQLiteRunStore(service.store.path),
+        service.uploads,
+        ctx["parser"],
+        telemetry=ctx["telemetry"],
+        live_factory=ctx["tag_runner"].live_factory,
+        clock=ctx["tag_runner"].clock,
+    )
+    inputs = reopened.tags.load_inputs(tenant, run_id, claim_id)
+    assert inputs.fact_assembly_profile == selected
+    assert reopened.run_once(tenant_id=tenant, run_id=run_id) == "needs_review"
+
+
 def test_category_only_preliminary_disagreement_keeps_track_retrieval_and_needs_review(
     tmp_path, monkeypatch
 ):
@@ -491,15 +546,14 @@ def test_live_publication_crash_rolls_back_and_recovers_without_rebilling(tmp_pa
     runner, service = ctx["tag_runner"], ctx["service"]
     tenant, run_id = ctx["tenant"], ctx["run_id"]
     before_calls = len(ctx["calls"])
-    publish = runner.reviews.publish_transaction
+    publish = runner.reviews.store.publish_transaction
 
     def crash(db, inputs):
         publish(db, inputs)
         raise RuntimeError("injected crash after review publication")
 
-    monkeypatch.setattr(runner.reviews, "publish_transaction", crash)
-    with pytest.raises(RuntimeError, match="injected crash"):
-        runner.run_once(tenant_id=tenant, run_id=run_id)
+    monkeypatch.setattr(runner.reviews.store, "publish_transaction", crash)
+    assert runner.run_once(tenant_id=tenant, run_id=run_id) == "failed"
     assert len(ctx["calls"]) == before_calls + 6
     assert "tag_job" not in service.store.jobs.get_run(tenant, run_id)
     with service.store.jobs._transaction() as db:
@@ -512,6 +566,15 @@ def test_live_publication_crash_rolls_back_and_recovers_without_rebilling(tmp_pa
         ):
             assert service.store.jobs._all(db, tenant, run_id, kind) == []
     billed = service.cost(tenant, run_id)
+    service.store.jobs.retry_run(
+        tenant,
+        run_id,
+        expected_revision=service.store.jobs.get_run(tenant, run_id)["revision"],
+        idempotency_key=str(uuid4()),
+        reason="retry after recorded tag failure",
+        now=ctx["now"][0],
+        actor_sub="synthetic-test",
+    )
     ctx["now"][0] += 1000
     reopened = LocalTagRunner(
         LocalSQLiteRunStore(service.store.path),
@@ -563,7 +626,7 @@ def test_live_cancellation_stops_calls_and_leaves_no_review(tmp_path, monkeypatc
     else:
         cancel()
     assert runner.run_once(tenant_id=tenant, run_id=run_id) == (
-        "discarded" if inflight else "cancelled"
+        "LEASE_LOST" if inflight else "cancelled"
     )
     assert len(ctx["calls"]) == before_calls + int(inflight)
     assert runner.run_once(tenant_id=tenant, run_id=run_id) == "cancelled"

@@ -1,15 +1,15 @@
 {
-  "checked_at": "2026-09-21T13:24:49.361826+00:00",
+  "checked_at": "2026-09-23T06:54:42.845514+00:00",
   "scope": "documentation, structured contracts and synthetic schema examples only",
   "status": "passed",
-  "checks_total": 951,
-  "passed": 951,
+  "checks_total": 976,
+  "passed": 976,
   "failed": 0,
   "counts": {
     "numbered_documents": 35,
     "requirements": 43,
     "tasks": 46,
-    "api_operations": 57,
+    "api_operations": 60,
     "rule_vectors": 28,
     "edge_vectors": 24
   },
@@ -959,6 +959,41 @@
       "detail": ""
     },
     {
+      "name": "json:outputs/agent-results/R02g-layout-review/kia-layout.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:outputs/agent-results/R02g-layout-review/lotte-layout.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:outputs/agent-results/R16-live-table/summary.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:outputs/agent-results/R16-live-table/proposal-used.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:outputs/agent-results/R16-live-table/manifest.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:outputs/agent-results/R13-table-recovery/lotte-p29-layout.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:outputs/agent-fixtures/kia-assurance-sized-request/9e1e46d4-b365-4748-ad76-3e060d18badd/request.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
       "name": "json:outputs/agent-fixtures/linkage-contract/example-policy.json",
       "passed": true,
       "detail": ""
@@ -1065,6 +1100,16 @@
     },
     {
       "name": "json:outputs/agent-fixtures/linkage-contract/examples/c1-search-incomplete.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:outputs/agent-fixtures/live-lotte/extraction-year-abbreviation/packet.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:outputs/agent-fixtures/live-lotte/extraction-year-abbreviation/raw_response.json",
       "passed": true,
       "detail": ""
     },
@@ -1689,6 +1734,16 @@
       "detail": ""
     },
     {
+      "name": "openapi_ref:#/components/schemas/ClassificationView",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "openapi_ref:#/components/schemas/ClassificationAccepted",
+      "passed": true,
+      "detail": ""
+    },
+    {
       "name": "openapi_ref:#/components/schemas/Coverage",
       "passed": true,
       "detail": ""
@@ -1700,6 +1755,31 @@
     },
     {
       "name": "openapi_ref:#/components/schemas/Decision",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "openapi_ref:#/components/schemas/ReviewedDimensions",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "openapi_ref:#/components/schemas/NumericContextCheck",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "openapi_ref:#/components/schemas/NumericCandidateReview",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "openapi_ref:#/components/schemas/SubmittedReview",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "openapi_ref:#/components/schemas/ReviewedContext",
       "passed": true,
       "detail": ""
     },
@@ -1820,6 +1900,11 @@
     },
     {
       "name": "openapi_ref:#/components/schemas/ReconciliationReconciliationResult",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "openapi_ref:#/components/schemas/ClassificationSource",
       "passed": true,
       "detail": ""
     },
@@ -2065,6 +2150,21 @@
     },
     {
       "name": "idempotency:review_resolve",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "path_params:review_re_review",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "csrf:review_re_review",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "idempotency:review_re_review",
       "passed": true,
       "detail": ""
     },
@@ -2315,6 +2415,26 @@
     },
     {
       "name": "path_params:reconciliation_source_content",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "path_params:claim_classification_get",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "path_params:claim_classification_create",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "csrf:claim_classification_create",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "idempotency:claim_classification_create",
       "passed": true,
       "detail": ""
     },
@@ -4775,6 +4895,11 @@
     },
     {
       "name": "md_link:docs/32_PIPELINE_COMPLETION_PLAN.md:20_TASK_BREAKDOWN.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "md_link:docs/32_PIPELINE_COMPLETION_PLAN.md:AB_INTEGRATION_20260921.md",
       "passed": true,
       "detail": ""
     }

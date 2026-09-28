@@ -24,7 +24,7 @@ from tests.acceptance.test_rulepack_api import _headers, _seed_auth
 from tests.acceptance.test_tagging import consensus, execute, setup
 
 
-def workspace(tmp_path, *, role="reviewer"):
+def workspace(tmp_path, *, role="reviewer", prepare_inputs=None):
     try:
         from proofops.adapters.local.review_store import LocalSQLiteReviewStore
         from proofops.application.reviews import ReviewInputs, ReviewService
@@ -63,6 +63,8 @@ def workspace(tmp_path, *, role="reviewer"):
             local_synthetic=True,
         ),
     )
+    if prepare_inputs is not None:
+        inputs = prepare_inputs(inputs)
     jobs = LocalSQLiteJobStore(tmp_path / "state.sqlite")
     jobs.create_run(TENANT, RUN, inputs.original.document_version_id)
     store = LocalSQLiteReviewStore(jobs)
@@ -103,6 +105,15 @@ def post(ws, *, body=None, headers=None):
     )
 
 
+def re_review(ws, *, body=None, headers=None):
+    client, _, _, review, default_body, default_headers, _ = ws
+    return client.post(
+        f'/v1/reviews/{review["review_id"]}/re-review',
+        json=body or default_body,
+        headers=headers or default_headers,
+    )
+
+
 def test_resolve_new_immutable_revisions_real_engine_and_pinned_receipts(tmp_path):
     ws = workspace(tmp_path)
     _, service, inputs, review, _, _, _ = ws
@@ -136,6 +147,50 @@ def test_resolve_new_immutable_revisions_real_engine_and_pinned_receipts(tmp_pat
     jsonschema.Draft202012Validator(
         {"$ref": "#/$defs/ReviewResolution", "$defs": schema["$defs"]}
     ).validate(result)
+
+
+def test_partial_fact_publication_pins_profile_and_range(tmp_path):
+    from proofops.application.tagging.consensus import (
+        PARTIAL_FACTS_HASH,
+        PARTIAL_FACTS_V1,
+        form_consensus,
+    )
+    from proofops.domain.rules.engine import evaluate
+
+    def prepare(inputs):
+        runs = tuple(replace(run, product_variant=False) for run in inputs.tag_runs)
+        consensus = form_consensus(
+            runs,
+            packet=inputs.packet,
+            rulepack=inputs.rulepack,
+            tenant_id=TENANT,
+            tag_revision=1,
+            profile=PARTIAL_FACTS_V1,
+        )
+        draft = replace(
+            inputs, tag_runs=runs, consensus=consensus, fact_assembly_profile=PARTIAL_FACTS_V1
+        )
+        return replace(
+            draft, decision=evaluate(consensus.confirmed_tags, draft.rule_context, draft.rulepack)
+        )
+
+    ws = workspace(tmp_path, prepare_inputs=prepare)
+    _, service, inputs, review, _, _, _ = ws
+    history = service.store.history(TENANT, RUN, review["claim_id"])
+    profile = {"profile": PARTIAL_FACTS_V1, "sha256": PARTIAL_FACTS_HASH}
+    assert history["tags"][0]["fact_assembly"] == profile
+    assert history["decisions"][0]["fact_assembly"] == profile
+    assert history["decisions"][0]["api"]["grade_range"] == {
+        "floor": "E1",
+        "ceiling": "E3",
+        "open_elements": ["P2", "P3", "P4"],
+    }
+    assert inputs.decision.review_status == "needs_review"
+    body = ws[4] | {"elements": [asdict(e) for e in inputs.consensus.candidate_elements]}
+    assert post(ws, body=body).status_code == 200
+    reviewed = service.store.history(TENANT, RUN, review["claim_id"])
+    assert reviewed["tags"][-1]["fact_assembly"] == profile
+    assert reviewed["decisions"][-1]["fact_assembly"] == profile
 
 
 @pytest.mark.parametrize("header,base", [('"9"', 1), ('"1"', 9)])
@@ -358,7 +413,7 @@ def test_review_component_renders_actual_react_with_escaped_sources(tmp_path):
     esbuild = next((root / "node_modules/.pnpm").glob("esbuild@*/node_modules/esbuild/bin/esbuild"))
     entry = tmp_path / "review-render.tsx"
     entry.write_text(
-        """
+        r"""
 import React from REACT;
 import { renderToStaticMarkup } from SERVER;
 import { ReviewWorkspace } from COMPONENT;
@@ -368,14 +423,36 @@ quote:"<script>alert(1)</script>"};
 const props = {session:{tenant_id:"tenant",user_id:"user",role:"reviewer"},
 review:{review_id:"review",run_id:"run",claim_id:"claim",status:"open",revision:1,base_tag_revision:1,reason_codes:[]},
 track:"performance",elements:[{element_id:"P1",state:"unknown",evidence_refs:[ref],normalized_value:null}],
-loadLatest:async()=>{},onResolved:()=>{},localSynthetic:true};
+loadLatest:async()=>{},onResolved:()=>{},onSourceOpen:()=>{},localSynthetic:true};
 const html=renderToStaticMarkup(React.createElement(ReviewWorkspace,props));
 assert.ok(html.includes("태깅 검토") && html.includes("변경 사유"));
 assert.ok(html.includes("&lt;script&gt;") && !html.includes("<script>"));
 assert.ok(html.includes("로컬 합성 자료") && html.includes("태깅 확정 및 재채점"));
+const empty=renderToStaticMarkup(React.createElement(ReviewWorkspace,{...props,elements:[]}));
+for (const id of ["P1","P2","P3","P4","P5","P6"])
+  assert.ok(empty.includes(`name="${id}"`) || empty.includes(id), `missing ${id}`);
 const viewer=renderToStaticMarkup(React.createElement(ReviewWorkspace,
 {...props,session:{...props.session,role:"viewer"}}));
-assert.ok(viewer.includes('fieldset disabled=""'));
+for (const readOnly of [viewer, renderToStaticMarkup(React.createElement(ReviewWorkspace,
+{...props,localSynthetic:false,
+ review:{...props.review,reason_codes:["RULEPACK_APPROVAL_REQUIRED"]}}))]) {
+  assert.ok(!readOnly.includes('fieldset disabled=""'),
+    "read-only source buttons must not inherit disabled");
+  assert.ok(readOnly.includes('<button type="button">원문 위치 열기</button>'));
+  for (const control of readOnly.match(/<(?:select|input|textarea)\b[^>]*>/g) ?? [])
+    assert.ok(control.includes('disabled=""'), "tag edits remain disabled");
+  assert.ok(/<button[^>]*disabled=""[^>]*>변경 확인<\/button>/.test(readOnly));
+}
+// A resolved review shows an explicit re-review action (reviewer), never an
+// auto-open editor; it references the current head tag revision.
+const resolvedProps={...props,review:{...props.review,status:"resolved",revision:2},
+headTagRevision:2};
+const resolved=renderToStaticMarkup(React.createElement(ReviewWorkspace,resolvedProps));
+assert.ok(resolved.includes("재검토 시작") && resolved.includes("이미 확정"));
+// A viewer never sees the re-review action for a resolved review.
+const resolvedViewer=renderToStaticMarkup(React.createElement(ReviewWorkspace,
+{...resolvedProps,session:{...props.session,role:"viewer"}}));
+assert.ok(!resolvedViewer.includes("재검토 시작"));
 console.log("ReviewWorkspace React render/accessibility/text-escaping checks passed");
 """.replace("REACT", json.dumps(str(root / "apps/web/node_modules/react/index.js")))
         .replace("SERVER", json.dumps(str(root / "apps/web/node_modules/react-dom/server.node.js")))
@@ -488,3 +565,216 @@ def test_scoped_roles_are_enforced_by_tagging_and_human_review(
     else:
         assert len(after["tags"]) == 2
         assert after["tags"][0] == before["tags"][0]
+
+
+# --- R24: explicit re-review of an already-resolved review (repeat improvement).
+
+
+def test_re_review_open_review_rejected_use_resolve_first(tmp_path):
+    """A still-open review cannot use the re-review action; 412 STALE_REVIEW_REVISION."""
+    ws = workspace(tmp_path)
+    before = ws[1].store.history(TENANT, RUN, ws[3]["claim_id"])
+    response = re_review(ws)
+    assert response.status_code == 412
+    assert response.json()["error"]["code"] == "STALE_REVIEW_REVISION"
+    assert ws[1].store.history(TENANT, RUN, ws[3]["claim_id"]) == before
+
+
+def test_re_review_appends_next_revision_and_preserves_prior_history(tmp_path):
+    """Resolve once, then explicitly re-review on the current head: prior
+    tag/decision revisions are immutable, a new revision is appended, provenance
+    stays human, and no grade is invented."""
+    ws = workspace(tmp_path)
+    service, review = ws[1], ws[3]
+    first = post(ws)
+    assert first.status_code == 200, first.text
+    assert first.json()["review"]["revision"] == first.json()["new_tag_revision"] == 2
+    before = service.store.history(TENANT, RUN, review["claim_id"])
+    assert len(before["tags"]) == 2 and len(before["decisions"]) == 1
+
+    head_tag_revision = before["tags"][-1]["tag_revision"]
+    body = ws[4] | {"base_tag_revision": head_tag_revision, "reason": "재검토: 동일 근거 재확인"}
+    headers = ws[5] | {"If-Match": '"2"', "Idempotency-Key": "re-review-key-0001"}
+    second = re_review(ws, body=body, headers=headers)
+    assert second.status_code == 200, second.text
+    result = second.json()
+    assert result["review"]["status"] == "resolved"
+    assert result["review"]["revision"] == 3
+    assert result["new_tag_revision"] == 3
+    assert result["decision"]["review_status"] == "human_confirmed"
+    assert result["decision"]["label"] is None
+    assert result["decision"]["evidence_grade"] is None
+
+    after = service.store.history(TENANT, RUN, review["claim_id"])
+    # Prior immutable revisions unchanged; exactly one new tag and decision.
+    assert after["tags"][: len(before["tags"])] == before["tags"]
+    assert after["decisions"][: len(before["decisions"])] == before["decisions"]
+    assert len(after["tags"]) == 3 and len(after["decisions"]) == 2
+    # The re-review audit event is honestly distinct from the first resolve.
+    from proofops.adapters.local.audit_store import LocalSQLiteAuditStore
+
+    events = LocalSQLiteAuditStore(service.store.jobs.path).events(TENANT, RUN)
+    actions = [e.action for e in events]
+    assert "review_resolved" in actions and "review_rereviewed" in actions
+
+
+def test_re_review_stale_if_match_and_idempotency_retained(tmp_path):
+    ws = workspace(tmp_path)
+    service, review = ws[1], ws[3]
+    assert post(ws).status_code == 200
+    head_tag_revision = service.store.history(TENANT, RUN, review["claim_id"])["tags"][-1][
+        "tag_revision"
+    ]
+    body = ws[4] | {"base_tag_revision": head_tag_revision, "reason": "재검토 경합"}
+    # Stale If-Match (still pointing at revision 1) is rejected without writes.
+    before = service.store.history(TENANT, RUN, review["claim_id"])
+    stale = re_review(
+        ws, body=body, headers=ws[5] | {"If-Match": '"1"', "Idempotency-Key": "rr-stale-00000001"}
+    )
+    assert stale.status_code == 412
+    assert service.store.history(TENANT, RUN, review["claim_id"]) == before
+    # Correct If-Match succeeds; identical replay returns same result, changed body conflicts.
+    ok_headers = ws[5] | {"If-Match": '"2"', "Idempotency-Key": "rr-ok-0000000001"}
+    first = re_review(ws, body=body, headers=ok_headers)
+    assert first.status_code == 200, first.text
+    assert re_review(ws, body=body, headers=ok_headers).json() == first.json()
+    conflict = re_review(ws, body=body | {"reason": "다른 재검토 사유"}, headers=ok_headers)
+    assert conflict.status_code == 409
+
+
+def test_re_review_cross_tenant_hidden_and_csrf_required(tmp_path):
+    ws = workspace(tmp_path)
+    assert post(ws).status_code == 200
+    head_tag_revision = ws[1].store.history(TENANT, RUN, ws[3]["claim_id"])["tags"][-1][
+        "tag_revision"
+    ]
+    body = ws[4] | {"base_tag_revision": head_tag_revision, "reason": "재검토 권한 검사"}
+    assert (
+        re_review(
+            ws, body=body, headers=ws[5] | {"If-Match": '"2"', "X-CSRF-Token": "wrong"}
+        ).status_code
+        == 403
+    )
+    from dataclasses import replace
+    from uuid import uuid4
+
+    from proofops.application.authorization import MembershipRecord
+
+    auth = ws[-1]
+    other = str(uuid4())
+    auth.memberships.put(MembershipRecord(other, "admin-user", "reviewer", "active"))
+    auth.sessions.put_with_token(
+        replace(auth.sessions.get("admin-session"), active_tenant_id=other), ws[5]["X-CSRF-Token"]
+    )
+    assert re_review(ws, body=body, headers=ws[5] | {"If-Match": '"2"'}).status_code == 404
+
+
+def test_re_review_human_route_cannot_forge_ai_metadata(tmp_path):
+    """The HTTP re-review body cannot self-assert AI-delegated provenance; the
+    resulting tag stays human origin regardless of injected keys."""
+    ws = workspace(tmp_path)
+    service, review = ws[1], ws[3]
+    assert post(ws).status_code == 200
+    head_tag_revision = service.store.history(TENANT, RUN, review["claim_id"])["tags"][-1][
+        "tag_revision"
+    ]
+    # Any extra key (attempting to forge origin/delegation) is rejected by StrictDTO.
+    forged = ws[4] | {
+        "base_tag_revision": head_tag_revision,
+        "reason": "위조 시도",
+        "review_origin": "ai_project_interpretation",
+        "delegated_reviewer": "attacker",
+    }
+    assert (
+        re_review(
+            ws,
+            body=forged,
+            headers=ws[5] | {"If-Match": '"2"', "Idempotency-Key": "rr-forge-00000001"},
+        ).status_code
+        == 422
+    )
+    # A clean re-review stays honestly human.
+    clean = ws[4] | {"base_tag_revision": head_tag_revision, "reason": "정상 재검토"}
+    ok = re_review(
+        ws, body=clean, headers=ws[5] | {"If-Match": '"2"', "Idempotency-Key": "rr-clean-00000001"}
+    )
+    assert ok.status_code == 200, ok.text
+    tag = service.store.history(TENANT, RUN, review["claim_id"])["tags"][-1]
+    assert tag["origin"] == "human"
+    assert "review_origin" not in tag and "delegated_reviewer" not in tag
+
+
+def test_re_review_endpoint_in_openapi_contract(tmp_path):
+    ws = workspace(tmp_path)
+    paths = ws[0].app.openapi()["paths"]
+    assert "/v1/reviews/{review_id}/re-review" in paths
+    operation = paths["/v1/reviews/{review_id}/re-review"]["post"]
+    assert operation["operationId"] == "review_re_review"
+    assert operation["requestBody"]["required"] is True
+    assert any(p["name"] == "If-Match" and p["required"] for p in operation["parameters"])
+
+
+def test_third_re_review_tracks_current_head_and_replay_compat(tmp_path):
+    """A third re-review must base on the current head (revision 3 -> 4), old
+    resolve idempotency identity is preserved (reopen=False hash unchanged), and
+    the reopen replay is keyed independently."""
+    ws = workspace(tmp_path)
+    service, review = ws[1], ws[3]
+    assert post(ws).status_code == 200  # rev 1 -> 2
+    hist = service.store.history(TENANT, RUN, review["claim_id"])
+    head2 = hist["tags"][-1]["tag_revision"]
+    r3 = re_review(
+        ws,
+        body=ws[4] | {"base_tag_revision": head2, "reason": "두번째 재검토"},
+        headers=ws[5] | {"If-Match": '"2"', "Idempotency-Key": "rr-second-00000001"},
+    )
+    assert r3.status_code == 200, r3.text
+    assert r3.json()["review"]["revision"] == 3
+    head3 = service.store.history(TENANT, RUN, review["claim_id"])["tags"][-1]["tag_revision"]
+    assert head3 == 3
+    r4 = re_review(
+        ws,
+        body=ws[4] | {"base_tag_revision": head3, "reason": "세번째 재검토"},
+        headers=ws[5] | {"If-Match": '"3"', "Idempotency-Key": "rr-third-00000001"},
+    )
+    assert r4.status_code == 200, r4.text
+    assert r4.json()["review"]["revision"] == 4
+    assert r4.json()["new_tag_revision"] == 4
+    # Using a stale head (2) on the current head-3 review is rejected.
+    stale_head = re_review(
+        ws,
+        body=ws[4] | {"base_tag_revision": head2, "reason": "낡은 head"},
+        headers=ws[5] | {"If-Match": '"4"', "Idempotency-Key": "rr-stalehd-0000001"},
+    )
+    assert stale_head.status_code == 412
+
+
+def test_old_resolve_idempotency_receipt_replays_after_reopen_support(tmp_path):
+    """A real stored ordinary-resolve idempotency receipt must still replay
+    byte-for-byte after re-review support was added (the reopen marker must not
+    perturb the reopen=False identity). Same key + same body returns the exact
+    prior response; a changed body conflicts."""
+    ws = workspace(tmp_path)
+    service, review = ws[1], ws[3]
+    headers = ws[5] | {"Idempotency-Key": "legacy-resolve-000001"}
+    first = post(ws, headers=headers)
+    assert first.status_code == 200, first.text
+    # A real second call with the identical key/body replays the stored receipt.
+    replay = post(ws, headers=headers)
+    assert replay.status_code == 200
+    assert replay.json() == first.json()
+    # Confirm the stored receipt's request_hash uses the legacy 3-tuple identity.
+    import json as _json
+
+    from proofops.domain.provenance import canonical_hash
+
+    jobs = service.store.jobs
+    replay_key = canonical_hash(["admin-user", "review_resolve", "legacy-resolve-000001"])
+    with jobs._transaction() as db:
+        row = db.execute(
+            "SELECT value FROM job_records WHERE kind='review_idempotency' AND record_id=?",
+            (replay_key,),
+        ).fetchone()
+    stored = _json.loads(row[0])
+    legacy_hash = canonical_hash([review["review_id"], ws[4], 1])
+    assert stored["request_hash"] == legacy_hash

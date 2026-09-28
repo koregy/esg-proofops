@@ -26,6 +26,8 @@ from proofops.application.reconciliation.presentation import project_result
 from proofops.application.reconciliation.schema import validate_schema
 from proofops.application.reconciliation.service import canonical_sha256, reconcile
 from proofops.application.reconciliation.sources import MAX_SOURCE_BYTES
+from proofops.domain.provenance import canonical_hash
+from proofops.domain.rules.engine import MAPPINGS
 
 SCHEMA_VERSION = 1
 IMMUTABLE_TABLES = (
@@ -373,8 +375,6 @@ class LocalReconciliationStore:
         """
         try:
             run_snapshot = self.run_store.snapshot(tenant, run_id)
-            with self.jobs._transaction() as db:
-                run = self.jobs._get(db, tenant, run_id, "run", "META")
             claim = self.claims.get(tenant, run_id, claim_id)
         except (KeyError, ValueError) as error:
             raise ReconciliationRejected("RESOURCE_NOT_FOUND", 404) from error
@@ -382,10 +382,15 @@ class LocalReconciliationStore:
             raise ReconciliationRejected("RESOURCE_NOT_FOUND", 404)
         if getattr(claim, "source_quality", None) != "verified":
             raise ReconciliationRejected("CLAIM_NOT_VERIFIED", 422)
-        current = self.claims.current_tag(tenant, run_id, claim_id)
-        if current is None:
-            raise ReconciliationRejected("CLAIM_NOT_VERIFIED", 422)
-        track = self._verified_track(tenant, run_id, claim_id)
+        try:
+            with self.jobs._transaction() as db:
+                run = self.jobs._get(db, tenant, run_id, "run", "META")
+                head = self._reviewed_head(db, tenant, run_id, claim)
+        except ReconciliationRejected:
+            raise
+        except (KeyError, ValueError) as error:
+            raise ReconciliationRejected("RESOURCE_NOT_FOUND", 404) from error
+        track = head["track"]
 
         document = run_snapshot["document"]
         identity = packet["identity"]
@@ -411,25 +416,77 @@ class LocalReconciliationStore:
         return {
             "document_version_id": claim.document_version_id,
             "company_id": expected["company_id"],
-            "tag_revision": current["tag"]["tag_revision"],
+            "tag_revision": head["tag_revision"],
             "mutation_epoch": run["mutation_epoch"],
             "source_quality": claim.source_quality,
             "track": track,
             "synthetic": synthetic,
         }
 
-    def _verified_track(self, tenant, run_id, claim_id) -> str:
-        """The track comes from the published tag inputs, not from the draft."""
+    def _reviewed_head(self, db, tenant, run_id, claim) -> dict[str, Any]:
+        """Revision AND track of the CURRENT accepted tag head, from one atomic read.
+
+        The revision authority is the atomic `claim_head`, read in the caller's
+        transaction -- never `history()[-1]`, and never the head row's own
+        `tag_revision`, which a tampered row can make agree with itself.
+
+        The track comes from the SAME head. This replaces a separate
+        `tags.load_inputs(...).packet` read, which always returned the ORIGINAL
+        tag-stage packet: accepted reviews write new immutable revisions and move
+        `claim_head` while that published packet is never rewritten, so a claim a
+        real review moved to another track kept anchoring cases on the track it
+        had been moved off.
+
+        A confirmed head must carry the canonical `ConfirmedTags` identity in
+        full; missing, foreign or empty is blocked, never accepted or fallen back
+        on. Only the ORIGINAL unconfirmed revision 1 may use its own pinned
+        preliminary packet, so the no-review behaviour is unchanged and a
+        reviewed head can never reach a superseded revision's track. The
+        `input_snapshot_sha256` pin `export_store` enforces is kept here too,
+        since dropping `load_inputs` dropped its validation.
+        """
         if self.tags is None:
+            # Preserved precondition: with no published tag store there is no
+            # tagging evidence to anchor a case against at all.
             raise ReconciliationRejected("TAG_INPUTS_UNAVAILABLE", 409)
-        try:
-            inputs = self.tags.load_inputs(tenant, run_id, claim_id)
-            track = inputs.packet.to_dict()["track"]
-        except (AttributeError, KeyError, TypeError, ValueError) as error:
-            raise ReconciliationRejected("CLAIM_NOT_VERIFIED", 422) from error
-        if not isinstance(track, str) or not track:
+        current = self.claims.current_tag(tenant, run_id, claim.claim_id, connection=db)
+        if current is None:
             raise ReconciliationRejected("CLAIM_NOT_VERIFIED", 422)
-        return track
+        revision = self.jobs._get(db, tenant, run_id, "claim_head", claim.claim_id)["tag_revision"]
+        tag = current["tag"]
+        if not isinstance(tag, Mapping) or tag.get("tag_revision") != revision:
+            raise ReconciliationRejected("TAG_HEAD_UNACCOUNTABLE", 409)
+
+        # A reviewed head keeps no `inputs` of its own; its snapshot hash must
+        # still match the immutable revision-1 inputs.
+        original = self.jobs._raw(db, tenant, run_id, "tag_revision", f"{claim.claim_id}:{1:010}")
+        inputs = tag.get("inputs")
+        if inputs is None and original is not None:
+            inputs = json.loads(original).get("inputs")
+        snapshot_sha256 = tag.get("input_snapshot_sha256")
+        if snapshot_sha256 is not None and (
+            inputs is None or snapshot_sha256 != canonical_hash(inputs)
+        ):
+            raise ReconciliationRejected("TAG_HEAD_UNACCOUNTABLE", 409)
+
+        confirmed = tag.get("confirmed_tags")
+        if confirmed is None:
+            if revision != 1:
+                raise ReconciliationRejected("TAG_HEAD_UNACCOUNTABLE", 409)
+            packet = (tag.get("inputs") or {}).get("packet")
+            track = packet.get("track") if isinstance(packet, Mapping) else None
+        else:
+            if not isinstance(confirmed, Mapping) or (
+                confirmed.get("tenant_id"),
+                confirmed.get("document_version_id"),
+                confirmed.get("claim_id"),
+                confirmed.get("tag_revision"),
+            ) != (tenant, claim.document_version_id, claim.claim_id, revision):
+                raise ReconciliationRejected("TAG_HEAD_UNACCOUNTABLE", 409)
+            track = confirmed.get("track")
+        if not isinstance(track, str) or track not in MAPPINGS:
+            raise ReconciliationRejected("CLAIM_NOT_VERIFIED", 422)
+        return {"tag_revision": revision, "track": track}
 
     def _import_artifacts(self, tenant, case_id, artifacts, packet, source_root) -> list[dict]:
         """Copy operator originals into the managed store, then prove every locator.

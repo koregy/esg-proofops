@@ -21,7 +21,11 @@ from proofops.application.preflight import (
     combine_build_checks,
 )
 from proofops.application.registry import RegistryNotFound, artifact_sha256
+from proofops.application.tagging.consensus import PARTIAL_FACTS_V1
 from proofops.application.tagging.relations import SYSTEM_PROMPT as RELATION_SYSTEM_PROMPT
+from proofops.application.tagging.report_level_link import (
+    validate_config as validate_report_level_link,
+)
 from proofops.application.tagging.service import TaggingSettings
 from proofops.application.uploads_security import UploadRejected
 from proofops.domain.provenance import canonical_hash
@@ -137,11 +141,14 @@ class RunService:
         claim_source_policy=None,
         tagging_settings: TaggingSettings | None = None,
         tagging_mode: str | None = None,
+        fact_assembly_profile: str = "strict-v1",
+        report_level_link=None,
         preliminary_settings: TaggingSettings | None = None,
         relation_settings: TaggingSettings | None = None,
         raster_runtime_binding_id: str | None = None,
         raster_policy=None,
         input_reservation_policy=None,
+        position_context_order=None,
         budget_limits=None,
         allowed_regions=(),
         build_result=None,
@@ -195,13 +202,40 @@ class RunService:
                 # Opt-in bullet-alignment wrapper (R19), which wraps the one
                 # above rather than replacing it. Same refusal guarantee.
                 "claim_span_bullet_alignment_policy_v1",
+                # Opt-in rendered-side-only typography wrapper (R24), which
+                # wraps the one above. Same refusal guarantee.
+                "claim_span_typography_policy_v1",
             }
             or extraction_mode != "upstage_probe"
         ):
             raise ValueError("invalid claim source policy")
         self.claim_source_policy = _detach(claim_source_policy)
         self.tagging_settings, self.tagging_mode = tagging_settings, tagging_mode
+        if report_level_link is not None and (tagging_mode is None or tagging_settings is None):
+            raise ValueError("report-level link requires tagging")
+        if fact_assembly_profile not in ("strict-v1", PARTIAL_FACTS_V1):
+            raise ValueError("unknown fact assembly profile")
+        self.fact_assembly_profile = fact_assembly_profile
+        self.report_level_link = (
+            _detach(validate_report_level_link(report_level_link))
+            if report_level_link is not None
+            else None
+        )
         self.preliminary_settings = preliminary_settings
+        if position_context_order is not None:
+            from proofops.application.tagging.preliminary import CONTEXT_POSITION_ORDER
+
+            if position_context_order != CONTEXT_POSITION_ORDER:
+                raise ValueError("invalid context order policy")
+        if preliminary_settings is not None and (position_context_order is not None) != (
+            preliminary_settings.model_profile
+            in {
+                "upstage-preliminary-source-quotes-table-role-v1-position-v1",
+                "upstage-preliminary-source-quotes-table-role-v2-p2-position-v1",
+            }
+        ):
+            raise ValueError("context order profile mismatch")
+        self.position_context_order = position_context_order
         self.relation_settings = relation_settings
         if (raster_runtime_binding_id is None) != (raster_policy is None):
             raise ValueError("complete raster configuration required")
@@ -222,6 +256,8 @@ class RunService:
         self.local_synthetic = True
 
     def create(self, auth, body: dict[str, Any], key: str):
+        if self.report_level_link is not None:
+            validate_report_level_link(self.report_level_link)
         created_time = self.clock()
         now = int(created_time)
         replay = self.store.replay(auth.tenant_id, body, key, now=now)
@@ -382,10 +418,19 @@ class RunService:
                 # below, so this set only names the accepted profiles.
                 "upstage-preliminary-source-quotes-table-v1",
                 "upstage-preliminary-source-quotes-table-role-v1",
+                "upstage-preliminary-source-quotes-table-role-v1-position-v1",
+                "upstage-preliminary-source-quotes-table-role-v2-p2",
+                "upstage-preliminary-source-quotes-table-role-v2-p2-position-v1",
+                # R34 opt-in goal-role profile; requires table-role and its deps.
+                "upstage-preliminary-source-quotes-goal-role-v1",
+                "upstage-preliminary-source-quotes-actor-role-v1",
+                "upstage-preliminary-source-quotes-actor-role-v2",
             } or tagging.model_profile not in {
                 "upstage-compact-ids-frozen-unicode-v1",
                 "upstage-compact-coverage-unicode-v2",
                 "upstage-compact-source-quotes-v3",
+                "upstage-compact-source-quotes-v4",
+                "upstage-compact-source-quotes-v5",
             }:
                 raise RunRejected("CONFIG_GATE_BLOCKED")
             if relation is not None and (
@@ -513,6 +558,10 @@ class RunService:
                 tagging_settings_hash=canonical_hash(asdict(tagging)),
                 tagging_mode=self.tagging_mode,
             )
+            if self.fact_assembly_profile == PARTIAL_FACTS_V1:
+                snapshot["fact_assembly_profile"] = PARTIAL_FACTS_V1
+            if self.report_level_link is not None:
+                snapshot["report_level_link"] = _detach(self.report_level_link)
         if live_tagging:
             assert isinstance(preliminary, TaggingSettings)
             assert isinstance(tagging, TaggingSettings)
@@ -520,6 +569,7 @@ class RunService:
             snapshot.update(
                 preliminary_settings=asdict(preliminary),
                 preliminary_settings_hash=canonical_hash(asdict(preliminary)),
+                preliminary_prompt_sha256=canonical_hash(preliminary.system_prompt),
                 preliminary_runtime=preliminary_runtime,
                 preliminary_runtime_artifact_hash=artifact_sha256(preliminary_runtime),
                 tagging_runtime=tagging_runtime,
@@ -535,6 +585,8 @@ class RunService:
                     relation_runtime_artifact_hash=artifact_sha256(relation_runtime),
                 )
         snapshot.update(raster_snapshot)
+        if self.position_context_order is not None:
+            snapshot["position_context_order"] = dict(self.position_context_order)
         return self.store.create(auth, body, key, snapshot, self.budget_limits, now=now)
 
     def get(self, tenant_id, run_id):

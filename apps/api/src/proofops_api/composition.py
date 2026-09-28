@@ -20,6 +20,7 @@ from typing import Any
 from proofops.adapters.local.analysis_store import LocalAnalysisStore
 from proofops.adapters.local.assurance_store import LocalAssuranceStore
 from proofops.adapters.local.claim_store import LocalClaimStore
+from proofops.adapters.local.classification_store import LocalSQLiteClassificationStore
 from proofops.adapters.local.comparison_store import LocalComparisonStore
 from proofops.adapters.local.evaluation_store import LocalEvaluationStore
 from proofops.adapters.local.export_store import LocalExportStore
@@ -60,6 +61,7 @@ class ApiComposition:
     claims: LocalClaimStore
     tags: LocalTagStore
     reviews: ReviewService
+    classifications: LocalSQLiteClassificationStore
     source_conditions: LocalSourceConditionReview
     rescores: RescoreService
     summaries: LocalSummaryStore
@@ -144,11 +146,19 @@ def build_composition() -> ApiComposition:
         parser=parser,
         claims=claims,
         tags=tags,
+        classifications=LocalSQLiteClassificationStore(runs.store, uploads, parser, tags, claims),
         reviews=ReviewService(
-            LocalSQLiteReviewStore(runs.store.jobs), load_inputs=tags.load_inputs
+            LocalSQLiteReviewStore(runs.store.jobs),
+            load_inputs=tags.load_inputs,
+            verify_context_sources=tags.verify_context_sources,
+            load_run_snapshot=runs.store.snapshot,
         ),
         source_conditions=LocalSourceConditionReview(runs.store, uploads, parser),
-        rescores=RescoreService(LocalSQLiteRescoreStore(runs.store), load_inputs=tags.load_inputs),
+        rescores=RescoreService(
+            LocalSQLiteRescoreStore(runs.store),
+            load_inputs=tags.load_inputs,
+            verify_context_sources=tags.verify_context_sources,
+        ),
         summaries=LocalSummaryStore(runs.store, claims),
         evaluations=LocalEvaluationStore(database_path),
         analysis=LocalAnalysisStore(runs.store, uploads, parser, claims, tags, assurance=assurance),

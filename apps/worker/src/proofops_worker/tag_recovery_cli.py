@@ -85,7 +85,7 @@ def _authorize(runner, options) -> int:
         applied=bool(options.confirm),
         plan=plan.to_dict(),
         class_counts=proof["class_counts"],
-        proposed_new_requests=len(plan.claim_ids) * 3,
+        proposed_new_requests=len(plan.claim_ids) * 9,
         max_new_requests=plan.max_new_requests,
     )
     if not options.confirm:

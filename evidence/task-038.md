@@ -117,7 +117,7 @@ Python 3.12.13. These are synthetic input runs, not product image certification.
 Final command (exit 0):
 
 ```sh
-docker run --rm --pull never --network none --read-only --user 10001:10001 --memory 512m --cpus 1 --pids-limit 32 --cap-drop ALL --security-opt no-new-privileges --tmpfs /tmp:rw,noexec,nosuid,nodev,size=268435456 --mount type=bind,src=/Users/ss020/Dev/ESG_ProofOps/packages/proofops,dst=/verification/proofops,readonly --mount type=bind,src=/tmp/proofops-task038-linux-check.py,dst=/verification/check.py,readonly --mount type=bind,src=/Users/ss020/Dev/ESG_ProofOps/.venv/lib/python3.12/site-packages/pypdf,dst=/app/.venv/lib/python3.12/site-packages/pypdf,readonly --entrypoint python esg-proofops-runtime:sealed -I /verification/check.py
+docker run --rm --pull never --network none --read-only --user 10001:10001 --memory 512m --cpus 1 --pids-limit 32 --cap-drop ALL --security-opt no-new-privileges --tmpfs /tmp:rw,noexec,nosuid,nodev,size=268435456 --mount type=bind,src=<local-project-root>/packages/proofops,dst=/verification/proofops,readonly --mount type=bind,src=/tmp/proofops-task038-linux-check.py,dst=/verification/check.py,readonly --mount type=bind,src=<local-project-root>/.venv/lib/python3.12/site-packages/pypdf,dst=/app/.venv/lib/python3.12/site-packages/pypdf,readonly --entrypoint python esg-proofops-runtime:sealed -I /verification/check.py
 ```
 
 Actual output:

@@ -25,6 +25,7 @@ from proofops.domain.numeric import (
     NumericSnapshot,
     check_numeric_consistency,
     observation_source_holds,
+    validated_condition_ids,
 )
 
 # A claim with no accepted, source-backed binding is not a numeric finding.
@@ -142,8 +143,13 @@ def analyze_numeric_consistency(
     outcomes: list[NumericCheckOutcome] = []
     for result in results:
         binding = binding_by_claim[result.claim_id]
+        accepted_notes = validated_condition_ids(
+            binding,
+            original,
+            tuple(indexed[oid] for oid in binding.observation_ids if oid in indexed),
+        )
         holds = tuple(
-            observation_source_holds(indexed[oid], original)
+            observation_source_holds(indexed[oid], original, accepted_note_ids=accepted_notes)
             for oid in binding.observation_ids
             if oid in indexed
         )

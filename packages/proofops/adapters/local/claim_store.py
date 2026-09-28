@@ -146,6 +146,11 @@ class LocalClaimStore:
                 return claim
         raise KeyError("claim not found")
 
+    def submitted_reviews(self, tenant_id, run_id, claim_id=None, *, connection=None):
+        from proofops.adapters.local.submitted_review import read_submissions
+
+        return read_submissions(self, tenant_id, run_id, claim_id, connection=connection)
+
     def current_tag(self, tenant_id: str, run_id: str, claim_id: str, *, connection=None):
         """Read one atomic head; immutable prior revisions are never scanned."""
         if connection is None:

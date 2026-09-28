@@ -72,3 +72,22 @@ cross-tenant/source-tamper rejection, unchanged GPM, reviewed vs pending behavio
 policy-unapproved C3, real-source lineage, browser failure and stale-response cases,
 type/lint/build and focused regression. Real collection and actual-company semantic
 accuracy are separate results. Missing external approval remains visibly pending.
+
+## A-side C2 period input (2026-09-22)
+
+`linkage_exchange_cli.py build-packet --item C2 --c2-period-context FILE` accepts
+only `normalized`, `source_id`, `quote`. Dates use `YYYY-MM-DD/YYYY-MM-DD` and
+must match one explicit ordered range in the literal. Korean full dates and ISO
+dates are supported; ambiguous/multiple ranges remain blocked. No approval flag
+is accepted. This adds no HTTP/DB field or migration; older C1/C3/C4 callers are
+unchanged. C2 without a supported period stays blocked, replacing the former
+incompatible `facility_set` output.
+
+C2 requires a confirmed performance fact with an explicit numeric/unit literal;
+categorical certification and year-only literals do not create a trigger. Units
+are limited to the existing numeric domain's unit vocabulary. Period evidence
+must belong to that fact, match its quote, and retain current-head identity and
+source-byte verification. A separate report-wide period cannot silently become
+an individual metric's period. Source-verified operator drafts remain distinct
+from engine-ready packets and cannot approve policy, promote an unconfirmed tag,
+or clear `local_synthetic`.

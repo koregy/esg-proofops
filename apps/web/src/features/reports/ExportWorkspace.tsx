@@ -73,8 +73,9 @@ function stateText(state: ExportSnapshot["state"]): string {
 }
 
 export function ExportWorkspace({ apiBase = "", csrfToken, tenantKey, runId, onSessionInvalid }: Props) {
-  const [selected, setSelected] = useState<ExportFormat[]>(["json"]);
-  const [allowPartial, setAllowPartial] = useState(false);
+  // Review drafts are explicit partial requests; API defaults and final-result checks are unchanged.
+  const [selected, setSelected] = useState<ExportFormat[]>(["json", "csv", "html"]);
+  const [allowPartial, setAllowPartial] = useState(true);
   const [tracked, setTracked] = useState<TrackedExport[]>([]);
   const [links, setLinks] = useState<Record<string, DownloadLink>>({});
   const [busy, setBusy] = useState(false);
@@ -147,8 +148,8 @@ export function ExportWorkspace({ apiBase = "", csrfToken, tenantKey, runId, onS
     const scopeChanged = previousScope.current !== null && previousScope.current !== scope;
     previousScope.current = scope;
     clearPrivateState();
-    setSelected(["json"]);
-    setAllowPartial(false);
+    setSelected(["json", "csv", "html"]);
+    setAllowPartial(true);
     setMessage(null);
 
     const page = new URL(window.location.href);
@@ -340,7 +341,7 @@ export function ExportWorkspace({ apiBase = "", csrfToken, tenantKey, runId, onS
         <label>
           <input name="allow-partial" type="checkbox" checked={allowPartial} onChange={event => setAllowPartial(event.target.checked)} /> 부분 결과 허용
         </label>
-        <p>기본값은 허용 안 함입니다. 부분 결과는 최종본이 아닌 검토용으로 표시됩니다.</p>
+        <p>미완료 항목을 포함한 검토용 결과입니다. 최종본이 아닙니다. 체크를 해제하면 완료된 결과만 내보냅니다.</p>
         {selected.length === 0 ? <p role="alert">형식을 하나 이상 선택하세요.</p> : null}
         <button type="submit" disabled={busy || selected.length === 0} style={{ minHeight: 44 }}>
           {busy ? "처리 중…" : createRequest.current ? "다시 시도" : created.length ? "새 내보내기 생성" : "내보내기 생성"}

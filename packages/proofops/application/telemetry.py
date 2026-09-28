@@ -30,7 +30,7 @@ PDF_PASSWORD_REQUIRED UPLOAD_LIMIT_EXCEEDED PARSE_TIMEOUT PARSE_RESOURCE_LIMIT P
 SOURCE_UNREADABLE CITATION_INVALID BINDING_UNCERTAIN LLM_SCHEMA_INVALID LLM_TRUNCATED
 MODEL_THROTTLED PROVIDER_5XX MODEL_UNAVAILABLE REGION_DENIED BUDGET_EXHAUSTED RULE_GAP
 BASIS_UNVERIFIED RETAG_REQUIRED EXPORT_SNAPSHOT_BUSY REPORT_NOT_FINALIZABLE LEASE_LOST
-DEPENDENCY_UNAVAILABLE SQS_RECEIVE_LIMIT""".split()
+DEPENDENCY_UNAVAILABLE SQS_RECEIVE_LIMIT LEASE_HEARTBEAT_FAILED UNEXPECTED_ERROR""".split()
 )
 _METRICS = frozenset(
     """queue_oldest_age job_retry_count dlq_messages parser_page_count
@@ -153,7 +153,19 @@ class Telemetry:
             "model_binding_hash": context.model_binding_hash,
             "request_signature": context.request_signature,
             "provider_request_id": self._hash(event.get("provider_request_id")),
+            "exception_type": (
+                event["exception_type"]
+                if type(event.get("exception_type")) is str
+                and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", event["exception_type"])
+                else None
+            ),
+            "last_successful_heartbeat_at": None,
         }
+        heartbeat_at = event.get("last_successful_heartbeat_at")
+        if type(heartbeat_at) is int and 0 <= heartbeat_at <= 253_402_300_799:
+            row["last_successful_heartbeat_at"] = (
+                datetime.fromtimestamp(heartbeat_at, UTC).isoformat().replace("+00:00", "Z")
+            )
         for name in _COUNTS:
             value = event.get(name)
             row[name] = value if type(value) is int and 0 <= value <= 2**63 - 1 else None

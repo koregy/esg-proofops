@@ -76,3 +76,164 @@ A가 접근 가능한 공유 저장소 기준(마지막 확인 commit ff61f41)�
 그대로 기록하고 `review_origin=ai_project_interpretation`을 유지한다(법·회계 전문가
 승인으로 위장하지 않음). D의 원문·사례 제공은 여전히 유효하지만, 없다는 이유로 조정자의
 채택 자체가 막히지는 않는다.
+
+## 7. 사용자 도메인 결정 — 2026-09-25 (규칙집 `proofops-domain-v2.0-impl2`)
+
+사용자(프로젝트 책임자)가 채팅에서 직접 결정했다. AI 위임 해석이 아니라 사용자 결정이다.
+
+- **A-1 승인:** 원문 §4.4 트랙별 등급 사다리를 그대로 채점 규칙으로 쓴다. 범위는 시연·내부 검토용이며
+  법적 효력, 조항 번호 검증, 고객 공시 승인이 아니다. GAP-001/002/004~010은 그대로 미해결이다.
+- **A-2 (GAP-003 해소, 선택지 가):** 등급은 §4.4 사다리 요소만으로 계산한다. §4.5의 추가 요소
+  (G7·G8·P5·P6·M4·M5·M6)는 등급을 바꾸지 않고 `missing_elements`/`unresolved_elements`에 남긴다.
+  추가 요소가 미확정이면 `review_status=needs_review`다. 감점 규칙을 만들지 않았다.
+
+구현: 트랙 rubric의 `additional_rubric_gap: GAP-003` → `additional_element_policy:
+report_without_grade_effect`, manifest `unresolved_gap_ids`에서 GAP-003 제거, 규칙집 파일 10개
+`version`을 impl2·`effective_date`를 2026-09-25로 변경. 엔진은 정책 키가 없는 규칙집(impl1)에서
+기존 차단 동작을 그대로 유지하므로 기존 run에 고정된 impl1 판정은 재현성이 유지된다. 알 수 없는
+정책 값은 fail-closed다.
+
+호환성·롤백: API/DB 형태 변경 없음, migration 없음. 기존 태깅·판정 revision과 보고서는 불변이다.
+새 규칙집은 새 run 또는 명시적 재채점에만 적용된다. 롤백은 config를 impl1로 되돌리면 되고,
+이미 impl2로 만든 판정 revision은 보존된다.
+
+실제 효과(읽기 전용 측정): 원문 검토 태그가 있는 NAVER 29·KB 4 주장 head를 impl1/impl2로 다시
+평가했다. 저장된 판정과 impl1 재평가는 33/33 일치했고, impl2에서도 등급은 0건 그대로다. 막는 원인은
+추가 요소가 아니라 사다리 요소의 unknown이다(관리체계 22건은 M2·M3 unknown으로 E1~E3 가능).
+absent는 검색 범위 검증이 있어야만 인정되므로, 등급 산출에는 다음 단계(가능 등급 범위 표시 또는
+문서 전역 근거 탐색의 부재 확인)가 필요하다.
+
+## 8. 사용자 결정 B — 가능 등급 범위 (2026-09-25, 엔진 `explicit-ladders-exceptions-3`)
+
+사다리 요소가 unknown이라 `blocked_evidence`인 주장에, 엔진이 이미 열거하던 도달 가능 등급의
+최소·최대를 `grade_range = {floor, ceiling, open_elements}`로 노출한다. 등급·라벨이 아니며
+`evidence_grade`/`label`은 계속 null이다. unknown을 absent로 바꾸지 않는다.
+
+- 노출 조건: 상태가 `blocked_evidence`이고 가능 등급이 둘 이상이며 모든 조합이 사다리 분기와
+  일치할 때만. 세이프하버·제품 변형 등 별도 경로(GAP-001/006/007), 사다리 분기가 없는 조합,
+  impl1의 GAP-003 차단에서는 null(후보 비공개 유지). `decided`이면 null.
+- `open_elements`: 범위를 좁히는 unresolved 사다리 요소만. 추가 요소(M4 등)는 포함하지 않는다.
+- API 계약: `Decision.grade_range`를 선택(optional) nullable 필드로 추가(openapi.yaml, api_models
+  schema 동일). required 목록 변경 없음, `decided`이면 null 강제. 엔진 v3 이전에 저장된 판정은
+  저장된 API 응답 그대로 필드가 없다(재작성 없음). 웹 타입도 optional.
+- 저장: 판정 revision JSON에 `grade_floor`/`grade_ceiling`/`grade_open_elements`가 추가된다.
+  migration 없음. 기존 레코드는 기본값으로 로드된다(rescore의 `Decision(**stored)` 포함).
+- 보고서: JSON `claims[].grade_range`, CSV 마지막 열 `grade_range`(기존 열 위치 불변), HTML·React
+  미리보기에 "가능 등급 범위: E1 ~ E3 (확정 등급 아님)". 이전 스냅샷은 null.
+- 롤백: 엔진 v2 코드로 되돌리면 새 판정에 범위가 생기지 않는다. 이미 저장된 v3 판정 revision과
+  보고서는 보존한다. 스키마의 optional 필드는 남겨도 이전 응답과 호환된다.
+
+실측(읽기 전용, 저장된 검토 태그): NAVER 29·KB 4 = 33 주장 중 27건에 범위가 생긴다.
+E1~E3 23건, E2~E3 3건, E0~E3 1건. 나머지 6건은 별도 세이프하버 경로 2건과 사다리 분기 공백 조합
+4건으로 null이다. 실제 저장 경로(재채점)는 기존 run이 비합성(real) run이고, 기존 rescore가
+`local_synthetic` run만 허용하므로 아직 쓰지 않았다(별도 결정 필요).
+
+## 9. 사용자 결정 — 실제 run 재채점 허용 (2026-09-25)
+
+`RescoreService`는 기존에 `local_synthetic` run만 재채점했다. 이제 비합성(real) run도 **대상 규칙집이
+active이고 approved_by/approved_at이 기록된 경우에만** 재채점한다. 아니면 `409 RULEPACK_APPROVAL_REQUIRED`
+이며 아무것도 쓰지 않는다. 원문 인용 재검증, 입력 snapshot/tag 핀, 테넌트·문서 identity, CAS, 불변
+revision 검사는 그대로다. 트랙 비교는 검토 revision(origin human/ai_delegated)이면 그 revision에
+기록된 트랙을 쓰고, 미검토 태그는 여전히 원래 packet 트랙과 같아야 한다(§4.2 재분류 경로).
+API/DB 형태 변경·migration 없음. 롤백은 조건을 이전처럼 `local_synthetic` 전용으로 되돌리면 되고,
+이미 기록된 재채점 판정과 receipt는 보존한다.
+
+실제 적용 결과(NAVER 검토 DB 사본 `.local/r37-naver-grade-range`, 원본 불변): impl2를 사용자 승인으로
+등록·활성화한 뒤 실제 HTTP 재채점을 호출했다. 입력 검사는 통과했으나 29건 모두 `RETAG_REQUIRED`로
+거절됐고 쓰기는 없었다. 원래 태깅이 규칙이 참조하는 사실을 수집하지 않았기 때문이다(관리체계 23건:
+governance_claim·compensation_link_claim·willingness_only, 목표 5건: offset_or_carbon_neutral_claim·
+science_based_claim, 성과 1건: reduction_or_improvement_claim). 수집되지 않은 사실을 unknown으로 간주하지
+않는 기존 가드(`test_uncollected_fact_is_not_manufactured_as_unknown_or_absent`)는 유지했다. 특히
+`willingness_only`는 규칙 파일에만 있고 이를 생산하는 태깅 프롬프트·스키마·검토 경로가 없다.
+
+후속(같은 날, 사용자 결정 1번): 적용성 검토가 관리체계 사다리의 `willingness_only`도 원자 주장 단위로
+받도록 확장했다(해당 사다리 분기가 있는 track만, track 변경 시 제거). NAVER 29건을 위임 AI 재검토로
+기록한 뒤 실제 run 재채점이 성공했다. 결과는 ROOT `outputs/agent-results/R37-grade-range/REPORT.md`.
+
+## 10. 사용자 결정 — M2·M3 문서 전역 인정 규칙 (2026-09-26)
+
+원문 §6 2-4는 적용범위·외부검증의 문서 전역 인정과 `credited_from` 기록을 요구하지만 주장과의 연결
+규칙은 정하지 않았다. 사용자가 다음 두 규칙을 승인했다. 검토자(사람·위임 AI)가 원문 span을 제시하고,
+코드(`application/evidence/report_level.py`)가 문자 그대로의 연결만 확인한다. 검색·추론은 하지 않는다.
+
+- **M3 `GRI_ASSURED_PAGE_V1`:** 요소 `reason_code`로 지정. refs = [GRI Index 행, 검증 대상 목록, 검증 기준].
+  주장의 인쇄 쪽 번호가 GRI Index 행("공시번호 항목명 쪽범위", 사이에 다른 공시번호 없음)의 쪽 범위에
+  들고, 그 공시번호가 제3자 검증의견서의 목록(열거 또는 "3-1 ~ 3-3" 범위)에 있으며, 같은 쪽에
+  AA1000AS/ISAE 3000/ISSA 5000 기준이 명시되고, Index 쪽에 GRI Index 제목, 검증 쪽에 검증의견서
+  제목이 있어야 한다. `credited_from`은 검증 대상 목록 span. 검증 수준(moderate/limited)은 사다리에
+  반영하지 않는다(원문 사다리가 구분하지 않음).
+- **M2 `REPORT_SCOPE_V1`:** refs = [보고 범위 문장 1개]. 그 쪽에 "보고 범위" 제목이 있고 문장에 조직
+  단위(주식회사·법인·연결·사업장 등)가 있어야 한다. 주장 문장에 자체 범위 단서(사업장·센터·국내·해외·
+  지역명 등)가 있으면 거절하고 주장 자체 근거로만 판단한다. `credited_from`은 그 문장.
+- 두 경로 모두 원문 인용 검증(verified span)을 그대로 요구한다. 숫자·목표연도에는 쓰지 않는다.
+- 호환성: 요소 DTO·API·DB 형태 변경 없음(`reason_code`에 정책명). 정책명이 없거나 다르면 기존 결합
+  검사를 그대로 탄다. 롤백은 정책 매핑 제거이며 이미 기록된 revision은 보존한다.
+
+실측(NAVER): 근거 쪽(p229·230·242)의 블록이 모두 원문 검증되지 않은 상태라 인용이 정당하게 거절된다.
+기존 원문 검증은 주장 쪽 span에만 수행된다. 또 보고 범위 문장(p2)은 이 run에서 파싱되지 않았다.
+따라서 실제 적용에는 (1) 근거 쪽 span 원문 검증, (2) 보고서 앞부분을 포함한 파싱이 선행되어야 한다.
+
+## 11. 실제 run 결과 — NAVER p2 재개와 첫 확정 등급 (2026-09-27)
+
+NAVER run `1ca11598-a2e4-4519-a8dd-541e52d922e3`의 선택 페이지 로컬 실행 결과다.
+근거는 ROOT `outputs/agent-results/`의 R52~R56 기록과 `R57-final-export-and-record/result.json`이다.
+
+- R52: p2를 문맥 페이지로 추가, 추출 1,200회·313 주장·적격 원천 12개 not_run(호출 상한).
+  태깅 232회 후 discarded/INTERNAL_ERROR로 중단했다. R53은 lease 상실 경로를 확인했으나 원 예외는 복원 불가다.
+- 공용 원장 확정+예약액: R52 시작 $10.9711723672 → 중단 $12.9785765672(+$2.0074042),
+  R54 종료 $13.9261633172(재개 +$0.94758675). 원장 호출 9,762 → 10,520(신규 758회).
+  $1 예약 `2477cdce-45e9-59bc-9ee2-0d2aa9278a85` 1건은 미정산이며 실패 요청·해당 claim을 재시도하지 않았다.
+- R54: receipt 재생은 신규 호출 0건·304.39초로 태그 13건 공표, 8개 회복 배치 후 총 47건 공표.
+  대상 10건 중 6건 위임 AI 검토 기록·1건 거절·3건 미공표. 승인 impl2 고정 규칙으로 4건 E3/SUBSTANTIATED다.
+- E3 대상 `f42eafd6`, `e142f988`, `92cf14e6`, `2bb69130`: M1 원문 근거 + M2 p2 개별 기업 보고 범위
+  + M3 p230 GRI 3-3 쪽범위→p242 검증 대상 3-1~3-3·검증 기준 연결이다. 원문 attestation과 credited_from을 보존했다.
+- `cdf4fc00`, `777834eb`는 M2/M3 present이나 M1 unknown이 남아 blocked_evidence, 등급·라벨·범위는 null이다.
+  `96a3f04f`는 3개 태깅 모두 TAGGING_INPUT_COUNT_INVALID/guarded 없음으로 CATEGORY_REVIEW_REQUIRED 거절이다.
+  `2ef66eca`, `3c543e27`, `20e5e70f`는 태그 미공표(blocked)여서 M2/M3·등급 not_run이며 부재로 바꾸지 않았다.
+- 검토 중 SQLite 중첩 writer 잠금은 run snapshot 고정(`19e4abb`)으로 수정했다. 전체 재채점은 비대상 검토 필요로 생략했다.
+- R55 export는 capture 201번째 주장에서 33,918,079 B로 한도 33,554,432 B를 넘었다(전체 분석치 49,601,515 B).
+  `9227bd5`는 coverage·문서 필드를 공유하고 예약명 충돌을 escape하며 복원 해시·범위 검증과 기존 한도를 유지한다.
+  R56 초안 ZIP은 최종 인코딩 이전이므로 R57에서 새 복사본·제품 HTTP JSON+CSV+HTML allow_partial로 재생성했다.
+  capture 49,601,515 → 14,236,576 B, snapshot 49,643,855 → 14,282,354 B; ZIP 5,657,203 B.
+  최종 ZIP SHA-256 `69dd746c1ab112e1a190cdc32637ce40f3bab352690291accfd5a7c5a01dc9c4`.
+  313 주장에 E3 4건·차단 2건 포함, 복원 revision 47/47·판정 6/6 canonical byte 일치, 동결 ZIP 재생성도 byte 일치.
+- 미완료: 위 미정산 예약의 provider 증빙, 범주 검토 1건·미공표 3건, worker 원 예외 telemetry,
+  recovery CLI의 claim×3 표시(계약은 최대 ×9), `tests/integration/test_live_pilot_config.py`의 CSRF 순서 의존성
+  (session-security 선행 시 HEAD `19e4abb`에서도 재현). AWS·production 검증은 not_run이다.
+이는 선택 입력의 처리·보존 검증이며 정확도, 공식 기준 검증, 법적 보증 또는 production 완료를 뜻하지 않는다.
+
+## 12. 사용자 결정 — 데이터 관리자 회신 승인과 미정 규칙 추천안 일괄 채택 (2026-09-28)
+
+사용자(프로젝트 책임자)가 R82 접수 파일을 정답 기준으로 확정하고 정책을 승인했다(“그 파일로 그냥 정답확정하고 정책 승인해줘”). 승인자는 **사용자**이며 이현지는 원문 검토자·해석 제안자다. `outputs/agent-results/R82-data-manager-return/02_검토회신.returned.xlsx`, `replies.json`, `proposed-corrections.json`, `DECISIONS.md`를 원문 회신·대조 근거로 보존한다. 정답 범위는 DOC-034의 실제 검토·원문 대조가 성립한 행에 한정한다. 빈 행, 미접수 재무 XBRL·`reconciliation.csv` 8건, 외부 원문이 없어 자체 확인되지 않은 DATA-04/06, 근거가 부족한 S02 `covered`는 확정 gold로 만들지 않는다. 이미 저장된 gold·태깅·판정 revision·보고서는 덮어쓰지 않고, 적용 시 승인자·대상 행·원문 위치·시각을 가진 새 불변 revision으로 남긴다.
+
+승인 정책은 다음과 같다. **RQ-01:** 비율형 목표에도 `baseline_period`와 `baseline_value`(기준기간의 비율값)가 필요하다. **RQ-02:** 목표 대비 직접 명시된 진척만 `current_progress=present`; 계산값은 별도 `derived` 기록이며 `present`로 승격하지 않는다. `derived`를 기존 `ElementState` enum에 추가하지 않는다. **RQ-04:** 주장 수치가 보증 대상 인벤토리에서 재현되고 지표·기간·경계가 개별 검증·연결될 때 해당 보증을 `covered`로 판정한다. LRQA p131과 C01의 재현 후보는 보존하지만 p35의 생산공장/사무소 경계 `conflict`를 지우지 않는다. KMR S02의 넓은 지표 문구만으로 특정 수치 연결을 인정하지 않는다. **공통 가드:** `unknown→absent`는 전체 문서 검색 범위·판독 가능성·검색 기록이 완결된 뒤에만 허용한다. R82의 E10/E16/N01 사실 정정은 원문·같은 지표 귀속을 확인하여 새 revision에 반영할 대상이며, E10의 20만km 각주 오귀속은 N02/N02-BASE에도 함께 적용하고 E04 conflict·Scope 2 basis unknown은 유지한다. 원자 분리 예외(C03)는 이 승인으로 만들지 않는다.
+
+사용자는 이어서 R84 `DECISION-SHEET.md`의 **추천안을 모두 채택**했다(“추천안으로 일괄 채택”). 아래 문장은 `drafts.json`의 해당 선택지 `rule_text`를 그대로 옮긴 것이다. `S1`~`S4`는 `outputs/agent-results/R84-policy-drafts/sources.md`의 출처 ID다. 사용자 채택은 프로젝트 정책 결정이며, 공식 조항·법적 효력·데이터 권리 검증이나 rulepack 활성화를 뜻하지 않는다.
+
+| 항목·채택 선택지 | 채택 규칙 원문 (`drafts.json`의 `rule_text`) | 출처 확인 상태 (`drafts.json`의 `official_support`) |
+|---|---|---|
+| RQ-03 · A | conflict와 각 source alternative를 보존한다. 모든 유효한 alternative로 ladder 결과를 계산할 수 있으면 grade는 null로 두고 가능한 결과만 grade_range로 표시한다. 조합을 확정할 수 없으면 grade=null, grade_range=null, blocked_evidence로 둔다. conflict를 present/absent로 cast하지 않는다. | 내부 정본: 프로젝트 내부 grade contract이며 직접 정하는 공식 clause는 해당 없음. |
+| GAP-001 · A | 기존 project_checklist_completeness_v1 truth table만 쓴다: 고정된 비어 있지 않은 checklist 전부 verified-present=true; verified-absent 하나 이상=false; 나머지 unknown/conflict/누락=null. E/label은 모두 null, legal_effect=not_determined 유지. | S1, S3: IFRS/KSSB safe-harbor 법적 등급 대응은 not verified; 체크리스트는 project-only. |
+| GAP-002 · A | track=goal은 독립 유지한다. 확인 가능한 명시 전망/추정과 그에 연결된 가정·불확실성이 있으면 safe_harbor_category 후보로 검토; 단순 deadline·target이면 category=null; 단어만 있거나 문맥 부족이면 review. | S1: IFRS S2 ¶33–35 목표 공시는 검증됐으나 법적 safe-harbor 구분 근거는 not verified. |
+| GAP-003 · A | Keep R00 §7 A-2: additional elements P6/M4/M5/M6/G7/G8 do not change E/label/range; preserve conditional triggers and report missing/unresolved status separately. | 내부 정본: Project domain decision; no external clause needed to interpret the project's own ladder. |
+| GAP-004 · A | Allow only R00 §10 REPORT_SCOPE_V1 for M2 and GRI_ASSURED_PAGE_V1 for M3 with verified source refs and credited_from. All other facts are claim-local unless a separate exact-link policy is approved. Never report-level link baseline/year/progress/numeric facts. | S1: IFRS S2 ¶33–35 content verified [S1]; external standards do not prescribe document-global evidence linkage. |
+| GAP-005 · A | Only exact goal missing pair [G3,G4] in the §7 example maps to IMPL. Every other unlisted combination gets sublabel=null and GAP-005; preserve E/label. | 내부 정본: Project rubric; no external standard maps these labels. |
+| GAP-006 · A | If verified superlative trigger and safe_harbor_category candidate coexist, preserve both evidence paths, force grade=null and review_status=needs_review with GAP-006. If only one trigger is verified, use that route. | 내부 정본: No external source provides a combined project-grade priority. |
+| GAP-007 · A | Evaluate only explicit ladder branches. For an unlisted edge such as unitless P1 or goal year/value combinations without a defined branch, return `blocked_rule_gap` with E/label null. Apply existing product rule: model+material alone capped at E1; direct product/material ratio or target is required for E2+. | S1: IFRS/KSSB exact edge-to-grade mapping not verified; the E ladder is project rubric. |
+| GAP-008 · A | Retain source-supplied clauses with verification_state=unverified for project-only grade. Mark a clause verified only after exact official text/version, URL, access date, reviewer and redistribution-rights record are captured. | S1, S2, S3: IFRS S2 ¶33(e)/35 verified from official supporting material [S1]; exact KSSB matching clause not verified [S3]. |
+| GAP-009 · A | 법적 적용 false 및 legal_effect=not_determined를 유지한다. as-provided rule text는 unverified로만 표시하고 준비용 검토만 허용한다. statutory compliance, violation 또는 legal-immunity label은 만들지 않는다. | S3: KSSB 공표일은 확인 [S3]; 정확한 법적 효력, 적용대상과 유예기간은 not verified. |
+| GAP-010 · A | Use the versioned industry crosswalk only to present candidate industries. Set each topic applicable/not_applicable/undetermined after company activity evidence review; remove from denominator only an explicit approved not_applicable with reason; unknown stays in denominator. | S4: IFRS S2 ¶12/23/32 explanatory material [S4] says consider applicability and facts; not a fixed GICS-to-SASB automatic map. |
+| REC-001 · A | Compare only verified entity sets with matching period and organizational basis. Distinct facility/legal-entity sets can be mapped only with source-verified, explicit control/boundary relation. If mapping is unresolved, execution_state=blocked and status=null; if a difference is expressly explained, status=matched. | 내부 정본: Project spec only; no external clause is used to decide entity identity. |
+| REC-002 · A | Explanation=present only for an exact verified quote in the registered same-company/period disclosure package explicitly linked to the compared boundary difference. Complete search and no quote→needs_explanation; incomplete or unreadable source→blocked/null. | 내부 정본: Project scope; no official clause governs explanation binding. |
+| REC-003 · B | Use approved operator mapping from financial statement line items to CAPEX, with same-period/currency aggregation; multi-year data only if exact schedule exists. | 내부 정본: No mapped account list verified here. |
+| REC-004 · B | Keep threshold null and C3 threshold-based outputs blocked; allow only direct existence of a matching disclosed investment commitment to be recorded as matched. | 내부 정본: No external rule for 5.0x. |
+| REC-005 · A | No explanation→needs_explanation only when all registered SR/FS package pages and allowed notes are covered, relevant pages readable, and a bounded search manifest completed. Otherwise execution_state=blocked/status=null. | 내부 정본: Project source rule; no public standard sets the exact search manifest. |
+| REC-006 · A | Use verified actual start/end dates and consolidation scope. Pin the latest official corrected filing available at evaluation cutoff and preserve earlier versions/rcept_no. Exact period unavailable/incomparable→blocked; complete official lookup with no timely same-period FS follows explicit completed not_applicable reason. No annualization. | 내부 정본: No new external accounting clause used; this is the project's document-pair rule. |
+| REC-007 · A | C4 matched only if the same claim/period's verified disclosure gives the classification definition and its inclusion/exclusion basis or calculation denominator. Complete search without those→needs_explanation; unclear claim/source relation→blocked. Never judge the classification's accounting or environmental correctness. | 내부 정본: No official environmental taxonomy or clause verified for these claims. |
+| REC-008 · A | Runtime-block every C5 dispatch when stage>CURRENT_STAGE; return separate not_run envelope with status=null and reason=stage_disabled. Do not add C5 to reconciliation schema 1.1 or G/P/M; allow only source preservation, no verdict. | 내부 정본: Project scope boundary; no official source is needed to define product stage. |
+
+**근거 상태:** S1은 IFRS Foundation 공식 지원자료에서 IFRS S2 ¶33(e)·¶35 인용을 확인한 것이며 기준서 원문·KSSB 대응 조항의 직접 검증은 아니다. S2는 공식 소개 페이지, S3는 KSSB 제1·2호 공표 사실만, S4는 IFRS 산업기반 적용성 공식 설명자료다. `sources.md`의 not verified 항목(정확한 KSSB 조항, 세이프하버 법적 효력·시행 일정, SASB/GICS 배포권·회사별 매핑, 회계 계정·5.0x 기준)은 여전히 미검증이다. 출처 ID가 없는 행은 원문 v2.0·v2.2와 R00/28/31의 **프로젝트 내부 계약**으로 채택했다.
+
+**남은 차단·미정:** GAP-001의 체크리스트 완결성은 채택했지만 E0~E3/label 매핑은 `null`·open이며 NAVER R81의 세이프하버 6건을 등급 확정하지 않는다. GAP-005의 열거되지 않은 sublabel, GAP-007의 사다리 빈 조합, GAP-008의 공식 조항·권리, GAP-009의 법적 적용, GAP-010의 산업 master·적용성은 각각 위 행의 보류 규칙을 따른다. REC-003은 승인된 CAPEX 계정 매핑·기간별 자료가 오기 전 실행 blocked, REC-004는 임계값 `null`로 5.0x 비활성, REC-005/006의 검색·재무 문서가 불완전하면 C군 status를 확정하지 않는다. C5는 REC-008에 따라 실행 차단한다. R83 gold v2 초안과 R85 위임 검토 결과는 사용자 별도 확인 전까지 **초안**이다.
+
+**이 결정이 하지 않은 것:** 이번 기록은 코드·규칙팩·데이터셋을 수정하거나 활성화하지 않았다. 법적 면책·위법·공식 기준 충족이나 회계 적정성을 판정하지 않는다. 미검토·미작성 행을 gold로 만들지 않으며, 검증되지 않은 인용을 `present`로 승격하지 않는다. 새 정책을 실행하려면 버전·해시·경계 벡터·승인 이력을 기록하고 새 run 또는 명시적 재채점에서만 적용한다.

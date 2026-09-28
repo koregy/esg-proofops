@@ -14,8 +14,18 @@ from uuid import uuid4
 from proofops.adapters.local.audit_store import append_audit_transaction, read_audit_head
 from proofops.adapters.local.run_artifacts import load_run_graph
 from proofops.adapters.local.summary_store import LocalSummaryStore
-from proofops.application.exports import MAX_EXPORT_BYTES, ExportRejected, timestamp
-from proofops.application.reporting import _basis_refs, build_report_model
+from proofops.application.exports import (
+    MAX_EXPORT_BYTES,
+    REVISION_RECORDS_V2,
+    SEARCH_COVERAGE_V1,
+    SOURCE_RECEIPTS_V1,
+    ExportRejected,
+    encode_report_level_source_receipts,
+    encode_revision_record,
+    encode_search_coverages,
+    timestamp,
+)
+from proofops.application.reporting import _basis_refs, _tag_elements, build_report_model
 from proofops.domain.audit import ChangeSet
 from proofops.domain.provenance import canonical_hash
 from proofops.domain.rulepacks import canonical_json
@@ -157,6 +167,8 @@ class LocalExportStore:
             ):
                 raise ExportRejected("EXPORT_INTEGRITY_FAILED")
             refs, records, raw_records, hashes = [], {}, {}, {snapshot["rulepack"]["sha256"]}
+            source_receipts = {}
+            search_coverages, coverage_documents = {}, {}
             captured_bytes = 0
             for claim_id in ids:
                 raw_head = self.jobs._raw(db, tenant, run_id, "claim_head", claim_id)
@@ -169,6 +181,7 @@ class LocalExportStore:
                     tenant_id=tenant,
                     document_version_id=claim.document_version_id,
                     claim_id=claim_id,
+                    claim_quote=claim.quote,
                     **head,
                     parse_manifest_id=graph.parse_manifest_id,
                     source_sha256=graph.source_sha256,
@@ -177,7 +190,60 @@ class LocalExportStore:
                     prompt_sha256=None,
                     replicate_hashes=[],
                 )
+                classification_raw = self.jobs._raw(
+                    db, tenant, run_id, "preliminary_classification_head", claim_id
+                )
+                if classification_raw is not None:
+                    classification = json.loads(classification_raw)
+                    immutable = self.jobs._get(
+                        db,
+                        tenant,
+                        run_id,
+                        "preliminary_classification",
+                        classification["classification_id"],
+                    )
+                    if (
+                        classification != immutable
+                        or classification["record_sha256"]
+                        != canonical_hash(
+                            {k: v for k, v in classification.items() if k != "record_sha256"}
+                        )
+                        or tuple(
+                            classification.get(k)
+                            for k in (
+                                "tenant_id",
+                                "run_id",
+                                "claim_id",
+                                "document_version_id",
+                                "parse_manifest_id",
+                                "source_sha256",
+                            )
+                        )
+                        != (
+                            tenant,
+                            run_id,
+                            claim_id,
+                            claim.document_version_id,
+                            claim.parse_manifest_id,
+                            claim.source_sha256,
+                        )
+                    ):
+                        raise ExportRejected("EXPORT_INTEGRITY_FAILED")
+                    record["classification_review"] = {
+                        k: classification[k]
+                        for k in (
+                            "classification_id",
+                            "record_sha256",
+                            "revision",
+                            "origin",
+                            "track",
+                        )
+                    }
                 tag, decision, raw_record = None, None, None
+                if not head["tag_revision"]:
+                    # New untagged snapshots carry an empty list; old snapshots
+                    # omit the key entirely and project to null (unavailable).
+                    record["tag_elements"] = []
                 if head["tag_revision"]:
                     current = self.claims.current_tag(tenant, run_id, claim_id, connection=db)
                     tag = current["tag"]
@@ -222,6 +288,26 @@ class LocalExportStore:
                             for k in ("model_sha256", "prompt_sha256", "replicate_hashes")
                         }
                     )
+                    # Optional immutable usability snapshot of accepted values,
+                    # states, and exact quotes from the pinned tag revision.
+                    # Reuses domain/reporting validators; no grading or inference.
+                    try:
+                        raw_elements = tag.get("elements")
+                        if not isinstance(raw_elements, list):
+                            raise ValueError("tag elements must be an array")
+                        record["tag_elements"] = _tag_elements(
+                            raw_elements, claim.document_version_id, graph.parse_manifest_id
+                        )
+                    except (ValueError, TypeError, KeyError) as exc:
+                        raise ExportRejected("EXPORT_INTEGRITY_FAILED") from exc
+                    # Preserve tag uncertainty even while approval prevents a decision.
+                    # Existing frozen snapshots omit this optional list; never rewrite them.
+                    if not head["decision_revision"]:
+                        record["unresolved_elements"] = [
+                            element["element_id"]
+                            for element in tag["elements"]
+                            if element["state"] in ("unknown", "conflict")
+                        ]
                     if head["decision_revision"]:
                         decision = self.jobs._get(
                             db,
@@ -243,7 +329,55 @@ class LocalExportStore:
                         record["review_status"] = decision["api"]["review_status"]
                         hashes.add(record["rule_pack_sha256"])
                     # Preserve all observed states and evidence, never convert uncertainty.
-                    raw_record = dict(tag=tag, decision=decision, original_inputs=inputs)
+                    # The original packet is stored once only when its bytes are identical.
+                    raw_record = encode_revision_record(tag, decision, inputs)
+                    try:
+                        compacted, new_receipts = encode_report_level_source_receipts(
+                            {claim_id: raw_record},
+                            identity={
+                                "tenant_id": tenant,
+                                "document_version_id": run["document_version_id"],
+                                "parse_manifest_id": graph.parse_manifest_id,
+                                "source_sha256": snapshot["document"]["sha256"],
+                            },
+                        )
+                        raw_record = compacted[claim_id]
+                    except (ValueError, TypeError, KeyError) as exc:
+                        raise ExportRejected("EXPORT_INTEGRITY_FAILED") from exc
+                    for digest, receipt in new_receipts.items():
+                        previous = source_receipts.get(digest)
+                        if previous is not None and canonical_json(previous) != canonical_json(
+                            receipt
+                        ):
+                            raise ExportRejected("EXPORT_INTEGRITY_FAILED")
+                        if previous is None:
+                            source_receipts[digest] = receipt
+                            captured_bytes += len(canonical_json(receipt).encode())
+                    try:
+                        raw_record, new_coverages, new_documents = encode_search_coverages(
+                            raw_record,
+                            identity={
+                                "tenant_id": tenant,
+                                "document_version_id": run["document_version_id"],
+                                "parse_manifest_id": graph.parse_manifest_id,
+                                "source_sha256": snapshot["document"]["sha256"],
+                            },
+                        )
+                    except (ValueError, TypeError, KeyError) as exc:
+                        raise ExportRejected("EXPORT_INTEGRITY_FAILED") from exc
+                    for table, new in (
+                        (search_coverages, new_coverages),
+                        (coverage_documents, new_documents),
+                    ):
+                        for digest, entry in new.items():
+                            previous = table.get(digest)
+                            if previous is not None and canonical_json(previous) != canonical_json(
+                                entry
+                            ):
+                                raise ExportRejected("EXPORT_INTEGRITY_FAILED")
+                            if previous is None:
+                                table[digest] = entry
+                                captured_bytes += len(canonical_json(entry).encode())
                 captured_bytes += len(canonical_json([record, raw_record]).encode())
                 if captured_bytes > MAX_EXPORT_BYTES:
                     raise ExportRejected("EXPORT_SIZE_LIMIT")
@@ -273,7 +407,18 @@ class LocalExportStore:
                 model_binding_hash=snapshot["model_binding_hash"],
                 parser_profile_hash=snapshot["parser_profile_hash"],
                 revision_records=raw_records,
+                revision_records_encoding=REVISION_RECORDS_V2,
             )
+            if source_receipts:
+                manifest["source_receipts_encoding"] = SOURCE_RECEIPTS_V1
+                manifest["source_receipts"] = source_receipts
+            if search_coverages:
+                manifest["search_coverage_encoding"] = SEARCH_COVERAGE_V1
+                manifest["search_coverages"] = search_coverages
+                manifest["coverage_documents"] = coverage_documents
+            submitted = self.claims.submitted_reviews(tenant, run_id, connection=db)
+            if submitted:
+                manifest["submitted_reviews"] = submitted
             return dict(manifest=manifest, decisions=records)
 
     def freeze(self, tenant, export_id, captured):
