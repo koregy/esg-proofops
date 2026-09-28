@@ -448,6 +448,8 @@ class LocalSQLiteReviewStore:
             origin="consensus",
             inputs=snapshot,
         )
+        if "fact_assembly" in snapshot:
+            tag["fact_assembly"] = snapshot["fact_assembly"]
         decision_revision = inputs.decision.decision_revision if inputs.decision else 0
         self.jobs._put(
             db, tenant, run_id, "review_inputs", review["review_id"], snapshot, immutable=True
@@ -472,6 +474,11 @@ class LocalSQLiteReviewStore:
                     decision_revision=decision_revision,
                     decision=asdict(inputs.decision),
                     api=inputs.decision.to_api_dict(),
+                    **(
+                        {"fact_assembly": snapshot["fact_assembly"]}
+                        if "fact_assembly" in snapshot
+                        else {}
+                    ),
                 ),
                 immutable=True,
             )

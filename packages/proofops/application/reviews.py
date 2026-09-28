@@ -27,7 +27,12 @@ from proofops.application.evidence.report_level import check_report_level
 from proofops.application.evidence.retrieval import EvidencePacket
 from proofops.application.evidence.span_citations import verify_source_ref
 from proofops.application.ingest.graph_fusion import CanonicalDocumentGraph
-from proofops.application.tagging.consensus import ConsensusResult, form_consensus
+from proofops.application.tagging.consensus import (
+    PARTIAL_FACTS_HASH,
+    PARTIAL_FACTS_V1,
+    ConsensusResult,
+    form_consensus,
+)
 from proofops.application.tagging.service import TagRun
 from proofops.domain.audit import AuditConflict
 from proofops.domain.errors import DomainValidationError
@@ -97,9 +102,10 @@ class ReviewInputs:
     relation_tags: Mapping[str, Mapping[str, SourceRef | None]]
     tag_revision: int = 1
     decision: Decision | None = None
+    fact_assembly_profile: str = "strict-v1"
 
     def snapshot(self) -> dict:
-        return dict(
+        snapshot = dict(
             schema="review_inputs_v1",
             run_id=self.run_id,
             claim=asdict(self.context.claim),
@@ -129,6 +135,9 @@ class ReviewInputs:
             if self.rule_context.local_synthetic
             else "live",
         )
+        if self.fact_assembly_profile == PARTIAL_FACTS_V1:
+            snapshot["fact_assembly"] = {"profile": PARTIAL_FACTS_V1, "sha256": PARTIAL_FACTS_HASH}
+        return snapshot
 
     def validate(self) -> None:
         claim, data = self.context.claim, self.packet.to_dict()
@@ -154,6 +163,7 @@ class ReviewInputs:
             rulepack=self.rulepack,
             tenant_id=claim.tenant_id,
             tag_revision=self.tag_revision,
+            profile=self.fact_assembly_profile,
         )
         if result.replicate_hashes != self.consensus.replicate_hashes:
             raise ReviewRejected("REVIEW_RECEIPT_MISMATCH", 409)
@@ -1167,6 +1177,8 @@ class ReviewService:
                 review_reason=body["reason"],
                 input_snapshot_sha256=initial_snapshot_sha256,
             )
+            if inputs.fact_assembly_profile == PARTIAL_FACTS_V1:
+                tag["fact_assembly"] = inputs.snapshot()["fact_assembly"]
             if applicability_receipt is not None:
                 if applicability_carried and applicability_ancestry:
                     applicability_receipt = {
@@ -1191,9 +1203,12 @@ class ReviewService:
                 tag["report_level_review"] = report_level_receipts
             if extra_tag:
                 tag.update(extra_tag)
-            return tag, dict(
+            decision_record = dict(
                 decision_revision=decision_revision, decision=asdict(decision), api=api
             )
+            if "fact_assembly" in tag:
+                decision_record["fact_assembly"] = tag["fact_assembly"]
+            return tag, decision_record
 
         try:
             trusted_options = {}

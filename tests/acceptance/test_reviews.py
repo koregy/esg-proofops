@@ -149,6 +149,50 @@ def test_resolve_new_immutable_revisions_real_engine_and_pinned_receipts(tmp_pat
     ).validate(result)
 
 
+def test_partial_fact_publication_pins_profile_and_range(tmp_path):
+    from proofops.application.tagging.consensus import (
+        PARTIAL_FACTS_HASH,
+        PARTIAL_FACTS_V1,
+        form_consensus,
+    )
+    from proofops.domain.rules.engine import evaluate
+
+    def prepare(inputs):
+        runs = tuple(replace(run, product_variant=False) for run in inputs.tag_runs)
+        consensus = form_consensus(
+            runs,
+            packet=inputs.packet,
+            rulepack=inputs.rulepack,
+            tenant_id=TENANT,
+            tag_revision=1,
+            profile=PARTIAL_FACTS_V1,
+        )
+        draft = replace(
+            inputs, tag_runs=runs, consensus=consensus, fact_assembly_profile=PARTIAL_FACTS_V1
+        )
+        return replace(
+            draft, decision=evaluate(consensus.confirmed_tags, draft.rule_context, draft.rulepack)
+        )
+
+    ws = workspace(tmp_path, prepare_inputs=prepare)
+    _, service, inputs, review, _, _, _ = ws
+    history = service.store.history(TENANT, RUN, review["claim_id"])
+    profile = {"profile": PARTIAL_FACTS_V1, "sha256": PARTIAL_FACTS_HASH}
+    assert history["tags"][0]["fact_assembly"] == profile
+    assert history["decisions"][0]["fact_assembly"] == profile
+    assert history["decisions"][0]["api"]["grade_range"] == {
+        "floor": "E1",
+        "ceiling": "E3",
+        "open_elements": ["P2", "P3", "P4"],
+    }
+    assert inputs.decision.review_status == "needs_review"
+    body = ws[4] | {"elements": [asdict(e) for e in inputs.consensus.candidate_elements]}
+    assert post(ws, body=body).status_code == 200
+    reviewed = service.store.history(TENANT, RUN, review["claim_id"])
+    assert reviewed["tags"][-1]["fact_assembly"] == profile
+    assert reviewed["decisions"][-1]["fact_assembly"] == profile
+
+
 @pytest.mark.parametrize("header,base", [('"9"', 1), ('"1"', 9)])
 def test_stale_review_or_tag_returns_412_without_writes(tmp_path, header, base):
     ws = workspace(tmp_path)
@@ -384,6 +428,9 @@ const html=renderToStaticMarkup(React.createElement(ReviewWorkspace,props));
 assert.ok(html.includes("태깅 검토") && html.includes("변경 사유"));
 assert.ok(html.includes("&lt;script&gt;") && !html.includes("<script>"));
 assert.ok(html.includes("로컬 합성 자료") && html.includes("태깅 확정 및 재채점"));
+const empty=renderToStaticMarkup(React.createElement(ReviewWorkspace,{...props,elements:[]}));
+for (const id of ["P1","P2","P3","P4","P5","P6"])
+  assert.ok(empty.includes(`name="${id}"`) || empty.includes(id), `missing ${id}`);
 const viewer=renderToStaticMarkup(React.createElement(ReviewWorkspace,
 {...props,session:{...props.session,role:"viewer"}}));
 for (const readOnly of [viewer, renderToStaticMarkup(React.createElement(ReviewWorkspace,

@@ -219,6 +219,7 @@ def rescore_workspace(
     track=None,
     origin="local-synthetic-fixture",
     real=False,
+    partial=False,
 ):
     import json
     from uuid import uuid4
@@ -238,8 +239,31 @@ def rescore_workspace(
         from proofops_api.routers.rescores import build_rescores_router
     except ImportError as exc:
         pytest.fail(f"Durable rescore missing: {exc}")
-    ws = workspace(tmp_path)
-    assert post(ws).status_code == 200
+    if partial:
+        from proofops.application.tagging.consensus import PARTIAL_FACTS_V1, form_consensus
+
+        def prepare(inputs):
+            runs = tuple(replace(run, product_variant=False) for run in inputs.tag_runs)
+            consensus = form_consensus(
+                runs,
+                packet=inputs.packet,
+                rulepack=inputs.rulepack,
+                tenant_id=inputs.context.claim.tenant_id,
+                tag_revision=1,
+                profile=PARTIAL_FACTS_V1,
+            )
+            draft = replace(
+                inputs, tag_runs=runs, consensus=consensus, fact_assembly_profile=PARTIAL_FACTS_V1
+            )
+            return replace(
+                draft,
+                decision=evaluate(consensus.confirmed_tags, draft.rule_context, draft.rulepack),
+            )
+
+        ws = workspace(tmp_path, prepare_inputs=prepare)
+    else:
+        ws = workspace(tmp_path)
+        assert post(ws).status_code == 200
     review_inputs = ws[2]
     if real:
         # Same pinned inputs as a non-synthetic run decided under an approved pack.
@@ -267,7 +291,7 @@ def rescore_workspace(
         **(
             raw
             | {
-                "tag_revision": 3,
+                "tag_revision": 1 if partial else 3,
                 "facts": tuple(
                     ConfirmedFact(
                         **(
@@ -281,7 +305,9 @@ def rescore_workspace(
                     )
                     for fact in raw["facts"]
                 )
-                + (ConfirmedFact("reduction_or_improvement_claim", "unknown"),),
+                + (
+                    () if partial else (ConfirmedFact("reduction_or_improvement_claim", "unknown"),)
+                ),
             }
         )
     )
@@ -302,7 +328,7 @@ def rescore_workspace(
             facts=saved.facts
             + tuple(ConfirmedFact(name, "unknown") for name in sorted(wanted - have)),
         )
-    context = replace(review_inputs.rule_context, decision_revision=2)
+    context = replace(review_inputs.rule_context, decision_revision=1 if partial else 2)
     decision = evaluate(saved, context, review_inputs.rulepack)
     if real:
         from proofops.domain.provenance import canonical_hash
@@ -310,26 +336,30 @@ def rescore_workspace(
         tag = {k: v for k, v in tag.items() if k != "inputs"} | {
             "input_snapshot_sha256": canonical_hash(review_inputs.snapshot())
         }
-    tag = tag | {
-        "tag_revision": 3,
-        "confirmed_tags": asdict(saved) if confirmed else None,
-        "origin": origin,
-        "execution_profile": "local-synthetic-only",
-    }
+    if not partial:
+        tag = tag | {
+            "tag_revision": 3,
+            "confirmed_tags": asdict(saved) if confirmed else None,
+            "origin": origin,
+            "execution_profile": "local-synthetic-only",
+        }
     with runs.jobs._transaction() as db:
-        runs.jobs._put(db, tenant, run, "tag_revision", f"{claim}:0000000003", tag, immutable=True)
-        runs.jobs._put(
-            db,
-            tenant,
-            run,
-            "decision_revision",
-            f"{claim}:0000000002",
-            dict(decision_revision=2, decision=asdict(decision), api=decision.to_api_dict()),
-            immutable=True,
-        )
-        runs.jobs._put(
-            db, tenant, run, "claim_head", claim, dict(tag_revision=3, decision_revision=2)
-        )
+        if not partial:
+            runs.jobs._put(
+                db, tenant, run, "tag_revision", f"{claim}:0000000003", tag, immutable=True
+            )
+            runs.jobs._put(
+                db,
+                tenant,
+                run,
+                "decision_revision",
+                f"{claim}:0000000002",
+                dict(decision_revision=2, decision=asdict(decision), api=decision.to_api_dict()),
+                immutable=True,
+            )
+            runs.jobs._put(
+                db, tenant, run, "claim_head", claim, dict(tag_revision=3, decision_revision=2)
+            )
         record = runs.jobs._get(db, tenant, run, "run", "META")
         runs.jobs._bump_run(db, record, status="partial")
         db.execute(
@@ -461,6 +491,20 @@ def test_http_rescore_persists_real_decision_and_receipt_preserving_all_inputs(t
         )
         == response.json()
     )
+
+
+def test_http_rescore_accepts_partial_fact_revision_without_retag(tmp_path):
+    ws = rescore_workspace(tmp_path, partial=True)
+    response = rescore_post(ws)
+    assert response.status_code == 202, response.text
+    decisions = ws["review"].store.history(ws["tenant"], ws["run"], ws["claim"])["decisions"]
+    assert decisions[-1]["decision"]["decision_status"] == "blocked_evidence"
+    assert decisions[-1]["api"]["grade_range"] == {
+        "floor": "E1",
+        "ceiling": "E3",
+        "open_elements": ["P2", "P3", "P4"],
+    }
+    assert decisions[-1]["fact_assembly"] == decisions[0]["fact_assembly"]
 
 
 @pytest.mark.parametrize("change", ["ontology", "no_confirmed"])

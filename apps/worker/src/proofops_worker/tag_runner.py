@@ -65,6 +65,14 @@ def _candidate_tokens(text):
     return len(text.encode("utf-8"))
 
 
+def _consensus_review_reason(consensus):
+    return (
+        "PARTIAL_FACTS_REVIEW_REQUIRED"
+        if "PARTIAL_FACTS_REVIEW_REQUIRED" in consensus.reasons
+        else "CONSENSUS_UNRESOLVED"
+    )
+
+
 def _source_traceable(claim, graph):
     """Does every claim ref still point at the pinned parsed text of its block?
 
@@ -229,7 +237,7 @@ class LocalTagRunner:
                     if snapshot.get("rulepack_use") == "candidate_tagging_reference_only":
                         reason = "DOMAIN_RULEPACK_UNAPPROVED"
                     elif prior.consensus.confirmed_tags is None:
-                        reason = "CONSENSUS_UNRESOLVED"
+                        reason = _consensus_review_reason(prior.consensus)
                     elif prior.decision and prior.decision.decision_status != "decided":
                         reason = prior.decision.decision_status
                     else:
@@ -497,7 +505,12 @@ class LocalTagRunner:
             if not self.store.jobs.can_call(lease, now=int(self.clock())):
                 raise LeaseLost("LEASE_LOST")
             consensus = form_consensus(
-                tag_runs, packet=packet, rulepack=rulepack, tenant_id=tenant, tag_revision=1
+                tag_runs,
+                packet=packet,
+                rulepack=rulepack,
+                tenant_id=tenant,
+                tag_revision=1,
+                profile=snapshot.get("fact_assembly_profile", "strict-v1"),
             )
             rule_context = RuleContext(
                 tenant,
@@ -518,7 +531,7 @@ class LocalTagRunner:
             if rulepack_unapproved:
                 review_reason = "DOMAIN_RULEPACK_UNAPPROVED"
             elif not consensus.confirmed_tags:
-                review_reason = "CONSENSUS_UNRESOLVED"
+                review_reason = _consensus_review_reason(consensus)
             elif decision and decision.decision_status != "decided":
                 review_reason = decision.decision_status
             else:
@@ -535,6 +548,7 @@ class LocalTagRunner:
                 consensus,
                 relation_tags,
                 decision=decision,
+                fact_assembly_profile=snapshot.get("fact_assembly_profile", "strict-v1"),
             )
             self._publish_claim(lease, inputs, heartbeat_state)
             item.update(

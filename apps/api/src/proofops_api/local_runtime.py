@@ -243,8 +243,11 @@ def load_local_runtime(env: Mapping[str, str]) -> dict[str, Any]:
     settings_path = env.get("LOCAL_RUN_SETTINGS_PATH")
     extraction_mode = env.get("LOCAL_EXTRACTION_MODE", "")
     tagging_mode = env.get("LOCAL_TAGGING_MODE", "")
+    fact_assembly_profile = env.get("LOCAL_FACT_ASSEMBLY_PROFILE", "strict-v1")
+    if fact_assembly_profile not in ("strict-v1", "partial-facts-v1"):
+        raise _invalid()
     if not parser_path:
-        if settings_path or extraction_mode or tagging_mode:
+        if settings_path or extraction_mode or tagging_mode or fact_assembly_profile != "strict-v1":
             raise _invalid()
         return {}
     if extraction_mode not in {"", "local_synthetic", "upstage_probe"} or tagging_mode not in {
@@ -411,6 +414,10 @@ def load_local_runtime(env: Mapping[str, str]) -> dict[str, Any]:
         runtime["tagging_mode"] = tagging_mode
     elif "tagging_settings" in settings or "relation_settings" in settings:
         raise _invalid()
+    if fact_assembly_profile != "strict-v1":
+        if not tagging_mode:
+            raise _invalid()
+        runtime["fact_assembly_profile"] = fact_assembly_profile
     if tagging_mode != "upstage_local" and (
         "preliminary_settings" in settings
         or "relation_settings" in settings

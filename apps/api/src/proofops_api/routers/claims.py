@@ -17,6 +17,7 @@ from proofops.application.assurance import ClaimContext as AssuranceContext
 from proofops.application.assurance import claim_context_from_review_inputs, match_assurance
 from proofops.application.runs import RunRejected
 from proofops.domain.provenance import canonical_hash
+from proofops.domain.rules.engine import MAPPINGS
 from proofops_api.auth import (
     SESSION_COOKIE_NAME,
     _authorize,
@@ -566,7 +567,26 @@ def build_claims_router(claims, auth_store, *, tags=None, assurance=None, clock=
             body = dict(
                 claim=summary,
                 source_refs=[asdict(ref) for ref in claim.source_refs],
-                elements=tag["elements"],
+                elements=[
+                    next(
+                        (
+                            element
+                            for element in tag["elements"]
+                            if element["element_id"] == element_id
+                        ),
+                        dict(
+                            element_id=element_id,
+                            state="unknown",
+                            evidence_refs=[],
+                            normalized_value=None,
+                            credited_from=None,
+                            reason_code=None,
+                        ),
+                    )
+                    for element_id in MAPPINGS[summary["track"]]
+                ]
+                if summary["track"]
+                else tag["elements"],
                 submitted_reviews=claims.submitted_reviews(
                     claim.tenant_id, str(run_id), claim.claim_id
                 ),

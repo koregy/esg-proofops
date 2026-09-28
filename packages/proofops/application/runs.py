@@ -21,6 +21,7 @@ from proofops.application.preflight import (
     combine_build_checks,
 )
 from proofops.application.registry import RegistryNotFound, artifact_sha256
+from proofops.application.tagging.consensus import PARTIAL_FACTS_V1
 from proofops.application.tagging.relations import SYSTEM_PROMPT as RELATION_SYSTEM_PROMPT
 from proofops.application.tagging.service import TaggingSettings
 from proofops.application.uploads_security import UploadRejected
@@ -137,6 +138,7 @@ class RunService:
         claim_source_policy=None,
         tagging_settings: TaggingSettings | None = None,
         tagging_mode: str | None = None,
+        fact_assembly_profile: str = "strict-v1",
         preliminary_settings: TaggingSettings | None = None,
         relation_settings: TaggingSettings | None = None,
         raster_runtime_binding_id: str | None = None,
@@ -205,6 +207,9 @@ class RunService:
             raise ValueError("invalid claim source policy")
         self.claim_source_policy = _detach(claim_source_policy)
         self.tagging_settings, self.tagging_mode = tagging_settings, tagging_mode
+        if fact_assembly_profile not in ("strict-v1", PARTIAL_FACTS_V1):
+            raise ValueError("unknown fact assembly profile")
+        self.fact_assembly_profile = fact_assembly_profile
         self.preliminary_settings = preliminary_settings
         if position_context_order is not None:
             from proofops.application.tagging.preliminary import CONTEXT_POSITION_ORDER
@@ -540,6 +545,8 @@ class RunService:
                 tagging_settings_hash=canonical_hash(asdict(tagging)),
                 tagging_mode=self.tagging_mode,
             )
+            if self.fact_assembly_profile == PARTIAL_FACTS_V1:
+                snapshot["fact_assembly_profile"] = PARTIAL_FACTS_V1
         if live_tagging:
             assert isinstance(preliminary, TaggingSettings)
             assert isinstance(tagging, TaggingSettings)
