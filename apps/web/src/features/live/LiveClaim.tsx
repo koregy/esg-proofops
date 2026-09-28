@@ -1,12 +1,13 @@
 import { useState, type FormEvent } from "react";
 import { Link } from "react-router";
+import { getElementLabel } from "../labels";
 import "./live-claim.css";
 
 type Step = {
   name: string;
   track?: string | null;
   safe_harbor_category?: string | null;
-  elements?: { name: string; candidate_state: string; engine_state: string; quote: string | null }[];
+  elements?: { name: string; element_id: string; candidate_state: string; engine_state: string; quote: string | null }[];
   model?: string;
   duration_ms?: number;
   rule_pack_id?: string;
@@ -20,10 +21,12 @@ type Result = {
     evidence_grade: string | null;
     label: string | null;
     grade_range: { floor: string; ceiling: string; open_elements: string[] } | null;
+    open_elements?: string[];
   } | null;
   steps: Step[];
   cost_estimate_usd: number;
   duration_ms?: number;
+  explanation?: string;
 };
 
 const examples = [
@@ -95,9 +98,9 @@ export function LiveClaim() {
     <section className="surface live-result-card" aria-live="polite"><div className="card-heading"><div><p className="eyebrow">REVIEW PATH</p><h2>분류 → 요소 태깅 → 규칙엔진</h2></div><span>{busy ? "처리 중" : result ? "초안" : "대기 중"}</span></div>
       <ol className="live-timeline">{["preliminary_classification", "element_tagging", "python_rule_engine"].map((name, index) => {
         const step = result?.steps.find(item => item.name === name);
-        return <li key={name} className={step ? "done" : "waiting"}><span className="live-stage-number">0{index + 1}</span><div><strong>{stageNames[name]}</strong><small>{step ? `${step.duration_ms ?? 0}ms${step.model ? ` · ${step.model}` : ""}` : busy && index === 0 ? "응답 대기 중" : "대기"}</small>{step?.track !== undefined && <p>트랙: {step.track ? trackNames[step.track] || step.track : "분류 미합의 · 사람 검토 필요"}</p>}{step?.elements && <div className="live-tags">{step.elements.map(element => <div key={element.name}><b>{element.name}</b><span>{stateNames[element.engine_state] || element.engine_state}</span>{element.quote && <q>{element.quote}</q>}{element.candidate_state !== element.engine_state && <small>모델 {stateNames[element.candidate_state] || element.candidate_state} → 규칙 입력 {stateNames[element.engine_state] || element.engine_state}</small>}</div>)}</div>}{step?.rule_pack_id && <p>규칙팩 {step.rule_pack_id.slice(0, 8)}…</p>}</div></li>;
+        return <li key={name} className={step ? "done" : "waiting"}><span className="live-stage-number">0{index + 1}</span><div><strong>{stageNames[name]}</strong><small>{step ? `${step.duration_ms ?? 0}ms${step.model ? ` · ${step.model}` : ""}` : busy && index === 0 ? "응답 대기 중" : "대기"}</small>{step?.track !== undefined && <p>트랙: {step.track ? trackNames[step.track] || step.track : "분류 미합의 · 사람 검토 필요"}</p>}{step?.elements && <div className="live-tags">{step.elements.map(element => <div key={element.name}><b>{getElementLabel(element.element_id)} · {element.name}</b><span>{stateNames[element.engine_state] || element.engine_state}</span>{element.quote && <q>{element.quote}</q>}{element.candidate_state !== element.engine_state && <small>모델 {stateNames[element.candidate_state] || element.candidate_state} → 규칙 입력 {stateNames[element.engine_state] || element.engine_state}</small>}</div>)}</div>}{step?.rule_pack_id && <p>규칙팩 {step.rule_pack_id.slice(0, 8)}…</p>}</div></li>;
       })}</ol>
-      {result && <div className="live-decision"><span>Python 규칙엔진 초안 · {result.draft}</span><strong>{resultGrade}</strong><p>{decision?.label || decision?.decision_status || "트랙 분류 미합의로 판정 보류"}</p>{decision?.grade_range && <small>가능 범위이며 확정 등급이 아닙니다. 미해결 요소: {decision.grade_range.open_elements.join(", ") || "확인 필요"}</small>}<footer>추정 모델 비용 ${result.cost_estimate_usd.toFixed(6)} · {result.duration_ms != null ? `${(result.duration_ms / 1000).toFixed(1)}초` : "소요 시간 미제공"}</footer></div>}
+      {result && <div className="live-decision"><span>Python 규칙엔진 초안 · {result.draft}</span><strong>{resultGrade}</strong><p>{decision?.label || decision?.decision_status || "트랙 분류 미합의로 판정 보류"}</p>{decision?.grade_range && <small>가능 범위이며 확정 등급이 아닙니다. 미해결 요소: {decision.grade_range.open_elements.map(getElementLabel).join(", ") || "확인 필요"}</small>}{!decision?.grade_range && !!decision?.open_elements?.length && <small>확인이 필요한 요소: {decision.open_elements.map(getElementLabel).join(", ")}</small>}{result.explanation && <small>{result.explanation}</small>}<footer>추정 모델 비용 ${result.cost_estimate_usd.toFixed(6)} · {result.duration_ms != null ? `${(result.duration_ms / 1000).toFixed(1)}초` : "소요 시간 미제공"}</footer></div>}
       {!result && !busy && <div className="live-placeholder">문장을 입력하고 검토를 시작하면 단계별 기록이 이곳에 나타납니다.</div>}
     </section></div>
     <p className="live-footer-note">이 체험은 제출한 문장만 확인합니다. 문서 전체에서 근거가 없다고 단정하거나 실제 환경성과를 평가하지 않습니다. <Link to="/demo">NAVER 원문 근거가 연결된 실제 결과 보기 ↗</Link></p>

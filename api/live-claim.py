@@ -19,7 +19,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "packages"))
 
 from proofops.adapters.local.upstage import PRICE_RECHECK_AT  # noqa: E402
-from proofops.application.tagging.preliminary import SYSTEM_PROMPT as CLASSIFY_PROMPT  # noqa: E402
+from proofops.application.tagging.consensus import (  # noqa: E402
+    PARTIAL_FACTS_V1,
+    reviewable_decision,
+)
 from proofops.domain.rulepacks import RulePackSnapshot  # noqa: E402
 from proofops.domain.rules.engine import (  # noqa: E402
     MAPPINGS,
@@ -31,6 +34,15 @@ from proofops.domain.rules.engine import (  # noqa: E402
 from proofops.domain.values import SourceRef  # noqa: E402
 
 MODEL = "solar-pro3"
+CLASSIFY_PROMPT = (
+    "Classify the main asserted predicate of one environmental claim, not its topic. "
+    "goal=future company intention or commitment; performance=reported achieved result; "
+    "management=existing organization, system, policy, or recurring process. "
+    "If the predicate is genuinely unclear use null. Return only JSON with claim_id "
+    "copied exactly, track (goal/performance/management/null), and "
+    "safe_harbor_category (forward_looking/emissions_estimate/third_party_information/null). "
+    "A category is a candidate, never legal protection. Never grade or label."
+)
 MAX_BODY = 8_192
 MAX_CLAIM = 500
 MAX_CONTEXT = 2_000
@@ -47,6 +59,39 @@ class LiveError(Exception):
 
 def _hash(text: str) -> str:
     return sha256(text.encode("utf-8")).hexdigest()
+
+
+def _explanation(decision: dict, definitions: dict) -> str:
+    gaps = decision["gap_ids"]
+    if gaps:
+        names = {
+            "GAP-001": "세이프하버 등급 매핑",
+            "GAP-003": "추가 요소의 등급 효과",
+            "GAP-006": "최상급·세이프하버 우선순위",
+            "GAP-007": "사다리 미정 조합",
+        }
+        return (
+            "미정 규칙 "
+            + ", ".join(f"{gap} {names.get(gap, '판정 기준')}" for gap in gaps)
+            + " 때문에 등급을 확정할 수 없습니다."
+        )
+    grade_range = decision["grade_range"]
+    if grade_range:
+        elements = ", ".join(
+            f"{key} {definitions[key]['name']}" for key in grade_range["open_elements"]
+        )
+        return (
+            f"{elements} 근거가 보고서에 확인되면 {grade_range['ceiling']}까지 가능합니다. "
+            "현재 범위는 확정 등급이 아닙니다."
+        )
+    if decision["open_elements"]:
+        elements = ", ".join(
+            f"{key} {definitions[key]['name']}"
+            for key in decision["open_elements"]
+            if key in definitions
+        )
+        return f"{elements} 근거를 보고서에서 확인해야 등급 범위를 계산할 수 있습니다."
+    return "원문 근거와 미해결 요소를 검토해야 등급을 확정할 수 있습니다."
 
 
 def _provider(system: str, user: dict, max_tokens: int) -> dict:
@@ -154,12 +199,15 @@ def run_claim(payload: dict, *, access_code: str, call_model=None) -> dict:
     )
     track = preliminary.get("track")
     category = preliminary.get("safe_harbor_category")
+    if track in ("unknown", "unclear", "null", "none"):
+        track = None
+    if category in ("null", "none", "unknown"):
+        category = None
     if (
         preliminary.get("claim_id") != claim_id
         or track not in (*MAPPINGS, None)
         or category
         not in (None, "forward_looking", "emissions_estimate", "third_party_information")
-        or any(key in preliminary for key in ("evidence_grade", "label", "decision_status"))
     ):
         raise LiveError(502, "CLASSIFICATION_INVALID")
     steps = [
@@ -215,9 +263,13 @@ def run_claim(payload: dict, *, access_code: str, call_model=None) -> dict:
     raw_tags, usage2, ms2, _, actual2 = _step(call_model, tag_system, tag_user, 768, est1)
     if actual1 + actual2 > MAX_ESTIMATE_USD:
         raise LiveError(502, "ACTUAL_COST_CAP_EXCEEDED")
-    if not isinstance(raw_tags.get("elements"), list):
-        raise LiveError(502, "TAGS_INVALID")
-    given = raw_tags["elements"]
+    given = raw_tags.get("elements", [])
+    if isinstance(given, dict):
+        given = [
+            {"name": name, **value} for name, value in given.items() if isinstance(value, dict)
+        ]
+    if not isinstance(given, list):
+        given = []
     given_by_name = {}
     for item in given:
         if not isinstance(item, dict) or item.get("name") not in names:
@@ -233,33 +285,36 @@ def run_claim(payload: dict, *, access_code: str, call_model=None) -> dict:
         }
         # Conflicting duplicate candidates cannot establish an element.
         given_by_name[name] = (
-            {"name": name, "state": "unknown", "quote": None}
+            {"name": name, "state": "conflict", "quote": None}
             if name in given_by_name
             else normalized
         )
     facts, visible = [], []
+    element_ids = {name: element for element, group in MAPPINGS[track].items() for name in group}
     for name in names:
         item = given_by_name.get(name, {"name": name, "state": "unknown", "quote": None})
         state, quote = item["state"], item["quote"]
+        candidate_state = state
         if state == "present":
             if not isinstance(quote, str) or not quote.strip() or claim.count(quote) != 1:
-                raise LiveError(502, "TAG_QUOTE_NOT_IN_CLAIM")
-            start = claim.index(quote)
-            ref = SourceRef(
-                source_id,
-                document_id,
-                parse_id,
-                1,
-                page,
-                None,
-                _hash(claim),
-                quote,
-                start,
-                start + len(quote),
-                "located",
-                "verified",
-            )
-            if name in local_allowed:
+                state, quote = "unknown", None
+            else:
+                start = claim.index(quote)
+                ref = SourceRef(
+                    source_id,
+                    document_id,
+                    parse_id,
+                    1,
+                    page,
+                    None,
+                    _hash(claim),
+                    quote,
+                    start,
+                    start + len(quote),
+                    "located",
+                    "verified",
+                )
+            if state == "present" and name in local_allowed:
                 facts.append(
                     ConfirmedFact(
                         name,
@@ -280,7 +335,8 @@ def run_claim(payload: dict, *, access_code: str, call_model=None) -> dict:
         visible.append(
             {
                 "name": name,
-                "candidate_state": state,
+                "element_id": element_ids[name],
+                "candidate_state": candidate_state,
                 "engine_state": facts[-1].state,
                 "quote": quote,
                 "page_label": page if state == "present" else None,
@@ -310,6 +366,14 @@ def run_claim(payload: dict, *, access_code: str, call_model=None) -> dict:
     decision = evaluate(
         tags, RuleContext(tenant_id, document_id, claim_id, packet_hash, local_synthetic=True), PACK
     )
+    reviewable, _ = reviewable_decision(decision, PARTIAL_FACTS_V1, "needs_review")
+    decision_view = (reviewable or decision).to_api_dict() | {
+        "review_status": "needs_review",
+        "evidence_grade": None,
+        "label": None,
+        "sublabel": None,
+        "open_elements": list(decision.unresolved_elements),
+    }
     steps.append(
         {
             "name": "element_tagging",
@@ -329,14 +393,16 @@ def run_claim(payload: dict, *, access_code: str, call_model=None) -> dict:
         }
     )
     return {
-        "status": "draft",
+        "status": "needs_review",
         "draft": "사용자 최종 검토 전",
         "notice": "원문 PDF 검증 없음 — 입력 텍스트 기준",
         "replicas": 1,
         "claim_id": claim_id,
         "steps": steps,
         "source": source,
-        "decision": decision.to_api_dict(),
+        "fact_assembly": PARTIAL_FACTS_V1,
+        "decision": decision_view,
+        "explanation": _explanation(decision_view, definitions),
         "cost_estimate_usd": round(actual1 + actual2, 6),
         "duration_ms": ms1 + ms2,
     }

@@ -72,6 +72,9 @@ def test_fake_pipeline_and_guards(monkeypatch):
     assert result["decision"]["label"] is None
     assert result["decision"]["grade_range"]["floor"] == "E1"
     assert result["decision"]["grade_range"]["ceiling"] == "E3"
+    assert result["decision"]["review_status"] == "needs_review"
+    assert result["fact_assembly"] == "partial-facts-v1"
+    assert "E3까지" in result["explanation"]
     assert result["steps"][1]["elements"][0]["engine_state"] in ("unknown", "present")
     assert all(
         item["engine_state"] == "unknown"
@@ -81,7 +84,7 @@ def test_fake_pipeline_and_guards(monkeypatch):
     assert "원문 PDF 검증 없음" in result["notice"]
 
 
-def test_unmatched_quote_rejected(monkeypatch):
+def test_unmatched_quote_stays_unknown(monkeypatch):
     monkeypatch.setenv("DEMO_ACCESS_CODE", "local-only")
 
     def fake(system, user, max_tokens):
@@ -100,11 +103,50 @@ def test_unmatched_quote_rejected(monkeypatch):
             "usage": {"prompt_tokens": 100, "completion_tokens": 40},
         }
 
-    with pytest.raises(live.LiveError) as error:
-        live.run_claim(
-            {"claim": "2030년 배출을 줄입니다"}, access_code="local-only", call_model=fake
+    result = live.run_claim(
+        {"claim": "2030년 배출을 줄입니다"}, access_code="local-only", call_model=fake
+    )
+    assert result["status"] == "needs_review"
+    assert all(
+        item["engine_state"] == "unknown" and item["quote"] is None
+        for item in result["steps"][1]["elements"]
+    )
+
+
+def test_object_tags_and_rule_gap(monkeypatch):
+    monkeypatch.setenv("DEMO_ACCESS_CODE", "local-only")
+
+    def fake(system, user, max_tokens):
+        content = (
+            {
+                "claim_id": user["claim_id"],
+                "track": "goal",
+                "safe_harbor_category": "forward_looking",
+            }
+            if "sources" in user
+            else {
+                "elements": {
+                    "target_year": {"state": "present", "quote": "2030년"},
+                    "target_metric": {"state": "present", "quote": "배출량"},
+                }
+            }
         )
-    assert error.value.code == "TAG_QUOTE_NOT_IN_CLAIM"
+        return {
+            "choices": [{"message": {"content": json.dumps(content)}}],
+            "usage": {"prompt_tokens": 100, "completion_tokens": 40},
+        }
+
+    result = live.run_claim(
+        {"claim": "2030년 배출량을 줄이겠다."}, access_code="local-only", call_model=fake
+    )
+    assert result["status"] == "needs_review"
+    assert result["decision"]["review_status"] == "needs_review"
+    assert result["decision"]["evidence_grade"] is None
+    assert "GAP-001" in result["decision"]["gap_ids"]
+    assert "세이프하버" in result["explanation"]
+    assert {
+        item["name"] for item in result["steps"][1]["elements"] if item["engine_state"] == "present"
+    } == {"target_year", "target_metric"}
 
 
 def test_omitted_elements_remain_unknown(monkeypatch):
@@ -179,7 +221,7 @@ def test_local_quote_cannot_prove_bound_assurance(monkeypatch):
     elements = {item["name"]: item for item in result["steps"][1]["elements"]}
     assert elements["assurance_covered"]["candidate_state"] == "present"
     assert elements["assurance_covered"]["engine_state"] == "unknown"
-    assert elements["method"]["engine_state"] == "unknown"
+    assert elements["method"]["engine_state"] == "conflict"
 
 
 def test_http_handler_with_fake_model(monkeypatch):
