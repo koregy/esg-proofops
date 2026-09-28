@@ -85,7 +85,7 @@ def fixture(tmp_path):
         "--window-start",
         "2026-09-01",
         "--window-end",
-        "2026-09-26",
+        datetime.now(UTC).date().isoformat(),
         "--key-scope",
         "all",
     ]

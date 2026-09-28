@@ -1,7 +1,7 @@
 """Bounded, opt-in Upstage text probe; independent of production model composition.
 
 One local SQLite ledger covers the user's cumulative USD 10 base authorization.
-The general spending ceiling is USD20 via authorize_additional_budget(); both base and
+The general spending ceiling is USD30 via authorize_additional_budget(); both base and
 any authorized extension are durably recorded in the ledger before any spending
 counts against the new limit.  Before each request, reserve USD 1 (deliberately
 much larger than these tiny requests at the pinned rates).  Unknown/failed calls
@@ -27,7 +27,8 @@ MODEL_PRO4 = "solar-pro4"
 # Text, document parse and information-extract rates rechecked at the official
 # pricing page on 2026-09-25; keep one deadline across transports.
 PRICE_RECHECK_AT = datetime(2026, 10, 2, tzinfo=UTC)
-GENERAL_CEILING_USD = Decimal("20.00")
+GENERAL_CEILING_USD = Decimal("30.00")
+R32_HISTORICAL_GENERAL_USD = Decimal("20.00")
 RECORDED_GENERAL_REASON = (
     "User 2026-09-18 approved additional USD10, cumulative USD20; "
     "existing spend and unsettled reservations preserved."
@@ -269,7 +270,7 @@ class UpstageProbe:
                     extension_id != 2
                     or amount != Decimal("2.00")
                     or scoped_count != 1
-                    or general != GENERAL_CEILING_USD
+                    or general != R32_HISTORICAL_GENERAL_USD
                 ):
                     raise ValueError("BUDGET_POLICY_MISMATCH")
             else:
@@ -290,7 +291,10 @@ class UpstageProbe:
                     and amount == Decimal("10.00")
                     and reason == RECORDED_GENERAL_REASON
                 )
-                if scoped_count or not (canonical_general or recorded_general):
+                if not (canonical_general or recorded_general) or (
+                    scoped_count
+                    and (extension_id != 3 or amount != Decimal("10.00") or not canonical_general)
+                ):
                     raise ValueError("BUDGET_POLICY_MISMATCH")
                 general += amount
                 if general > GENERAL_CEILING_USD:
@@ -472,6 +476,7 @@ class UpstageProbe:
                 "(additional_usd, reason, authorized_at) VALUES (?,?,?)",
                 (stored_usd, stored_reason, authorized_at),
             )
+            self._authorized_limit(db)
         return {
             "previous_limit_usd": str(current_limit),
             "additional_usd": stored_usd,
