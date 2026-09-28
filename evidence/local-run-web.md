@@ -96,5 +96,5 @@ UI check, not a model or production test.
 Rerun with Vite on port 4195 and the Orca browser console:
 
 ```js
-await import('/@fs/Users/ss020/Dev/ESG_ProofOps/tests/e2e/run_progress_check.mjs').then(m => m.check())
+await import('/@fs<local-project-root>/tests/e2e/run_progress_check.mjs').then(m => m.check())
 ```

@@ -19,7 +19,7 @@ The coordinator owns the additive GET public contract and shared API composition
 
 ## Executed verification
 
-All commands ran from `/Users/ss020/Dev/ESG_ProofOps`.
+All commands ran from `<local-project-root>`.
 
 | Exact command | Actual result |
 |---|---|

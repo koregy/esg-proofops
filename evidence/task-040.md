@@ -44,7 +44,7 @@ Important review covered tenant scoping, irreversible-policy gates, post-delete 
 
 ## Final commands and actual results
 
-All commands ran from `/Users/ss020/Dev/ESG_ProofOps` unless stated otherwise.
+All commands ran from `<local-project-root>` unless stated otherwise.
 
 ```sh
 uv run pytest tests/acceptance/test_retention.py -q

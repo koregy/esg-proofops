@@ -101,8 +101,8 @@ Orca run `run_da368bec0794`의 Kiro Opus5/Sonnet5 작업을 사용했다. 신규
 
 ### 1.1 작업 위치
 
-- ROOT: `/Users/ss020/Dev/ESG_ProofOps` — 원문, 기업보고서, 인계 패키지, 실행 래퍼, 일부 평가 산출물.
-- APP: 이 문서를 포함한 최신 앱 checkout. 현재 통합 작업 위치는 `/Users/ss020/Dev/ESG_ProofOps/.local/ab-integration-20260921`이다. 코드·테스트 경로는 별도 표시가 없으면 APP 기준이다. 아래 과거 실행 기록의 APP은 기존 `/Users/ss020/Dev/ESG_ProofOps/.local/team-publication-20260918`을 가리키며, 그 작업본·산출물은 이동하거나 덮어쓰지 않는다.
+- ROOT: `<local-project-root>` — 원문, 기업보고서, 인계 패키지, 실행 래퍼, 일부 평가 산출물.
+- APP: 이 문서를 포함한 최신 앱 checkout. 현재 통합 작업 위치는 `<local-project-root>/.local/ab-integration-20260921`이다. 코드·테스트 경로는 별도 표시가 없으면 APP 기준이다. 아래 과거 실행 기록의 APP은 기존 `<local-project-root>/.local/team-publication-20260918`을 가리키며, 그 작업본·산출물은 이동하거나 덮어쓰지 않는다.
 - Python 명령은 APP의 `.venv/bin/python`을 사용한다. 현재 작업 트리에 미커밋 변경이 있으므로 시작 시 diff와 담당 파일을 확인하고 다른 작업을 덮어쓰지 않는다. 전체 `git add .`, 자동 push, 작업 트리 초기화를 하지 않는다.
 - 원격 main과 로컬 구현이 같다고 가정하지 않는다. 통합/납품 시 실제 commit과 미커밋 patch의 식별값을 기록한다.
 
@@ -809,7 +809,7 @@ R00의 충돌·호환성 경계를 필요한 범위만 정리한 뒤 R01 비교�
 재실행 예시(APP에서 실행, `--operator`에는 실제 실행자 식별자를 기록):
 
 ```sh
-PROOFOPS_ROOT=/Users/ss020/Dev/ESG_ProofOps
+PROOFOPS_ROOT=/path/to/project
 .venv/bin/python scripts/attach_submitted_review.py \
   --state-db "$PROOFOPS_ROOT/.local/kia-submitted-review-20260923/state.sqlite3" \
   --directory "$PROOFOPS_ROOT/outputs/agent-results/R30/수정본" \
