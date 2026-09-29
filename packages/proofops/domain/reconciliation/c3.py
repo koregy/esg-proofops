@@ -2,10 +2,20 @@
 
 Every amount is an exact ``Decimal``. The threshold test is written as a
 multiplication, ``commitment <= threshold * capex``, so no division is performed
-and a ratio can never be coerced into infinity or zero. Nothing is decided until
-the operator has actually approved a threshold and an account mapping: an
-unapproved policy blocks, it does not fall back to the 5.0 figure that appears as
-an illustration in the specification.
+and a ratio can never be coerced into infinity or zero.
+
+Adopted policy (R00 section 12, 2026-09-28):
+
+* REC-003 B -- nothing is compared until the operator has approved a CAPEX
+  account mapping and an allowlist covering every requested account, and the
+  CAPEX period is exactly the pinned financial period (no annualisation, no
+  multi-year aggregation without a schedule).
+* REC-004 B -- the threshold stays null and every threshold-based outcome stays
+  blocked; it never falls back to the 5.0 figure that appears as an illustration
+  in the specification. Only the direct existence of a disclosed investment
+  commitment that the application layer has verified and bound to this claim
+  (source role ``c3_commitment``) may complete as ``matched``, and it does so
+  without an approved threshold.
 """
 
 from __future__ import annotations
@@ -42,10 +52,8 @@ def _with_sources(outcome: Outcome, extra: tuple[str, ...]) -> Outcome:
     return replace(outcome, extra_source_ids=tuple(extra) + outcome.extra_source_ids)
 
 
-def _policy_resolved(context: Context) -> bool:
+def _account_mapping_resolved(context: Context) -> bool:
     policy = context.policy
-    if policy["c3_threshold"] is None:
-        return False
     if not policy["c3_account_mapping_approved"]:
         return False
     allowed = set(policy["allowed_capex_account_ids"])
@@ -83,11 +91,16 @@ def evaluate(context: Context) -> Outcome:
     if context.sustainability["unit"] != currency or context.financial["unit"] != currency:
         return _with_sources(blocked("c3_currency_mismatch"), extra)
 
-    if not _policy_resolved(context):
+    if not _account_mapping_resolved(context):
         return _with_sources(blocked("c3_policy_unapproved"), extra)
 
-    if any(c3_context[key] is None for key in _CONTEXT_PERIOD_KEYS):
+    identity = context.packet["identity"]
+    financial_period = (identity["financial_period_start"], identity["financial_period_end"])
+    if any(c3_context[key] is None for key in _CONTEXT_PERIOD_KEYS) or None in financial_period:
         return _with_sources(blocked("c3_period_unresolved"), extra)
+    if (c3_context["capex_period_start"], c3_context["capex_period_end"]) != financial_period:
+        # The CAPEX figure is only meaningful for the pinned financial period.
+        return _with_sources(blocked("c3_capex_period_mismatch"), extra)
 
     commitment = parse_decimal(context.sustainability["normalized"], "sustainability.normalized")
     capex = parse_decimal(context.financial["normalized"], "financial.normalized")
@@ -99,6 +112,8 @@ def evaluate(context: Context) -> Outcome:
     if c3_context["commitment_source_id"] is not None:
         return _with_sources(completed("matched", "commitment_disclosed"), extra)
 
+    if context.policy["c3_threshold"] is None:
+        return _with_sources(blocked("c3_policy_unapproved"), extra)
     threshold = parse_decimal(context.policy["c3_threshold"], "policy.c3_threshold")
     if _within_threshold(commitment, threshold, capex):
         return _with_sources(completed("matched", "capex_within_threshold"), extra)

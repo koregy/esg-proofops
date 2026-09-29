@@ -1,4 +1,4 @@
-# B-F02 정책·해석 결정안 (제안 · 미승인)
+# B-F02 정책·해석 결정안 (제안 원문 · REC-001~008 채택·적용 현황 2026-09-29)
 
 작성: 개발자 B (Claude Opus) · 2026-09-22 (KST) · 기준 커밋 `ca75df592345fb412cd1593c29a0f5c506f81fe3`
 
@@ -6,6 +6,32 @@
 `policy.approved`는 모든 실자료 실행에서 `false`로 남아 있다. 채택하려면 실제 승인자·역할·일시·
 정책 해시·버전·적용 범위를 별도로 기록해야 한다. 외부 기준·조항은 인용하지 않았으며, 아래
 근거는 저장소 안의 원문·코드·이번 실자료 관찰로만 구성했다.
+
+## 2026-09-29 갱신 — 채택(adopted)과 실행 적용(execution-applied)의 구분
+
+사용자는 2026-09-28 R84 추천안 REC-001~008을 일괄 채택했다(`docs/R00_DOMAIN_DECISIONS.md` 12장).
+아래 DEC-* 표는 그 이전의 **제안 원문**으로 보존한다. "채택"은 프로젝트 정책 결정이고, "실행 적용"은
+엔진·서비스 코드가 그 규칙을 실제로 강제하는지를 뜻한다. 채택은 실정책 승인 레지스트리 등록,
+`policy.approved=true`, 임계값·CAPEX 계정 매핑 값을 만들지 않는다. 실자료 C3는 여전히
+승인된 매핑이 없어서 `blocked`이다.
+
+적용 버전: 엔진 `reconciliation-engine-1.2.0`(이전 `1.1.0`). 입력·정책·출력 스키마 1.1은 바꾸지 않았다.
+`1.1.0`으로 저장된 결과 revision은 불변이며, 재평가하면 새 revision이 `1.2.0`을 기록한다.
+
+| 항목 | 채택 규칙 요지 | 실행 적용 상태 | 코드·테스트 | 남은 것 / 계약 긴장 |
+|---|---|---|---|---|
+| REC-001 A | 검증된 집합을 같은 기간·조직 기준에서만 비교, 사업장↔법인 매핑은 검증된 관계가 있을 때만, 미해결이면 blocked | **적용(이번 변경)**: C1은 SR 기간≠재무 기간이면 `c1_period_mismatch`, 기간이 null이면 `c1_period_unresolved`, 연결 기준 `unknown`이면 `c1_consolidation_unknown`으로 차단한다. 사업장·법인 집합 혼합은 기존 `kind_mismatch` 차단을 유지한다 | `c1.py`; `test_c1.py::test_rec001_*` | 1.1에는 통제·경계 관계 매핑 필드가 없어서 사업장→법인 매핑은 실행 불가(항상 blocked). 필요하면 계약 확장이 필요하며 이번에 만들지 않았다 |
+| REC-002 A | 설명은 등록 패키지의 검증 인용 + 경계 차이에 명시 연결일 때만 present | **기존 적용**: 설명 후보는 해시·원문·`explanation` 역할·검토 영수증 포함을 모두 통과해야 하고, 완전 검색 + 무인용이면 `needs_explanation`, 미완료면 blocked | `service.py` `reconcile`; `test_integration.py`, `test_service.py` | 설명이 "해당 경계 차이"에 연결됐는지는 문서 레지스트리의 `explanation` 역할 부여(운영자·A 입력)에 의존한다 |
+| REC-003 B | 승인된 재무 계정→CAPEX 매핑, 같은 기간·통화, 다년도는 정확한 일정표가 있을 때만 | **부분 적용**: 매핑 승인·허용 목록·통화 가드는 기존 적용. **이번 변경**: CAPEX 기간이 고정된 재무 기간과 정확히 같지 않으면 `c3_capex_period_mismatch`, 재무 기간이 null이면 `c3_period_unresolved` | `c3.py`; `test_c3.py::test_rec003_*` | 승인된 계정 매핑 **값**이 없어서 실행은 blocked(외부 입력). 1.1에는 다년도 일정표 필드가 없어서 다년도 CAPEX는 항상 blocked |
+| REC-004 B | 임계값 null 유지, 임계값 기반 결과 blocked, 매칭되는 공시 투자 약정의 직접 존재만 matched | **적용(이번 변경)**: 기존에는 `_policy_resolved`가 임계값 null에서 약정 경로보다 먼저 차단했다. 이제 등록·검증된 `c3_commitment` 역할 약정 원문이 있으면 임계값 없이 `matched/commitment_disclosed`가 된다. 임계값 경로는 null이면 설명 근거가 있어도 `c3_policy_unapproved`로 남는다. 5.0은 기본값이 아니다 | `c3.py`; `test_c3.py::test_rec004_*`, `test_integration.py::test_rec004_*` | 약정 경로도 REC-003 매핑·통화·기간·양수 금액 가드와 역할·원문 검증을 그대로 거친다. 매핑이 승인되지 않은 실자료에서는 여전히 blocked |
+| REC-005 A | 등록된 SR/FS 전 범위 + 판독 가능 + 검색 manifest 완결일 때만 needs_explanation | **적용(이번 변경 포함)**: 영수증 레지스트리·실패 문서 없음·필수 문서 등록 확인은 기존 적용. **이번 변경**: `complete` 영수증의 `required_document_ids`가 패킷의 SR·FS 문서 버전을 모두 포함하지 않으면 `coverage_unverified` | `service.py` `_apply_coverage`; `test_integration.py::test_rec005_*` | 문서 **안의** 쪽·주석 단위 전수 여부는 영수증 작성자(검색 manifest)가 보증한다. 엔진은 문서 단위까지만 검사한다 |
+| REC-006 A | 실제 시작·종료일과 연결 범위, 평가 시점의 최신 정정 공시 고정, 불가·비교불가면 blocked, 연환산 없음 | **기존 적용**: C2는 달력 날짜로 비교한다. `rcept_no`·기간·공시일·`as_of`는 문서 레지스트리와 일치해야 하고, 연환산은 없다. `comparability=not_comparable`이면 `completed/not_applicable` | `c2.py`, `service.py` `_document_reason` | "최신 정정본 선택"은 수집·운영 단계 책임이다. 엔진은 고정된 `rcept_no`만 검증한다 |
+| REC-007 A | 같은 claim/기간 공시에서 정의 + 포함·제외 기준 또는 산식 분모가 있을 때만 C4 matched | **기존 적용**: 정의와 산식 근거가 둘 다 있어야 matched, 완전 검색에서 누락이면 `needs_explanation`, 미완료면 blocked. 역할 `c4_definition`/`c4_calculation` 검증을 거치고 회계 적정성은 판정하지 않는다 | `c4.py`, `service.py` | 없음 |
+| REC-008 A | C5는 stage>CURRENT_STAGE면 실행 차단, 별도 `not_run` 봉투, 1.1 스키마에 C5를 추가하지 않음 | **기존 적용**: 엔진·서비스는 `NotImplementedError("stage_disabled")`를 내고, CLI는 별도 dispatch 봉투(`not_run`, `stage_disabled`)를 기록한다. 제품 저장소·HTTP는 `C5_DISABLED` 422로 거부한다 | `engine.py`, `service.py`, `evaluation/reconciliation_cli.py`, `reconciliation_store.py` | 봉투 생성은 CLI(`evaluation/`, master 소유)에만 있다. HTTP는 봉투 대신 422 오류를 준다. 둘 다 판정을 만들지 않으므로 규칙 위반은 아니다 |
+
+**이 변경이 하지 않은 것:** 임계값·계정 매핑 값 승인, 실정책 레지스트리 등록, `reconciliation.csv`
+기대값 변경, 실제 claim·Kia SR 입력 생성. 등록된 claim과 Kia SR 원문, 승인된 CAPEX 매핑은 정당한
+외부 입력으로 남는다.
 
 ## 근거로 사용한 실제 자료
 

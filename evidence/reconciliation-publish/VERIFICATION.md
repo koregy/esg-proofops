@@ -584,3 +584,154 @@ revision → source download → JSON export path in the app on real data, and r
 the real verdict with its denominators. Until then the correct statement remains
 **product path verified / real-company verdict pending**, not a completed
 real-company evaluation.
+
+## 2026-09-29 resumed work and expert CSV receipt
+
+This dated entry supersedes the older statements that no expert reconciliation
+rows had arrived and that remote CI had never run. It does not reinterpret earlier
+test logs as runs against the current code.
+
+### Integration and source of authority
+
+The follow-up branch was at `e3c6a9f`; latest main `3340225` was integrated in
+`db81c04`. The only merge conflicts were generated
+`evidence/package_validation.json` and `.txt`. Regenerating them on the merged
+tree with `uv run --no-sync python scripts/validate_package.py` passed 974/974
+documentation/contract checks (exit 0). No original checkout modifications were
+discarded or stashed, and no force push was used.
+
+The user's September 28 adoption of REC-001 through REC-008 is recorded in
+`docs/R00_DOMAIN_DECISIONS.md` section 12. These decisions are no longer all
+unresolved proposals. A tenant/company-bound executable policy and its approval
+record are separate from this project-level adoption. Missing runtime identifiers,
+source receipts, and approval timestamps must not be invented.
+
+### Received Kia expectation rows
+
+The separately delivered root `reconciliation.csv` has SHA-256
+`df4b7817184b3a5fcfcce948b3514b70335fbdd48c01172ea4c6d89869723017`.
+It contains 24 columns and eight unique, well-formed rows: four case families,
+each with a CUR/ASM scenario, rather than eight independent company cases.
+There are four C1 rows, two C2 rows, two C3 rows and no C4 rows.
+
+The nine files listed by the existing Kia financial bundle's `files.json` all
+matched their recorded hashes. All eight CSV financial references matched
+`facts.json` and passed the shipped `FileSourceReader` quote/locator/hash check.
+CSV embedded line breaks were parsed as CSV text; the supplied files were not
+rewritten. The receipt is retained privately at
+`.local/b-resume-20260929/csv-audit.json`; the CSV, report text and other original
+delivery files are not published in Git.
+
+| Case family | Expert expectation | Execution status in this receipt |
+|---|---|---|
+| DOC034-C01 / C2 reporting period | CUR blocked; ASM matched | not_run |
+| DOC034-C01 / C1 full boundary | CUR blocked; ASM blocked | not_run |
+| DOC034-C01 / C1 KCN difference | CUR blocked; ASM blocked until whole-set prerequisites | not_run |
+| DOC034-C04 / C3 no currency trigger | CUR blocked; ASM not_applicable | not_run |
+
+The SR PDF with expected SHA-256
+`d0d814d98c4aeedbbdb2bf8631b8981ae5cde94dec32aa32c57510420274da1f`
+was not found in the inspected workspace and B checkout. The financial bundle
+explicitly excludes that SR. Financial-source verification is therefore not a
+claim that the SR quotes, claim attribution, or the expert's semantic expectations
+have been independently verified. Engine-evaluated rows: 0; semantic agreement:
+N/A (denominator 0). Human-authored expectations have been received; final gold
+status is not inferred from file receipt or from a blank adjudicator field.
+
+Clarifications to preserve in the next input revision:
+
+- CUR/ASM reflect an earlier policy assumption; retain them as historical inputs
+  and relate revised expectations to the September 28 decisions.
+- General policy rejection happens before the C3 domain branch. Once application
+  prerequisites pass, a verified claim without the currency-amount trigger is
+  `not_applicable/c3_trigger_absent`, not a threshold-mapping rejection.
+- A C1 null/unresolved normalized value and an explicitly empty verified set can
+  produce different reason codes; do not encode missing evidence as an empty set
+  simply to force `entity_set_empty`.
+- Narrative `search_coverage` is not an authenticated completed-search receipt.
+- C4 expectations remain absent. An applicable DOC034-C03 classification case
+  needs its own definition/calculation source review.
+
+### Ownership while waiting for replies
+
+A is asked for existing Kia registration and DOC034 claim-to-UUID/revision mapping,
+source receipts, existing executable policy state and a reproducible product
+environment. The expert is asked for the matching SR/access path and page basis,
+period/boundary attribution and the missing C4 case if applicable. Neither party
+is asked to resend financial material already verified by B. Keys, cookies and
+whole production databases are not requested.
+
+B owns main integration, implementation of the adopted rules, regression checks,
+CSV-to-verified-input preparation after the prerequisites arrive, and the eventual
+real review/evaluate/revision/source-download/export replay. C1 financial
+attachment acquisition also remains B's work; locating or describing an attachment
+is not a request for the expert to implement collection.
+
+Validation for this resumed implementation is recorded below.
+
+
+### Kia financial annex recovered (2026-09-29)
+
+The official DART filing index and detailed subsidiaries table were retrieved
+with HTTP 200 from public DART (no model call, no API key needed). Receipt
+`20250313001390`, document `10404742`, element `128`, offset `4268203`, length
+`23871`, `dart4.xsd`: 24 seven-column subsidiary rows were extracted. The HTML
+response is 20,583 bytes with SHA-256
+`af6bef326c5f531ef3d0ba564c28a58b773f8895569922e9ec0db21a6317e2e6`.
+The financial-annex acquisition gap is now resolved. This does not verify an
+SR facility-to-entity mapping, KCN scope, or exhaustive package search.
+
+Local handoff: `output/developer-b-kia-annex-20260929/` under the user's project
+root (outside Git). It contains original HTML, URL/hash receipts, derived text,
+24 extracted rows, a FileSourceReader-verified exact source reference and
+`files.json` hashing all 9 other package files. Derived-text SHA-256:
+`1c99c114561f6c596745a53b2f6217198653ac59aaf1f7970209cf88021abd00`.
+The derived locator preserves literal CRLF bytes decoded as UTF-8 on Windows;
+normalizing newlines before computing offsets was rejected as quote_mismatch
+and corrected before delivery. Extracted rows remain `extracted_not_human_verified`.
+Original financial package and expert CSV are unchanged.
+
+
+### Adopted-rule implementation and final local validation
+
+Engine version is now `reconciliation-engine-1.2.0`; schemas remain 1.1 and old
+stored revisions remain immutable. C1 blocks unresolved/mismatched SR and FS
+periods and unknown consolidation. C3 requires CAPEX to match the pinned FS
+period; a verified matching commitment can complete with a null threshold while
+mapping, allowlist, currency, period, amount, source role and approval guards
+remain enforced. Threshold-based comparisons still block with a null threshold.
+A complete search receipt must include both registered SR and FS versions.
+The adopted-vs-applied matrix and remaining contract limitations are in
+`docs/DEVELOPER_B_POLICY_PROPOSALS.md`; handoff instructions were updated too.
+
+Orca supervised Claude Opus 5.5 under run `run_7e9b0234947b`, task
+`task_fe96f66f7a10`, successful dispatch `ctx_717ed6f900df`. Its source/test/document
+work was reviewed by the coordinator. The initial trust-prompt launch exited
+before editing and was released; the successful dispatch settled. Cleanup
+returned `retained/user_takeover` (no process action), and no reclaimable worker
+terminals remained. This is a real Claude run, not a renamed Codex subagent.
+
+Windows local checks (Python 3.12, `PYTHONUTF8=1`):
+
+| Check | Result |
+|---|---|
+| `scripts/verify_reconciliation.py --output .local/b-resume-20260929/release --timeout-seconds 600` | 15/15 gates passed, exit 0; pytest 758 passed, 3 warnings, 0 skips |
+| Windows parser/upload + acceptance parsing + local tag runner + tagging platform tests | 80 passed, 2 warnings, exit 0 |
+| Claude focused reconciliation suite | 576 passed; liaison/head-consumer tests 30 passed |
+| `pnpm --filter proofops-web typecheck` and `build` | Both exit 0 |
+| `scripts/check_reconciliation_browser.mjs` using Edge against local composed HTTP/SQLite | passed; C1/C2/C4 matched, C3 policy_unapproved; source hashes, immutable prior revision, replay and stale-review notice passed; no page errors |
+| `scripts/validate_package.py` | 974/974 documentation/contract checks, exit 0 |
+| Diff whitespace / local credential-value scan | Passed; no key value printed or committed |
+
+Release, Windows and browser artifacts stay under `.local/b-resume-20260929/`.
+The test-only browser server was stopped after verification. No real model/AWS
+execution or production deployment occurred. Earlier remote CI was 9/9 passed at
+`e3c6a9f`; that historical status is not proof for this new revision. The PR checks
+on the newly pushed revision are authoritative for remote platform validation.
+
+Remaining external inputs are the matching Kia SR, verified real registered
+claim/revision binding, relevant runtime approval/account mapping, and expert
+clarification of C1/C2/C4 expectations. Actual import and semantic evaluation of
+the delivered CSV are still not_run. Facility-to-entity mapping and multi-year
+CAPEX schedules have no executable field in schema 1.1 and stay conservatively
+blocked; they are explicitly documented limitations, not fabricated mappings.
