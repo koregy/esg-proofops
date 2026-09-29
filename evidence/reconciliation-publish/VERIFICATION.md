@@ -735,3 +735,19 @@ clarification of C1/C2/C4 expectations. Actual import and semantic evaluation of
 the delivered CSV are still not_run. Facility-to-entity mapping and multi-year
 CAPEX schedules have no executable field in schema 1.1 and stay conservatively
 blocked; they are explicitly documented limitations, not fabricated mappings.
+
+### Remote CI follow-up
+
+PR #10 was updated to d0ee16e and became mergeable. CI run 36506112322 exposed
+pre-existing formatting failures introduced by the integrated main: five E501
+lines in scripts/build_demo_snapshot.py, plus six files rejected by the global
+formatter (scripts/analyze_report.py and five acceptance/integration/unit tests).
+Only formatting was changed in those seven files. Python AST equality against
+the prior commit was checked for every affected file; no behavior was changed.
+Repository-wide ruff check and ruff format --check now pass (577 files).
+The original failure is retained as a CI failure, not relabeled as a pass; checks
+on the subsequent commit are the final remote gate.
+The global mypy command on Windows reports 9 Unix-only resource/fcntl attribute
+errors in existing source_preview.py and upstage_tagging.py. The CI global mypy
+job targets Linux; this broad Windows result is not counted as a pass or hidden
+with ignores. B's cross-platform release mypy gates passed separately.
