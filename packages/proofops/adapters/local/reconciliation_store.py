@@ -15,7 +15,7 @@ import shutil
 import sqlite3
 from collections.abc import Mapping
 from copy import deepcopy
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
@@ -26,7 +26,11 @@ from proofops.adapters.reconciliation.files import FileSourceReader, SourceReadE
 from proofops.application.reconciliation import revision as rec_revision
 from proofops.application.reconciliation.presentation import project_result
 from proofops.application.reconciliation.schema import validate_schema
-from proofops.application.reconciliation.service import canonical_sha256, reconcile
+from proofops.application.reconciliation.service import (
+    canonical_sha256,
+    downgrade_to_1_1,
+    reconcile,
+)
 from proofops.application.reconciliation.sources import MAX_SOURCE_BYTES
 from proofops.domain.provenance import canonical_hash
 from proofops.domain.rules.engine import MAPPINGS
@@ -37,6 +41,7 @@ IMMUTABLE_TABLES = (
     "reconciliation_revision",
     "reconciliation_source",
     "reconciliation_idempotency",
+    "reconciliation_filing_collection",
 )
 BUNDLE_REQUIRED = ("packet", "policy", "documents", "artifacts")
 BUNDLE_OPTIONAL = ("coverage", "policies")
@@ -44,6 +49,8 @@ BUNDLE_OPTIONAL = ("coverage", "policies")
 # with them, so every earlier snapshot, detail and replay keeps its exact shape.
 REVISION_BUNDLE = ("adopted_revision", "revision_receipt", "filing_pages")
 FILING_PAGE_DIR = "_rec_pages"
+# Store-run OpenDART collections (rec-002-006-v2): tenant-scoped, hash-addressed.
+FILING_COLLECTION_DIR = "_rec_collections"
 MAX_FILING_PAGE_BYTES = 5 * 1024 * 1024
 REVIEW_FIELDS = (
     "reason",
@@ -82,7 +89,9 @@ class LocalReconciliationStore:
 
     kind = "local-synthetic-only"
 
-    def __init__(self, database_path, artifact_root, *, run_store, claims, tags=None) -> None:
+    def __init__(
+        self, database_path, artifact_root, *, run_store, claims, tags=None, clock=None
+    ) -> None:
         if Path(database_path).resolve() != Path(run_store.path).resolve():
             raise ValueError("reconciliation and runs must share one local database")
         self.run_store = run_store
@@ -92,6 +101,8 @@ class LocalReconciliationStore:
         self.tags = tags
         self.artifact_root = Path(artifact_root)
         self.artifact_root.mkdir(parents=True, exist_ok=True)
+        # The trusted clock of this store; only store-run collections are timed by it.
+        self._clock = clock if clock is not None else (lambda: datetime.now(UTC))
         with self.jobs._transaction() as db:
             self._initialize(db)
 
@@ -132,6 +143,10 @@ class LocalReconciliationStore:
             tenant_id TEXT NOT NULL, case_id TEXT NOT NULL, operation TEXT NOT NULL,
             key TEXT NOT NULL, request_sha256 TEXT NOT NULL, response BLOB NOT NULL,
             PRIMARY KEY (tenant_id, case_id, operation, key))""")
+        db.execute("""CREATE TABLE IF NOT EXISTS reconciliation_filing_collection (
+            tenant_id TEXT NOT NULL, collection_sha256 TEXT NOT NULL,
+            collected_by TEXT NOT NULL, created_at TEXT NOT NULL, record BLOB NOT NULL,
+            PRIMARY KEY (tenant_id, collection_sha256))""")
         for table in IMMUTABLE_TABLES:
             for action in ("UPDATE", "DELETE"):
                 db.execute(f"""CREATE TRIGGER IF NOT EXISTS {table}_no_{action.lower()}
@@ -264,6 +279,10 @@ class LocalReconciliationStore:
         tenant = self._tenant(auth)
         packet, policy, documents, artifacts, coverage = self._validate_bundle(bundle)
         adopted, receipt, filing_pages = self._validate_revision_bundle(bundle)
+        if receipt is not None and "collection_sha256" in receipt["filing_history"]:
+            with self.jobs._transaction() as db:
+                if self._collection(db, tenant, receipt) is None:
+                    raise ReconciliationRejected("FILING_COLLECTION_NOT_FOUND", 422)
         anchor = self._verified_claim(tenant, run_id, claim_id, packet, policy)
 
         case_id = str(uuid4())
@@ -375,8 +394,14 @@ class LocalReconciliationStore:
         coverage = deepcopy(_mapping(supplied.get("coverage") or {}, "VALIDATION_ERROR"))
         if packet.get("item") == "C5":
             raise ReconciliationRejected("C5_DISABLED", 422)
+        input_schema = "input"
+        if (
+            supplied.get("adopted_revision") == rec_revision.REVISION_V2
+            and packet.get("schema_version") == "1.2"
+        ):
+            input_schema = "input-1.2"
         try:
-            validate_schema("input", packet)
+            validate_schema(input_schema, packet)
             validate_schema("policy", policy)
         except Exception as error:
             raise ReconciliationRejected("VALIDATION_ERROR", 422) from error
@@ -401,7 +426,7 @@ class LocalReconciliationStore:
         if not any(key in bundle for key in REVISION_BUNDLE):
             return None, None, {}
         adopted = bundle.get("adopted_revision")
-        if adopted != rec_revision.REVISION:
+        if adopted not in rec_revision.REVISIONS:
             raise ReconciliationRejected("VALIDATION_ERROR", 422)
         receipt = bundle.get("revision_receipt")
         pages = bundle.get("filing_pages") or {}
@@ -413,13 +438,19 @@ class LocalReconciliationStore:
             return adopted, None, {}
         receipt = deepcopy(_mapping(receipt, "VALIDATION_ERROR"))
         receipt.pop("confirmation", None)
-        if receipt.get("revision") != rec_revision.REVISION:
+        if receipt.get("revision") != adopted:
             raise ReconciliationRejected("VALIDATION_ERROR", 422)
         try:
             canonical_sha256(receipt)
             referenced = [page["sha256"] for page in receipt["filing_history"]["search"]["pages"]]
-        except (KeyError, TypeError, ValueError) as error:
+            collection = receipt["filing_history"].get("collection_sha256")
+        except (KeyError, TypeError, ValueError, AttributeError) as error:
             raise ReconciliationRejected("VALIDATION_ERROR", 422) from error
+        if collection is not None:
+            # Pages of a store-run collection are already managed; never re-import.
+            if adopted != rec_revision.REVISION_V2 or not isinstance(collection, str) or pages:
+                raise ReconciliationRejected("VALIDATION_ERROR", 422)
+            return adopted, receipt, {}
         if not all(isinstance(digest, str) for digest in referenced) or set(referenced) != set(
             pages
         ):
@@ -429,6 +460,85 @@ class LocalReconciliationStore:
             receipt,
             {digest: _text(path, "VALIDATION_ERROR") for digest, path in pages.items()},
         )
+
+    def collect_filing_history(self, auth, client, corp_code, bgn_de, end_de, **options):
+        """Run the bounded OpenDART collector with this store's clock. Server-side only.
+
+        This is the only source of retrieval instants that the ``rec-002-006-v2``
+        no-timely-filing outcome accepts: the collector stamps each page with the
+        store clock before its request, and the record plus the raw page bytes are
+        stored immutably under the canonical record hash. A receipt names that hash;
+        it can neither supply nor edit a retrieval time. Never expose this as an HTTP
+        handler: ``client`` holds the operator's OpenDART key.
+        """
+        from proofops.adapters.dart.filings import collect_filing_history
+
+        self._require(auth, "admin")
+        tenant = self._tenant(auth)
+        actor = _text(getattr(auth, "user_sub", None), "FORBIDDEN")
+        record, pages = collect_filing_history(
+            client, corp_code, bgn_de, end_de, clock=self._clock, **options
+        )
+        digest = rec_revision.collection_sha256(record)
+        destination = self._collection_root(tenant, digest)
+        created: list[Path] = []
+        try:
+            destination.mkdir(parents=True, exist_ok=True)
+            for page_digest, payload in pages.items():
+                target = destination / _page_name(page_digest)
+                if target.exists():
+                    if target.read_bytes() != payload:
+                        raise ReconciliationRejected("FILING_COLLECTION_CONFLICT", 409)
+                    continue
+                with target.open("xb") as stream:
+                    created.append(target)
+                    stream.write(payload)
+            with self.jobs._transaction() as db:
+                if self._collection_row(db, tenant, digest) is None:
+                    db.execute(
+                        "INSERT INTO reconciliation_filing_collection VALUES (?,?,?,?,?)",
+                        (tenant, digest, actor, _now(), _encode(record)),
+                    )
+        except BaseException:
+            # A failed collection leaves no managed page and no record behind.
+            for path in created:
+                path.unlink(missing_ok=True)
+            raise
+        return {"collection_sha256": digest, "record": record}
+
+    def _collection_root(self, tenant: str, digest: str) -> Path:
+        return self.artifact_root / tenant / FILING_COLLECTION_DIR / digest[:24]
+
+    @staticmethod
+    def _collection_row(db, tenant: str, digest: str) -> dict[str, Any] | None:
+        row = db.execute(
+            "SELECT record FROM reconciliation_filing_collection"
+            " WHERE tenant_id=? AND collection_sha256=?",
+            (tenant, digest),
+        ).fetchone()
+        return None if row is None else json.loads(row[0])
+
+    def _collection(self, db, tenant: str, receipt: Mapping[str, Any]) -> dict | None:
+        digest = receipt["filing_history"].get("collection_sha256")
+        if not isinstance(digest, str) or len(digest) != 64:
+            return None
+        record = self._collection_row(db, tenant, digest)
+        if record is None or rec_revision.collection_sha256(record) != digest:
+            return None
+        return record
+
+    def _collection_page_reader(self, tenant: str, digest: str):
+        root = self._collection_root(tenant, digest)
+
+        def read(page_digest: str) -> bytes:
+            if not isinstance(page_digest, str) or len(page_digest) != 64:
+                raise ReconciliationRejected("SOURCE_UNVERIFIED", 409)
+            path = root / _page_name(page_digest)
+            if path.stat().st_size > MAX_FILING_PAGE_BYTES:
+                raise ReconciliationRejected("SOURCE_UNVERIFIED", 409)
+            return path.read_bytes()
+
+        return read
 
     def _import_filing_pages(self, tenant, case_id, pages, source_root) -> None:
         """Copy raw OpenDART list pages, addressed by the SHA-256 of their bytes."""
@@ -979,8 +1089,14 @@ class LocalReconciliationStore:
 
         def apply(db, tenant, case_id, head, revision, actor, created_at):
             snapshot = self._case_row(db, tenant, case_id)
-            result = self._reconcile(tenant, case_id, snapshot, head, db=db)
+            result = self._reconcile(
+                tenant, case_id, snapshot, head, db=db, evaluated_on=created_at[:10]
+            )
             projection = project_result(result, snapshot["packet"], snapshot["documents"])
+            if result.get("schema_version") == "1.2":
+                # The HTTP result contract is strict 1.1: it gets the 1.1 view and
+                # the full 1.2 result travels in the open, versioned projection.
+                result = downgrade_to_1_1(result)
             self._append(
                 db,
                 tenant,
@@ -1014,7 +1130,9 @@ class LocalReconciliationStore:
             auth, case_id, "evaluation", "editor", if_match, idempotency_key, {}, apply
         )
 
-    def _reconcile(self, tenant, case_id, snapshot, head, *, db=None) -> dict[str, Any]:
+    def _reconcile(
+        self, tenant, case_id, snapshot, head, *, db=None, evaluated_on=None
+    ) -> dict[str, Any]:
         """Evaluate server-owned snapshots. Unconfirmed bindings are simply absent."""
         confirmed = head["review_state"] == "reviewed"
         policy = snapshot["policy"]
@@ -1055,6 +1173,18 @@ class LocalReconciliationStore:
                 "revision_receipt": receipt,
                 "filing_page_reader": self._filing_page_reader(tenant, case_id),
             }
+            if snapshot["adopted_revision"] == rec_revision.REVISION_V2:
+                revision_kwargs["evaluation_date"] = (
+                    date.fromisoformat(evaluated_on) if evaluated_on else date.today()
+                )
+                stored = snapshot.get("revision_receipt")
+                if stored is not None and "collection_sha256" in stored["filing_history"]:
+                    record = self._collection(db, tenant, stored) if db is not None else None
+                    revision_kwargs["filing_collection"] = record
+                    if record is not None:
+                        revision_kwargs["filing_page_reader"] = self._collection_page_reader(
+                            tenant, stored["filing_history"]["collection_sha256"]
+                        )
         return reconcile(
             deepcopy(snapshot["packet"]),
             deepcopy(policy),

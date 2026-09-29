@@ -390,6 +390,8 @@ def reconcile(
     adopted_revision: str | None = None,
     revision_receipt: Mapping[str, Any] | None = None,
     filing_page_reader: Any = None,
+    evaluation_date: date | None = None,
+    filing_collection: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Verify provenance, then evaluate with the pure 1.1 engine.
 
@@ -397,9 +399,19 @@ def reconcile(
     passing a receipt without naming the revision is a caller error. With
     ``adopted_revision=revision.REVISION`` the adopted REC-002/REC-006 gates in
     :mod:`.revision` apply and a missing or unconfirmed receipt blocks.
+    ``revision.REVISION_V2`` applies the same gates, returns output schema 1.2 and
+    may complete REC-006 as an explicit not_applicable (``evaluation_date``
+    defaults to today; it only closes cutoffs, it never selects a filing). Only v2
+    accepts input 1.2 (nullable ``financial_document_version``) and a trusted
+    ``filing_collection`` record, the sole source of retrieval instants.
     """
     if adopted_revision is None:
-        if revision_receipt is not None or filing_page_reader is not None:
+        if (
+            revision_receipt is not None
+            or filing_page_reader is not None
+            or evaluation_date is not None
+            or filing_collection is not None
+        ):
             raise ValueError("revision_receipt_without_revision")
         return _reconcile(
             packet,
@@ -411,21 +423,25 @@ def reconcile(
             document_registry=document_registry,
             receipt=None,
             page_reader=None,
-        )
-    if adopted_revision != rec_revision.REVISION:
+        )[0]
+    if adopted_revision not in rec_revision.REVISIONS:
         raise ValueError("unknown_reconciliation_revision")
+    v2 = adopted_revision == rec_revision.REVISION_V2
+    if (evaluation_date is not None or filing_collection is not None) and not v2:
+        raise ValueError("evaluation_date_requires_revision_v2")
     if isinstance(packet, Mapping) and packet.get("item") == "C5":
         raise NotImplementedError("stage_disabled")
-    validate_schema("input", packet)
+    validate_schema(_input_schema(packet, v2), packet)
     validate_schema("policy", policy)
     try:
         receipt = rec_revision.require_confirmed(
-            revision_receipt if revision_receipt is not None else {}
+            revision_receipt if revision_receipt is not None else {}, adopted_revision
         )
     except rec_revision.RevisionBlocked as error:
         code = "revision_receipt_missing" if revision_receipt is None else error.code
-        return _revised(_blocked(packet, policy, code))
-    result = _reconcile(
+        blocked = _blocked(packet, policy, code)
+        return _as_v2(blocked, None) if v2 else _revised(blocked)
+    result, lookup = _reconcile(
         packet,
         policy,
         source_reader=source_reader,
@@ -435,8 +451,17 @@ def reconcile(
         document_registry=document_registry,
         receipt=receipt,
         page_reader=filing_page_reader,
+        evaluation_date=(evaluation_date or date.today()) if v2 else None,
+        collection=filing_collection,
     )
-    return _revised(result)
+    return _as_v2(result, lookup) if v2 else _revised(result)
+
+
+def _input_schema(packet: Any, v2: bool) -> str:
+    """Input 1.2 exists only for revision v2; everything else is frozen 1.1."""
+    if v2 and isinstance(packet, Mapping) and packet.get("schema_version") == "1.2":
+        return "input-1.2"
+    return "input"
 
 
 def _revised(result: dict[str, Any]) -> dict[str, Any]:
@@ -444,6 +469,79 @@ def _revised(result: dict[str, Any]) -> dict[str, Any]:
     # which gate set produced a stored result without any schema change.
     result["engine_version"] = f"{result['engine_version']}{rec_revision.ENGINE_SUFFIX}"
     return result
+
+
+# Reason codes with which the pure engine completes as not_applicable.
+_DOMAIN_NOT_APPLICABLE = ("c3_trigger_absent", "not_comparable", "period_out_of_scope")
+
+
+def _as_v2(result: dict[str, Any], lookup: dict[str, Any] | None) -> dict[str, Any]:
+    """Wrap a 1.1-shaped result as output 1.2; never changes the decision."""
+    reason: str | None = None
+    if result["status"] == "not_applicable":
+        if lookup is not None and lookup["outcome"] == "no_timely_filing":
+            reason = rec_revision.NO_TIMELY_FILING
+        else:
+            known = [code for code in _DOMAIN_NOT_APPLICABLE if code in result["reason_codes"]]
+            if len(known) != 1:
+                return _as_v2(_blocked_from(result, "not_applicable_reason_unresolved"), None)
+            reason = known[0]
+    versioned = dict(result)
+    versioned.update(
+        schema_version="1.2",
+        engine_version=f"{result['engine_version']}{rec_revision.ENGINE_SUFFIX_V2}",
+        not_applicable_reason=reason,
+        filing_lookup=None if result["execution_state"] == "blocked" else lookup,
+    )
+    validate_schema("output-1.2", versioned)
+    return versioned
+
+
+def _blocked_from(result: Mapping[str, Any], code: str) -> dict[str, Any]:
+    return dict(
+        result,
+        execution_state="blocked",
+        status=None,
+        review_required=True,
+        reason_codes=[code],
+        explanation_source_id=None,
+    )
+
+
+def downgrade_to_1_1(result: Mapping[str, Any]) -> dict[str, Any]:
+    """Strict 1.1 view of a 1.2 result for readers pinned to output 1.1.
+
+    Output 1.1 cannot carry the explicit REC-006 reason, so that outcome is shown
+    to 1.1 readers exactly as the v1 revision reports it: blocked, status null.
+    Other outcomes are unchanged apart from the two 1.2-only fields.
+    """
+    if result.get("schema_version") != "1.2":
+        raise ValueError("output_1_2_required")
+    legacy = {
+        key: value
+        for key, value in result.items()
+        if key not in {"not_applicable_reason", "filing_lookup"}
+    }
+    legacy["schema_version"] = "1.1"
+    if result["not_applicable_reason"] == rec_revision.NO_TIMELY_FILING:
+        legacy = _blocked_from(legacy, rec_revision.NO_TIMELY_FILING)
+        legacy["reason_codes"] = [rec_revision.NO_TIMELY_FILING, "output_1_2_required"]
+    validate_schema("output", legacy)
+    return legacy
+
+
+def _not_applicable_no_filing(
+    packet: Mapping[str, Any], policy: Mapping[str, Any]
+) -> dict[str, Any]:
+    """REC-006 A completed outcome; no domain comparison exists without a filing."""
+    return dict(
+        _blocked(packet, policy, rec_revision.NO_TIMELY_FILING),
+        execution_state="completed",
+        status="not_applicable",
+        review_required=False,
+        financial_value=None,
+        engine_version="reconciliation-application-rec006-1",
+    )
 
 
 def _reconcile(
@@ -457,34 +555,68 @@ def _reconcile(
     document_registry: Mapping[str, Any] | None,
     receipt: Mapping[str, Any] | None,
     page_reader: Any,
-) -> dict[str, Any]:
+    evaluation_date: date | None = None,
+    collection: Mapping[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Return ``(result, filing_lookup)``; the lookup exists only for revision v2."""
+    lookup: dict[str, Any] | None = None
+
+    def blocked(reason: str) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        return _blocked(packet, policy, reason), None
+
     if isinstance(packet, Mapping) and packet.get("item") == "C5":
         raise NotImplementedError("stage_disabled")
-    validate_schema("input", packet)
+    v2_input = _input_schema(packet, evaluation_date is not None) == "input-1.2"
+    validate_schema("input-1.2" if v2_input else "input", packet)
     validate_schema("policy", policy)
     trusted_packet = deepcopy(packet)
+    # A 1.2 packet that names a financial document is exactly a 1.1 packet for
+    # every later check and for the frozen engine.
+    no_financial_document = trusted_packet["identity"]["financial_document_version"] is None
+    if v2_input and not no_financial_document:
+        trusted_packet["schema_version"] = "1.1"
     trusted_policy, reason = _trusted_policy(deepcopy(policy), policy_registry)
     if reason is not None or trusted_policy is None:
-        return _blocked(packet, policy, reason or "policy_unapproved")
+        return blocked(reason or "policy_unapproved")
     if trusted_policy["synthetic_only"] and not trusted_packet["synthetic"]:
-        return _blocked(packet, policy, "policy_scope_mismatch")
+        return blocked("policy_scope_mismatch")
 
     sources = _validate_semantics(trusted_packet)
     documents = document_registry if isinstance(document_registry, Mapping) else {}
     for source in sources.values():
         reason = _verify_source(source, trusted_packet, source_reader, document_registry)
         if reason is not None:
-            return _blocked(packet, policy, reason)
-    if receipt is not None:
+            return blocked(reason)
+    if receipt is not None and evaluation_date is not None:
+        try:
+            lookup = rec_revision.verify_filing_lookup(
+                receipt,
+                trusted_packet,
+                sources,
+                documents,
+                page_reader,
+                evaluation_date=evaluation_date,
+                collection=collection,
+            )
+        except rec_revision.RevisionBlocked as error:
+            return _blocked(packet, policy, *error.codes), None
+    elif receipt is not None:
         try:
             rec_revision.verify_filing_history(
                 receipt, trusted_packet, sources, documents, page_reader
             )
         except rec_revision.RevisionBlocked as error:
-            return _blocked(packet, policy, error.code)
+            return blocked(error.code)
     claim_source = sources[trusted_packet["claim"]["source_id"]]
     if not _has_source_role(claim_source, documents, "claim"):
-        return _blocked(packet, policy, "source_role_mismatch")
+        return blocked("source_role_mismatch")
+    if lookup is not None and lookup["outcome"] == "no_timely_filing":
+        # REC-006 A: completed not_applicable; there is no financial fact to bind,
+        # so fact binding, explanation coverage and the domain comparison do not run.
+        return _not_applicable_no_filing(packet, policy), lookup
+    if no_financial_document:
+        # Without a financial document only the proven-absence outcome exists.
+        return blocked("financial_document_version_missing")
     c3 = trusted_packet["c3_context"]
     if c3 is not None:
         for key, role in (
@@ -493,7 +625,7 @@ def _reconcile(
         ):
             source_id = c3[key]
             if source_id is not None and not _has_source_role(sources[source_id], documents, role):
-                return _blocked(packet, policy, "source_role_mismatch")
+                return blocked("source_role_mismatch")
     c4 = trusted_packet["c4_context"]
     if c4 is not None:
         for key, role in (
@@ -503,13 +635,13 @@ def _reconcile(
             if any(
                 not _has_source_role(sources[source_id], documents, role) for source_id in c4[key]
             ):
-                return _blocked(packet, policy, "source_role_mismatch")
+                return blocked("source_role_mismatch")
     reason = _bind_facts(trusted_packet, documents)
     if reason is not None:
-        return _blocked(packet, policy, reason)
+        return blocked(reason)
     reviewed, reason = _apply_coverage(trusted_packet, trusted_policy, coverage_registry, documents)
     if reason is not None or reviewed is None:
-        return _blocked(packet, policy, reason or "coverage_unverified")
+        return blocked(reason or "coverage_unverified")
 
     explanation_id = trusted_packet["explanation"]["source_id"]
     unbound_excluded = False
@@ -517,20 +649,20 @@ def _reconcile(
         try:
             candidates = explanation_search(deepcopy(trusted_packet))
         except Exception:
-            return _blocked(packet, policy, "explanation_search_failed")
+            return blocked("explanation_search_failed")
         if not isinstance(candidates, list):
-            return _blocked(packet, policy, "explanation_search_failed")
+            return blocked("explanation_search_failed")
         verified: list[dict[str, Any]] = []
         for candidate in candidates:
             if not _candidate_shape(candidate) or candidate["source_id"] in sources:
-                return _blocked(packet, policy, "explanation_source_unverified")
+                return blocked("explanation_source_unverified")
             if candidate["source_id"] not in reviewed:
-                return _blocked(packet, policy, "coverage_unverified")
+                return blocked("coverage_unverified")
             reason = _verify_source(candidate, trusted_packet, source_reader, document_registry)
             if reason is not None:
-                return _blocked(packet, policy, "explanation_source_unverified")
+                return blocked("explanation_source_unverified")
             if not _has_source_role(candidate, documents, "explanation"):
-                return _blocked(packet, policy, "source_role_mismatch")
+                return blocked("source_role_mismatch")
             if receipt is not None and not rec_revision.explanation_bound(
                 receipt, candidate, trusted_packet
             ):
@@ -551,16 +683,16 @@ def _reconcile(
                 sources[selected["source_id"]] = selected
             trusted_packet["explanation"]["source_id"] = selected["source_id"]
     elif explanation_id not in reviewed:
-        return _blocked(packet, policy, "coverage_unverified")
+        return blocked("coverage_unverified")
     elif receipt is not None:
         asserted = sources[explanation_id]
         if not _has_source_role(asserted, documents, "explanation"):
-            return _blocked(packet, policy, "source_role_mismatch")
+            return blocked("source_role_mismatch")
         if not rec_revision.explanation_bound(receipt, asserted, trusted_packet):
-            return _blocked(packet, policy, "explanation_binding_missing")
+            return blocked("explanation_binding_missing")
 
     if trusted_packet["search"]["state"] == "complete" and not reviewed.issubset(sources):
-        return _blocked(packet, policy, "coverage_unverified")
+        return blocked("coverage_unverified")
     result = _domain_evaluate(trusted_packet, trusted_policy)
     # The submitted packet/policy identify this immutable invocation. Registry-derived
     # decisions and selected candidates are verification inputs, not new client revisions.
@@ -568,4 +700,4 @@ def _reconcile(
     result["policy_sha256"] = canonical_sha256(policy)
     if unbound_excluded:
         result["reason_codes"] = [*result["reason_codes"], "explanation_candidate_unbound"]
-    return result
+    return result, lookup

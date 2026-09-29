@@ -1,0 +1,64 @@
+{
+  "schema_version": "1.2",
+  "claim_id": "fixture-claim",
+  "item": "C1",
+  "execution_state": "completed",
+  "status": "not_applicable",
+  "review_required": false,
+  "reason_codes": [
+    "financial_filing_not_available_as_of"
+  ],
+  "source_ids": [
+    "sr-consol",
+    "sr-period",
+    "sr-scope"
+  ],
+  "explanation_source_id": null,
+  "sustainability_value": "가상법인 A, B",
+  "financial_value": null,
+  "packet_sha256": "ba12e969964a82f858ea31dd986f2fc043c2d9e8c490f9327142e98116a398e9",
+  "policy_sha256": "478295c4467dfdd6cbb8d2bc12f37273ddd7ad697398e02f9a9d0ba778b43859",
+  "synthetic": true,
+  "engine_version": "reconciliation-application-rec006-1+app-rec-002-006-v2",
+  "not_applicable_reason": "financial_filing_not_available_as_of",
+  "filing_lookup": {
+    "outcome": "no_timely_filing",
+    "cutoff": {
+      "date": "2025-06-30",
+      "granularity": "date_inclusive"
+    },
+    "collection_sha256": "dfd0d3649b37e2439c2692ac1d9c50a802655de93d01d91f4ca19b95f4d01f79",
+    "retrieved_from": "2025-07-15T01:00:00Z",
+    "retrieved_until": "2025-07-15T01:00:00Z",
+    "search_request": {
+      "corp_code": "00000000",
+      "bgn_de": "20240101",
+      "end_de": "20250930",
+      "last_reprt_at": "N",
+      "pblntf_ty": null,
+      "pblntf_detail_ty": null,
+      "page_count": 2
+    },
+    "page_sha256": [
+      "613dbf163e77178805105f0429cc2da1f246124f207261f5af25cc2057aebf85"
+    ],
+    "pinned_rcept_no": null,
+    "family_basis": "reviewer: FY2024 annual business report and its corrections",
+    "filings": [
+      {
+        "rcept_no": "20250315000150",
+        "rcept_dt": "2025-03-15",
+        "report_nm": "주요사항보고서(자기주식취득결정)",
+        "timely": true,
+        "lineage": "unrelated"
+      },
+      {
+        "rcept_no": "20250801000300",
+        "rcept_dt": "2025-08-01",
+        "report_nm": "사업보고서 (2024.12)",
+        "timely": false,
+        "lineage": "family"
+      }
+    ]
+  }
+}

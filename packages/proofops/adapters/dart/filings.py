@@ -18,10 +18,16 @@ classification and the pinned period/consolidation are reviewer inputs.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Any
 
 from proofops.adapters.dart.client import DartClient, DartError
-from proofops.application.reconciliation.revision import LIST_ENDPOINT, assemble_filing_pages
+from proofops.application.reconciliation.revision import (
+    FILING_SEARCH_VERSION_V2,
+    LIST_ENDPOINT,
+    assemble_filing_pages,
+)
 
 FILING_SEARCH_VERSION = "opendart-list-history-1"
 DEFAULT_MAX_PAGES = 20
@@ -37,6 +43,7 @@ def collect_filing_history(
     pblntf_detail_ty: str | None = None,
     page_count: int = 100,
     max_pages: int = DEFAULT_MAX_PAGES,
+    clock: Callable[[], datetime] | None = None,
 ) -> tuple[dict[str, Any], dict[str, bytes]]:
     """Return ``(record, pages_by_sha256)`` for a ``last_reprt_at=N`` search.
 
@@ -44,6 +51,12 @@ def collect_filing_history(
     Transport/API failures, a page bound, drift or a count mismatch make the
     record ``incomplete`` (errors by class name only, so no URL or key leaks);
     an incomplete record can never justify a pin.
+
+    With ``clock`` (a trusted, timezone-aware clock of the collecting process),
+    each page records ``retrieved_at``, the UTC instant read just before that
+    request, and the record becomes ``opendart-list-history-2``. The fetch instant
+    is not in the page bytes, so only the collector can state it. Without a clock
+    the record is the unchanged ``opendart-list-history-1`` shape.
     """
     if type(max_pages) is not int or not 1 <= max_pages <= 100:
         raise ValueError("max_pages must be an integer between 1 and 100")
@@ -61,6 +74,7 @@ def collect_filing_history(
     reason: str | None = None
     page_no = 1
     while True:
+        fetched_at = _instant(clock) if clock is not None else None
         try:
             response = client.list_filings(
                 corp_code,
@@ -77,7 +91,10 @@ def collect_filing_history(
             break
         payload = response.raw_bytes
         payloads.append(payload)
-        pages.append({"page_no": page_no, "sha256": hashlib.sha256(payload).hexdigest()})
+        page = {"page_no": page_no, "sha256": hashlib.sha256(payload).hexdigest()}
+        if fetched_at is not None:
+            page["retrieved_at"] = fetched_at
+        pages.append(page)
         if response.get("status") == "013":
             break
         total_page = response.get("total_page")
@@ -93,7 +110,7 @@ def collect_filing_history(
     filings, assembled = assemble_filing_pages(request, payloads)
     reason = reason or assembled
     record = {
-        "search_version": FILING_SEARCH_VERSION,
+        "search_version": FILING_SEARCH_VERSION if clock is None else FILING_SEARCH_VERSION_V2,
         "endpoint": LIST_ENDPOINT,
         "request": request,
         "pages": pages,
@@ -103,3 +120,10 @@ def collect_filing_history(
         "filings": filings,
     }
     return record, {page["sha256"]: data for page, data in zip(pages, payloads, strict=True)}
+
+
+def _instant(clock: Callable[[], datetime]) -> str:
+    now = clock()
+    if not isinstance(now, datetime) or now.tzinfo is None:
+        raise ValueError("collector clock must return a timezone-aware datetime")
+    return now.astimezone(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")

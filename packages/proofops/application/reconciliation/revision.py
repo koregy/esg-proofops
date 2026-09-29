@@ -31,11 +31,21 @@ import hashlib
 import json
 import re
 from collections.abc import Callable, Mapping
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Any
 
 REVISION = "rec-002-006-v1"
 ENGINE_SUFFIX = f"+app-{REVISION}"
+# Opt-in successor: the same gates plus the REC-006 "complete official lookup, no
+# timely same-period filing -> completed not_applicable with an explicit reason"
+# outcome, which needs output schema 1.2. ``REVISION`` results stay schema 1.1.
+REVISION_V2 = "rec-002-006-v2"
+ENGINE_SUFFIX_V2 = f"+app-{REVISION_V2}"
+REVISIONS = frozenset({REVISION, REVISION_V2})
+NO_TIMELY_FILING = "financial_filing_not_available_as_of"
+# Collector record whose pages carry the collector clock's fetch instant.
+FILING_SEARCH_VERSION_V2 = "opendart-list-history-2"
+_COLLECTED_SEARCH_KEYS = ("search_version", "endpoint", "request", "pages")
 CUTOFF_GRANULARITY = "date_inclusive"
 LIST_ENDPOINT = "/api/list.json"
 _RCEPT_NO = re.compile(r"^[0-9]{14}$")
@@ -61,9 +71,10 @@ _DATE_PATTERNS = (
 class RevisionBlocked(Exception):
     """A revision check failed; ``code`` becomes the blocked reason code."""
 
-    def __init__(self, code: str) -> None:
+    def __init__(self, code: str, *also: str) -> None:
         super().__init__(code)
         self.code = code
+        self.codes = (code, *also)
 
 
 def _sha(value: Any) -> str:
@@ -192,8 +203,8 @@ def assemble_filing_pages(
 # --------------------------------------------------------------------------- #
 
 
-def require_confirmed(receipt: Any) -> Mapping[str, Any]:
-    if not isinstance(receipt, Mapping) or receipt.get("revision") != REVISION:
+def require_confirmed(receipt: Any, revision: str = REVISION) -> Mapping[str, Any]:
+    if not isinstance(receipt, Mapping) or receipt.get("revision") != revision:
         raise RevisionBlocked("revision_receipt_invalid")
     confirmation = receipt.get("confirmation")
     if not isinstance(confirmation, Mapping):
@@ -253,6 +264,108 @@ def verify_filing_history(
 
     ``sources`` must already be byte-verified against the document registry.
     """
+    replay = _replay_history(receipt, packet, page_reader)
+    if not replay["family"]:
+        # REC-006 not_applicable needs an explicit schema outcome that 1.1 lacks.
+        raise RevisionBlocked(NO_TIMELY_FILING)
+    return _pin_latest(replay, packet, sources, documents)
+
+
+def verify_filing_lookup(
+    receipt: Mapping[str, Any],
+    packet: Mapping[str, Any],
+    sources: Mapping[str, Mapping[str, Any]],
+    documents: Mapping[str, Any],
+    page_reader: Callable[[str], bytes] | None,
+    *,
+    evaluation_date: date,
+    collection: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """REC-006 for ``REVISION_V2``: a pinned filing or a proven absence.
+
+    Returns the ``filing_lookup`` record of output schema 1.2 with every replayed
+    row (``rcept_no``, receipt date, verbatim title, timeliness, reviewer lineage).
+    ``collection`` is the *trusted* collector record (from the store that ran the
+    collector with its own clock, or an operator trust input for the CLI); retrieval
+    instants are read only from it, never from the receipt. ``no_timely_filing`` is
+    returned only when that collection is complete, fetched after the cutoff day,
+    unfiltered, confirmed after fetch and evaluated after confirmation, every timely
+    row is reviewer-classified, and the reviewer-declared family/period/
+    consolidation is written in verified package quotes. Everything else raises the
+    v1 blocked codes or a specific one.
+    """
+    history = receipt.get("filing_history")
+    cutoff = history.get("cutoff") if isinstance(history, Mapping) else None
+    if isinstance(cutoff, Mapping) and isinstance(cutoff.get("date"), str):
+        # A cutoff that has not passed can still receive a timely filing.
+        if _iso(cutoff["date"], "filing_cutoff_invalid") > evaluation_date:
+            raise RevisionBlocked("filing_cutoff_future")
+    replay = _replay_history(receipt, packet, page_reader)
+    named = isinstance(history, Mapping) and "collection_sha256" in history
+    if replay["family"]:
+        times = _collection_times(receipt, collection) if named else None
+        pinned = _pin_latest(replay, packet, sources, documents)
+        return _lookup_record(replay, "pinned", pinned, None, times)
+    try:
+        times = _collection_times(receipt, collection)
+        family_basis = _no_timely_filing(
+            replay, packet, sources, documents, evaluation_date, receipt, times
+        )
+    except RevisionBlocked as error:
+        # Same headline as v1 for an unproven absence, plus the specific cause.
+        raise RevisionBlocked(NO_TIMELY_FILING, error.code) from error
+    return _lookup_record(replay, "no_timely_filing", None, family_basis, times)
+
+
+def collection_sha256(record: Mapping[str, Any]) -> str:
+    """Canonical hash that a receipt uses to name one collector record."""
+    return _sha(dict(record))
+
+
+def _collection_times(
+    receipt: Mapping[str, Any], collection: Mapping[str, Any] | None
+) -> dict[str, Any]:
+    """Bind the replayed search to the trusted collector record and its clock."""
+    history = receipt["filing_history"]
+    if not isinstance(collection, Mapping):
+        raise RevisionBlocked("filing_lookup_collection_missing")
+    digest = collection_sha256(collection)
+    if history.get("collection_sha256") != digest:
+        raise RevisionBlocked("filing_lookup_collection_mismatch")
+    if collection.get("search_version") != FILING_SEARCH_VERSION_V2 or (
+        collection.get("state") != "complete" or collection.get("incomplete_reason") is not None
+    ):
+        raise RevisionBlocked("filing_lookup_collection_incomplete")
+    search = history.get("search")
+    # The receipt restates the collector's search verbatim, fetch instants included.
+    if not isinstance(search, Mapping) or dict(search) != {
+        key: collection.get(key) for key in _COLLECTED_SEARCH_KEYS
+    }:
+        raise RevisionBlocked("filing_lookup_collection_mismatch")
+    instants: list[datetime] = []
+    for page in collection.get("pages") or []:
+        value = page.get("retrieved_at") if isinstance(page, Mapping) else None
+        try:
+            instant = datetime.fromisoformat(value) if isinstance(value, str) else None
+        except ValueError:
+            instant = None
+        if instant is None or instant.tzinfo is None:
+            raise RevisionBlocked("filing_lookup_retrieval_unrecorded")
+        instants.append(instant.astimezone(UTC))
+    if not instants:
+        raise RevisionBlocked("filing_lookup_retrieval_unrecorded")
+    return {
+        "collection_sha256": digest,
+        "first": min(instants),
+        "last": max(instants),
+    }
+
+
+def _replay_history(
+    receipt: Mapping[str, Any],
+    packet: Mapping[str, Any],
+    page_reader: Callable[[str], bytes] | None,
+) -> dict[str, Any]:
     identity = packet["identity"]
     history = receipt.get("filing_history")
     if not isinstance(history, Mapping):
@@ -330,9 +443,26 @@ def verify_filing_history(
             raise RevisionBlocked("filing_classification_incomplete")
         if lineage == "family":
             family.append(row)
-    if not family:
-        # REC-006 not_applicable needs an explicit schema outcome that 1.1 lacks.
-        raise RevisionBlocked("financial_filing_not_available_as_of")
+    return {
+        "history": history,
+        "search": search,
+        "request": request,
+        "as_of": as_of,
+        "filings": filings,
+        "classification": classification,
+        "family": family,
+    }
+
+
+def _pin_latest(
+    replay: Mapping[str, Any],
+    packet: Mapping[str, Any],
+    sources: Mapping[str, Mapping[str, Any]],
+    documents: Mapping[str, Any],
+) -> str:
+    identity = packet["identity"]
+    history, family = replay["history"], replay["family"]
+    period_start, period_end = identity["financial_period_start"], identity["financial_period_end"]
     latest_day = max(receipt_date(row["rcept_dt"]) for row in family)
     latest = [row for row in family if receipt_date(row["rcept_dt"]) == latest_day]
     if len(latest) != 1:
@@ -371,4 +501,126 @@ def verify_filing_history(
         written |= normalized_dates(source["quote"])
     if not {period_start, period_end} <= written:
         raise RevisionBlocked("financial_period_unverified")
-    return pinned_row["rcept_no"]
+    return str(pinned_row["rcept_no"])
+
+
+def _no_timely_filing(
+    replay: Mapping[str, Any],
+    packet: Mapping[str, Any],
+    sources: Mapping[str, Mapping[str, Any]],
+    documents: Mapping[str, Any],
+    evaluation_date: date,
+    receipt: Mapping[str, Any],
+    times: Mapping[str, Any],
+) -> str:
+    """REC-006 A: a *genuine* absence, as opposed to an unknown source.
+
+    Returns the reviewer's family basis. Every failure is blocked with a specific
+    code, so an unproven absence can never read as not_applicable.
+    """
+    identity, history = packet["identity"], replay["history"]
+    request, as_of = replay["request"], replay["as_of"]
+    # ``rcept_dt`` is an OpenDART calendar date (a Korean service). A fetch whose
+    # UTC date is after the cutoff began after that day ended in every zone at or
+    # east of UTC; a fetch on the cutoff day cannot exclude a later same-day receipt.
+    first_day, last_day = times["first"].date(), times["last"].date()
+    if first_day == as_of:
+        raise RevisionBlocked("filing_lookup_cutoff_day_open")
+    if first_day < as_of:
+        raise RevisionBlocked("filing_lookup_before_cutoff")
+    if last_day > evaluation_date:
+        raise RevisionBlocked("filing_lookup_retrieval_future")
+    confirmed_on = _iso(receipt["confirmation"]["confirmed_on"], "revision_receipt_unconfirmed")
+    if confirmed_on < last_day:
+        # A reviewer cannot have confirmed a lookup that had not been fetched yet.
+        raise RevisionBlocked("filing_lookup_confirmed_before_retrieval")
+    if evaluation_date < confirmed_on:
+        raise RevisionBlocked("filing_lookup_evaluated_before_confirmation")
+    if request["pblntf_ty"] not in (None, "") or request["pblntf_detail_ty"] not in (None, ""):
+        # A type-filtered listing cannot show that no family filing exists.
+        raise RevisionBlocked("filing_lookup_filtered")
+
+    financial = packet["financial"]
+    financial_sources = [
+        source
+        for source in sources.values()
+        if isinstance(documents.get(source["document_id"]), Mapping)
+        and documents[source["document_id"]].get("document_role") == "financial"
+    ]
+    if (
+        identity["rcept_no"] is not None
+        or identity["financial_published_at"] is not None
+        or any(financial[key] is not None for key in ("raw", "normalized", "source_id"))
+        or history.get("pinned") is not None
+        or financial_sources
+        # Only input 1.2 can say "no financial document": a 1.1 version string
+        # names a document, and a placeholder never stands in for a filing.
+        or identity["financial_document_version"] is not None
+    ):
+        raise RevisionBlocked("financial_filing_identity_conflict")
+
+    declared = history.get("no_timely_filing")
+    basis = declared.get("family_basis") if isinstance(declared, Mapping) else None
+    if not isinstance(declared, Mapping) or not isinstance(basis, str) or not basis.strip():
+        raise RevisionBlocked("no_timely_filing_unreviewed")
+    period = (identity["financial_period_start"], identity["financial_period_end"])
+    if (declared.get("period_start"), declared.get("period_end")) != period:
+        raise RevisionBlocked("financial_period_unverified")
+    if declared.get("consolidation") != identity["consolidation"]:
+        raise RevisionBlocked("financial_consolidation_unverified")
+    period_sources = _source_list(declared.get("period_evidence_source_ids"), sources)
+    consolidation_sources = _source_list(declared.get("consolidation_evidence_source_ids"), sources)
+    for source in (*period_sources, *consolidation_sources):
+        entry = documents.get(source["document_id"])
+        if not isinstance(entry, Mapping) or entry.get("document_role") != "sustainability":
+            raise RevisionBlocked("financial_evidence_missing")
+    written: set[str] = set()
+    for source in period_sources:
+        written |= normalized_dates(source["quote"])
+    if not set(period) <= written:
+        raise RevisionBlocked("financial_period_unverified")
+    return basis
+
+
+def _lookup_record(
+    replay: Mapping[str, Any],
+    outcome: str,
+    pinned_rcept_no: str | None,
+    family_basis: str | None,
+    times: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    history, search, as_of = replay["history"], replay["search"], replay["as_of"]
+    classification = replay["classification"]
+    filings = []
+    for row in sorted(replay["filings"], key=lambda value: (value["rcept_dt"], value["rcept_no"])):
+        entry = classification.get(row["rcept_no"])
+        lineage = entry.get("lineage") if isinstance(entry, Mapping) else None
+        filed_on = receipt_date(row["rcept_dt"])
+        filings.append(
+            {
+                "rcept_no": row["rcept_no"],
+                "rcept_dt": filed_on.isoformat(),
+                # Preserved verbatim for audit; never parsed for period or lineage.
+                "report_nm": row["report_nm"],
+                "timely": filed_on <= as_of,
+                "lineage": lineage if lineage in {"family", "unrelated"} else None,
+            }
+        )
+
+    def instant(key: str) -> str | None:
+        if times is None:
+            return None
+        return str(times[key].isoformat(timespec="seconds").replace("+00:00", "Z"))
+
+    return {
+        "outcome": outcome,
+        "cutoff": {"date": history["cutoff"]["date"], "granularity": CUTOFF_GRANULARITY},
+        "collection_sha256": None if times is None else times["collection_sha256"],
+        "retrieved_from": instant("first"),
+        "retrieved_until": instant("last"),
+        "search_request": dict(replay["request"]),
+        "page_sha256": [page["sha256"] for page in search["pages"]],
+        "pinned_rcept_no": pinned_rcept_no,
+        "family_basis": family_basis,
+        "filings": filings,
+    }
