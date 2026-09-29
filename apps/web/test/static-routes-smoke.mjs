@@ -48,8 +48,8 @@ async function evaluate(expression) {
   if (reply.exceptionDetails) throw new Error(reply.exceptionDetails.text);
   return reply.result.value;
 }
-async function waitFor(expression, timeoutMs = 10000) {
-  for (let attempt = 0; attempt < timeoutMs / 100; attempt++) {
+async function waitFor(expression) {
+  for (let attempt = 0; attempt < 100; attempt++) {
     if (await evaluate(expression)) return;
     await new Promise(resolve => setTimeout(resolve, 100));
   }
@@ -109,7 +109,7 @@ try {
       await call("Page.navigate", { url: `${base}/analyze/replay` });
       await waitFor('!!document.querySelector(".replay-hero-bottom button")');
       await evaluate('document.querySelector(".replay-hero-bottom button").click()');
-      await waitFor('document.body.innerText.includes("재생 완료")', 60000);
+      await waitFor('!!document.querySelector(".replay-finish") && document.querySelector("[role=progressbar]")?.getAttribute("aria-valuenow") === "100"');
       const finished = await call("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
       await writeFile(`${shots}/replay-finished-${size}.png`, Buffer.from(finished.data, "base64"));
     }
