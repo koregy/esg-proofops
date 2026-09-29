@@ -167,10 +167,28 @@ def test_numeric_reason_code_without_receipt_is_rejected():
         check_numeric_integrity(forged)
     assert check_numeric_integrity(dict(elements=[], confirmed_tags={})) is False
     fact_only = dict(
-        elements=[], confirmed_tags={"facts": [{"name": "numerical_check", "state": "present"}]}
+        elements=[],
+        numeric_review=None,
+        confirmed_tags={
+            "facts": [
+                {"name": "numerical_check", "state": "present", "source_scope": "computed_check"}
+            ]
+        },
     )
     with pytest.raises(AssuranceHeadRejected, match="NUMERIC_PROOF_MISSING"):
         check_numeric_integrity(fact_only)
+
+
+@pytest.mark.parametrize("state", ["present", "conflict"])
+@pytest.mark.parametrize("scope", ["local_claim", "computed_check"])
+def test_legacy_numeric_facts_do_not_require_new_versioned_receipts(state, scope):
+    legacy = dict(
+        elements=[dict(element_id="P6", state=state, reason_code=None)],
+        confirmed_tags={
+            "facts": [{"name": "numerical_check", "state": state, "source_scope": scope}]
+        },
+    )
+    assert check_numeric_integrity(legacy) is False
 
 
 def test_stored_head_edits_are_rejected(tmp_path, monkeypatch):

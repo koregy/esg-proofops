@@ -348,12 +348,11 @@ def check_numeric_integrity(tag) -> bool:
     if receipt is None:
         if isinstance(tag, dict) and (
             any(e.get("reason_code") == NUMERIC_POLICY for e in tag.get("elements") or ())
-            or any(
-                f.get("name") == NUMERIC_FACT and f.get("state") in ("present", "conflict")
-                for f in (tag.get("confirmed_tags") or {}).get("facts") or ()
-            )
+            or "numeric_review" in tag
         ):
             raise AssuranceHeadRejected("NUMERIC_PROOF_MISSING")
+        # Legacy computed facts predate numeric-link-v1. As with P4, require
+        # this receipt only for heads carrying its explicit version marker.
         return False
     try:
         stored = {k: v for k, v in receipt.items() if k not in ("receipt_sha256", "carried_from")}
