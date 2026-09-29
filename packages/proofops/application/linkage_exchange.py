@@ -88,7 +88,10 @@ FACT_KINDS = (
 #     contract forbids creating `implementation_scope` from a generic scope or
 #     region mention, and no producer emits `implementation_scope` itself.
 #   * `currency_amount` / `revenue_share` -- no producer emits these fact names
-#     at all, and no approved currency/revenue primitive exists to alias.
+#     at all, and no approved currency/revenue primitive exists to alias. They
+#     are reachable only through an explicit source-bound C3/C4 trigger review
+#     (`application/linkage_trigger_review.py`, `build_packet(trigger_review=...)`),
+#     never by renaming a fact.
 TRIGGER_TAG_MAP: dict[str, str] = {
     "org_boundary": "organizational_boundary",
     "organizational_boundary": "organizational_boundary",
@@ -601,6 +604,7 @@ def build_packet(
     c2_period_context: C2PeriodContext | None = None,
     run_id: str | None = None,
     c1_entity_set_review: C1EntitySetReview | None = None,
+    trigger_review: Any = None,
 ) -> dict[str, Any] | BlockedPacket:
     """Build one strict1.1 input packet from a trusted claim + caller context.
 
@@ -702,6 +706,47 @@ def build_packet(
             f"match claim document_version_id ({claim.document_version_id})",
         )
     trigger_elements = _verified_triggers(tags)
+    reviewed_unit: str | None = None
+    if trigger_review is not None:
+        # C3/C4 only: a checked, source-bound review yields the missing trigger.
+        from proofops.application.linkage_trigger_review import check_trigger_review
+
+        if any(t.trigger_element in ITEM_TRIGGERS.get(item, ()) for t in trigger_elements):
+            return BlockedPacket(
+                claim.claim_id,
+                item,
+                "trigger_review_redundant",
+                f"a confirmed {item} trigger already exists; refusing a second, reviewed one",
+            )
+        c4_context = financial_context.c4_context
+        checked = check_trigger_review(
+            trigger_review,
+            item=item,
+            claim=claim,
+            tags=tags,
+            tenant_id=tenant_id,
+            company_id=company_id,
+            run_id=run_id,
+            synthetic=financial_context.synthetic,
+            classification_name=None if c4_context is None else c4_context.classification_name,
+        )
+        if isinstance(checked, tuple):
+            return BlockedPacket(claim.claim_id, item, *checked)
+        reviewed_unit = checked.unit
+        trigger_elements = tuple(
+            sorted(
+                (
+                    *trigger_elements,
+                    VerifiedTrigger(
+                        checked.fact_name,
+                        checked.trigger_element,
+                        checked.evidence_refs,
+                        checked.normalized_value,
+                    ),
+                ),
+                key=lambda t: t.fact_name,
+            )
+        )
     if not trigger_elements:
         return BlockedPacket(
             claim.claim_id,
@@ -990,7 +1035,7 @@ def build_packet(
             raw=primary_evidence_quote,
             normalized=sustainability_normalized,
             kind=sustainability_kind,
-            unit=None,
+            unit=reviewed_unit,
             source_id=sustainability_source_id,
         ),
         financial=dict(

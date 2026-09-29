@@ -9,6 +9,13 @@ Two subcommands:
                  stdout. Never calls developer B's engine and never invents
                  identity/financial fields.
 
+  draft-trigger-review / validate-trigger-review
+                 C3/C4 only: write a trigger-review draft whose pins (tenant,
+                 company, run, claim, version, accepted tag revision, fact
+                 SHA-256, source hash, evidence quotes) come from the trusted
+                 head, or check a filled review against the current head. The
+                 semantic literals stay empty in a draft, so a draft never builds.
+
   verify-return  Structurally validate a real (or synthetic) developer-B
                  return triple (packet, policy, result) using the EXISTING
                  handoff/team-v3/contract/validate.py::validate_return, then
@@ -91,6 +98,12 @@ def _load_c1_entity_set_review(path: Path):
         entities=tuple(ReviewedEntity(**e) for e in data["entities"]),
         source_bindings=tuple(ReviewedSourceBinding(**b) for b in data["source_bindings"]),
     )
+
+
+def _load_trigger_review(path: Path):
+    from proofops.application.linkage_trigger_review import trigger_review_from_dict
+
+    return trigger_review_from_dict(json.loads(path.read_text(encoding="utf-8")))
 
 
 def _validate_packet_shape(packet: dict, *, contract_dir: Path | str) -> list[dict]:
@@ -473,6 +486,35 @@ def _cmd_build_packet(args: argparse.Namespace) -> int:
                 )
             )
             return 1
+    trigger_review = None
+    if getattr(args, "trigger_review", None):
+        try:
+            trigger_review = _load_trigger_review(Path(args.trigger_review))
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            print(
+                json.dumps(
+                    {
+                        "execution_state": "blocked",
+                        "reason": "invalid_trigger_review",
+                        "detail": str(exc),
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            return 1
+    trigger_receipt_out = getattr(args, "trigger_review_receipt_out", None)
+    if trigger_receipt_out and (trigger_review is None or Path(trigger_receipt_out).exists()):
+        print(
+            json.dumps(
+                {
+                    "execution_state": "blocked",
+                    "reason": "invalid_trigger_review_receipt_out",
+                    "detail": "receipt output needs --trigger-review and a new path",
+                },
+                ensure_ascii=False,
+            )
+        )
+        return 2
     receipt_out = getattr(args, "c1_review_receipt_out", None)
     if receipt_out and (entity_review is None or Path(receipt_out).exists()):
         print(
@@ -500,6 +542,7 @@ def _cmd_build_packet(args: argparse.Namespace) -> int:
         c2_period_context=period_context,
         run_id=args.run_id,
         c1_entity_set_review=entity_review,
+        trigger_review=trigger_review,
     )
     if isinstance(result, BlockedPacket):
         print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
@@ -557,7 +600,175 @@ def _cmd_build_packet(args: argparse.Namespace) -> int:
             json.dump(
                 c1_review_receipt(entity_review, result), handle, ensure_ascii=False, indent=2
             )
+    if trigger_receipt_out:
+        from proofops.application.linkage_trigger_review import (
+            check_trigger_review,
+            trigger_review_receipt,
+        )
+
+        assert financial_context is not None  # A successful trigger packet requires this context.
+        c4_context = financial_context.c4_context
+        trigger = check_trigger_review(
+            trigger_review,
+            item=args.item,
+            claim=claim,
+            tags=confirmed_tags,
+            tenant_id=args.tenant_id,
+            company_id=result["identity"]["company_id"],
+            run_id=args.run_id,
+            synthetic=financial_context.synthetic,
+            classification_name=None if c4_context is None else c4_context.classification_name,
+        )
+        with Path(trigger_receipt_out).open("x", encoding="utf-8") as handle:
+            json.dump(
+                trigger_review_receipt(trigger_review, result, trigger),
+                handle,
+                ensure_ascii=False,
+                indent=2,
+            )
     print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+    return 0
+
+
+def _trusted_head(args: argparse.Namespace):
+    """(claim, trusted company_id, accepted-head ConfirmedTags) or a ReviewedHeadRejected."""
+    claims, uploads = _open_claims(args.database_path)
+    try:
+        claim = claims.get(args.tenant_id, args.run_id, args.claim_id)
+        snap = uploads.version_snapshot(args.tenant_id, claim.document_version_id)
+        company_id = uploads.get_document(args.tenant_id, snap["document_id"])["company_id"]
+        tags, _revision = reviewed_head_tags(
+            claims, claim, tenant_id=args.tenant_id, run_id=args.run_id, claim_id=args.claim_id
+        )
+    except (KeyError, ValueError, TypeError) as exc:
+        raise ReviewedHeadRejected(str(exc)) from exc
+    if tags is None:
+        raise ReviewedHeadRejected("no accepted review head with confirmed tags for this claim")
+    return claim, company_id, tags
+
+
+def _cmd_draft_trigger_review(args: argparse.Namespace) -> int:
+    """Emit a C3/C4 trigger-review draft pinned to the trusted accepted head.
+
+    Only a confirmed present, verified fact whose name is listed for the item may
+    be drafted. Every pin is copied from the stores; the semantic literals, review
+    identity and origin stay null, so the draft fails the strict loader until a
+    reviewer (human or delegated AI) fills them from the bound quote.
+    """
+    from proofops.application.linkage_trigger_review import (
+        C3_BASE_FACT_NAMES,
+        C4_BASE_FACT_NAMES,
+        fact_sha256,
+    )
+
+    def refuse(reason: str, detail: str) -> int:
+        print(json.dumps({"execution_state": "blocked", "reason": reason, "detail": detail}))
+        return 1
+
+    allowed = C3_BASE_FACT_NAMES if args.item == "C3" else C4_BASE_FACT_NAMES
+    if args.fact_name not in allowed:
+        return refuse("unsupported_trigger_fact", f"{args.item} review reads only {allowed}")
+    try:
+        claim, company_id, tags = _trusted_head(args)
+    except ReviewedHeadRejected as exc:
+        return refuse("review_head_unreadable", str(exc))
+    if args.item == "C3" and tags.track != "goal":
+        return refuse("c3_review_requires_goal_track", f"accepted track is {tags.track}")
+    facts = [f for f in tags.facts if f.name == args.fact_name]
+    if len(facts) != 1:
+        return refuse("review_fact_not_unique", f"{args.fact_name} occurs {len(facts)} times")
+    fact = facts[0]
+    if not (
+        fact.state == "present"
+        and fact.citation_verified
+        and fact.binding_accepted
+        and fact.evidence_refs
+        and fact.normalized_value is not None
+    ):
+        return refuse(
+            "review_fact_not_verified", f"{args.fact_name} is not a verified present fact"
+        )
+    semantic = (
+        ("amount_literal", "investment_label", "currency", "normalized_amount")
+        if args.item == "C3"
+        else ("classification_label", "revenue_label", "share_literal")
+    )
+    draft = {
+        "item": args.item,
+        "synthetic": args.synthetic,
+        "tenant_id": args.tenant_id,
+        "company_id": company_id,
+        "run_id": args.run_id,
+        "claim_id": args.claim_id,
+        "document_version_id": claim.document_version_id,
+        "source_sha256": claim.source_sha256,
+        "tag_revision": tags.tag_revision,
+        "fact_name": fact.name,
+        "fact_value": fact.normalized_value,
+        "fact_sha256": fact_sha256(fact),
+        "source_id": None,
+        "source_bindings": [
+            {"source_id": ref.source_id, "quote": ref.quote} for ref in fact.evidence_refs
+        ],
+        **dict.fromkeys(semantic),
+        "review_id": None,
+        "reviewed_by": None,
+        "reviewed_at": None,
+        "review_origin": None,
+    }
+    with Path(args.output).open("x", encoding="utf-8") as handle:
+        json.dump(draft, handle, ensure_ascii=False, indent=2)
+    return 0
+
+
+def _cmd_validate_trigger_review(args: argparse.Namespace) -> int:
+    """Check a filled review against the CURRENT accepted head; writes nothing.
+
+    Pins, CAS hashes, evidence quotes and every semantic literal are re-checked.
+    The caller's C4 classification context and financial side are not known here
+    and are checked again by build-packet.
+    """
+    from proofops.application.linkage_trigger_review import check_trigger_review
+
+    def refuse(reason: str, detail: str) -> int:
+        print(json.dumps({"execution_state": "blocked", "reason": reason, "detail": detail}))
+        return 1
+
+    try:
+        review = _load_trigger_review(Path(args.review))
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        return refuse("invalid_trigger_review", str(exc))
+    try:
+        claim, company_id, tags = _trusted_head(args)
+    except ReviewedHeadRejected as exc:
+        return refuse("review_head_unreadable", str(exc))
+    checked = check_trigger_review(
+        review,
+        item=review.item,
+        claim=claim,
+        tags=tags,
+        tenant_id=args.tenant_id,
+        company_id=company_id,
+        run_id=args.run_id,
+        synthetic=args.synthetic,
+    )
+    if isinstance(checked, tuple):
+        return refuse(*checked)
+    print(
+        json.dumps(
+            {
+                "status": "review_consistent_with_head",
+                "item": review.item,
+                "trigger_element": checked.trigger_element,
+                "normalized": checked.normalized_value,
+                "unit": checked.unit,
+                "fact_sha256": checked.fact_sha256,
+                "not_decided": "packet build, REC-003/004/007 policy, comparability, search",
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
     return 0
 
 
@@ -734,8 +945,50 @@ def main(argv: list[str] | None = None) -> int:
         "--c1-review-receipt-out",
         help="write the separate review approval receipt (never merged into the packet)",
     )
+    build.add_argument(
+        "--trigger-review",
+        help=(
+            "C3/C4 only: JSON trigger review pinned to the accepted head (see "
+            "draft-trigger-review); types the missing currency_amount/revenue_share trigger"
+        ),
+    )
+    build.add_argument(
+        "--trigger-review-receipt-out",
+        help="write the separate trigger review receipt (never merged into the packet)",
+    )
     build.add_argument("--contract-dir", default=str(CONTRACT_DIR_DEFAULT))
     build.set_defaults(func=_cmd_build_packet)
+
+    for name, func, help_text in (
+        (
+            "draft-trigger-review",
+            _cmd_draft_trigger_review,
+            "write a C3/C4 trigger-review draft pinned to the trusted accepted review head",
+        ),
+        (
+            "validate-trigger-review",
+            _cmd_validate_trigger_review,
+            "check a filled C3/C4 trigger review against the current accepted head",
+        ),
+    ):
+        command = sub.add_parser(name, help=help_text)
+        command.add_argument("--tenant-id", required=True)
+        command.add_argument("--run-id", required=True)
+        command.add_argument("--claim-id", required=True)
+        command.add_argument("--database-path", required=True)
+        command.add_argument(
+            "--synthetic",
+            action=argparse.BooleanOptionalAction,
+            required=True,
+            help="must equal the FinancialContext synthetic flag used at build time",
+        )
+        if name == "draft-trigger-review":
+            command.add_argument("--item", required=True, choices=("C3", "C4"))
+            command.add_argument("--fact-name", required=True)
+            command.add_argument("--output", required=True, help="new file; never overwritten")
+        else:
+            command.add_argument("--review", required=True)
+        command.set_defaults(func=func)
 
     draft = sub.add_parser(
         "draft-c1-review",
