@@ -17,6 +17,7 @@ import { loadSnapshot, type LoadedSnapshot } from "./features/auditreport/snapsh
 import { DecisionGuide } from "./features/decisionguide/DecisionGuide";
 import ReplayPage from "./features/replay/ReplayPage";
 import ReviewPage from "./features/reviewsim/ReviewPage";
+import KiaValidation from "./features/validation/KiaValidation";
 import "./static-demo.css";
 import "./features/decisionguide/extended-shell.css";
 
@@ -28,6 +29,7 @@ const emptyOptions: RuntimeOptions = { rights_profiles: [], consent_profiles: []
 
 // 공개 데모 확장 화면. 저장된 NAVER 스냅샷만 읽고 세션·API를 쓰지 않는다.
 const extendedLinks = [
+  { to: "/validation/kia", prefix: "/validation", label: "기아 원문 검증" },
   { to: "/guide", prefix: "/guide", label: "판정 안내" },
   { to: "/replay", prefix: "/replay", label: "저장된 처리 재생" },
   { to: "/review", prefix: "/review", label: "검토 시뮬레이터" },
@@ -199,13 +201,15 @@ function ExtendedStrip() {
 
 function ExtendedDemo() {
   const { pathname } = useLocation();
+  const kiaPage = pathname === "/validation/kia";
   const [snapshot, setSnapshot] = useState<LoadedSnapshot | null>(null);
   const [error, setError] = useState(false);
   useEffect(() => {
+    if (kiaPage) return;
     const controller = new AbortController();
     loadSnapshot(controller.signal).then(setSnapshot).catch(() => { if (!controller.signal.aborted) setError(true); });
     return () => controller.abort();
-  }, []);
+  }, [kiaPage]);
   useEffect(() => { window.scrollTo(0, 0); }, [pathname]);
   return <div className="demo-site">
     <ExtendedStrip />
@@ -214,7 +218,7 @@ function ExtendedDemo() {
       <nav aria-label="주요 메뉴"><Link to="/">소개</Link><Link to="/demo">실제 결과 보기</Link><Link to="/live">실시간 체험</Link></nav>
       <Link className="header-cta" to="/demo">데모 열기 <span aria-hidden="true">↗</span></Link>
     </div></header>
-    {error ? <main className="static-main xd-page"><section className="xd-empty"><h1>저장된 스냅샷을 불러오지 못했습니다</h1><p>잠시 후 새로고침해 주세요.</p></section></main>
+    {kiaPage ? <KiaValidation /> : error ? <main className="static-main xd-page"><section className="xd-empty"><h1>저장된 스냅샷을 불러오지 못했습니다</h1><p>잠시 후 새로고침해 주세요.</p></section></main>
       : !snapshot ? <main className="static-main xd-page"><p role="status">저장된 스냅샷을 불러오는 중입니다…</p></main>
       : <Routes>
         <Route path="/guide" element={<DecisionGuide data={snapshot.data} />} />

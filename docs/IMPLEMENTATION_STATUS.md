@@ -1,4 +1,34 @@
-## 2026-09-29 18:28 KST · Native API OCR and Solar Pro 3 integrated
+## 2026-09-29 19:18 KST · Source review paths and actual API trials
+
+Whole-document search coverage now checks every original word and requires an
+explicit review before an absence fact can enter an immutable review revision.
+Consumers replay the current source and receipt; incomplete or changed sources
+are refused. Safe-harbor checklist production accepts verified evidence but does
+not manufacture legal effect, E grades or absence receipts. The combined producer,
+absence, checklist and P4 regression run passed 135 checks.
+
+Industry topic review is a project-only CLI report. Topics cannot disappear or be
+relabelled in a later universe revision; an explicit approval of the exact current
+not-applicable review is needed to exclude one. Same-actor delegated approval is
+recorded honestly. No official industry mapping or satisfaction score is invented.
+Independent review accepted the six files in `2a9f035`; coordinator rerun passed
+37 new checks (worker additionally passed six existing acceptance checks).
+
+Actual private-Kia trials and their limits are recorded, without source body, in
+`evidence/kia-native-api-validation-20260929.json`. The p28 trial corroborated
+15 of 28 blocks and found eight claims, four source-verified, all needing review.
+The assurance-page trial corroborated 27 of 152 eligible blocks, left 52 uncalled,
+and did not complete tagging. Both replayed with the network blocked. A new
+same-company run spanning p28/p35 and p130–133 is still processing; no complete
+Kia report, assurance linkage or accuracy result is claimed.
+
+Both GitHub CI events passed at `ca797fb`, including the launcher options for
+table-role and position-context ordering. Later industry/UI changes require their
+own CI. Numeric P6 review integration is being repaired and independently reviewed;
+uncommitted work is not accepted release functionality. The ten-slide PPT v3 is
+prepared, with deployment still pending. No AWS deployment was made.
+
+## Earlier 2026-09-29 18:28 KST · Native API OCR and Solar Pro 3 integrated
 
 Commit `3ab69d6` adds a NEW-run native paragraph corroboration path using rendered
 image-only crops and stored Document Parse receipts, plus explicit Solar Pro 3
