@@ -216,10 +216,10 @@ def test_unmatched_quote_skips_tagging_call():
 
 
 def test_invalid_model_output_and_limits_fail_closed():
-    too_many = _completion({"claims": [{"block": 0, "quote": LINE}] * 6})
+    malformed = _completion({"claims": None})
     with pytest.raises(report.LiveError) as error:
         report.run_report(
-            PDF, [26], access_code="secret", parse=lambda _: PARSED, call_model=lambda *_: too_many
+            PDF, [26], access_code="secret", parse=lambda _: PARSED, call_model=lambda *_: malformed
         )
     assert error.value.code == "EXTRACTION_INVALID"
     over = _completion({"claims": []}, output_tokens=report.MAX_MODEL_TOKENS[0] + 1)
@@ -233,6 +233,46 @@ def test_invalid_model_output_and_limits_fail_closed():
             PDF, [26], access_code="secret", parse=lambda _: {"x": 1}, call_model=_fail
         )
     assert error.value.code == "PARSE_INVALID"
+
+
+def test_excess_candidates_are_bounded_and_omission_is_reported_without_retry():
+    calls = []
+
+    def model(*args):
+        calls.append(args)
+        return _completion({"claims": [{"block": 0, "quote": LINE}] * 7})
+
+    result = report.run_report(
+        PDF, [26], access_code="secret", parse=lambda _: PARSED, call_model=model
+    )
+    assert len(calls) == 1
+    assert len(result["claims"]) == report.MAX_CLAIMS == 5
+    assert result["claims_returned_by_model"] == 7 and result["claims_omitted"] == 2
+    assert all(c["decision"] is None and not c["source_verified"] for c in result["claims"])
+
+
+def test_truncated_tagging_preserves_extraction_with_explicit_warning_and_no_retry():
+    calls = []
+
+    def model(system, user, cap):
+        calls.append(cap)
+        if len(calls) == 1:
+            return _completion({"claims": [{"block": 0, "quote": LINE, "track": "goal"}]})
+        response = _completion({})
+        response["choices"][0]["message"]["content"] = '{"claims":['
+        return response
+
+    result = report.run_report(
+        PDF, [26], access_code="secret", parse=lambda _: PARSED, call_model=model
+    )
+    assert calls == list(report.MAX_MODEL_TOKENS)
+    assert len(result["claims"]) == 1 and result["claims"][0]["elements"] == []
+    assert result["claims"][0]["decision"] is None
+    assert not result["claims"][0]["source_verified"]
+    assert result["tagging_error"] == "SOLAR_RESPONSE_INVALID"
+    assert result["tagging_passes"] == 0
+    assert result["cost_basis"] == "reserved_upper_bound_after_tagging_error"
+    assert "태깅 미완료" in result["notice"]
 
 
 def test_no_text_blocks_returns_without_model_call():
