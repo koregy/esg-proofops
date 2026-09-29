@@ -217,14 +217,11 @@ class UpstageTaggingTransport:
         return self._resume is None or self._resume.allows(self._receipts)
 
     def invoke(self, request: dict) -> RawTagResponse:
-        # Offline workers can load on Windows; paid dispatch still requires this lock.
-        import fcntl
+        from proofops_agent.operation_lock import operation_lock
 
         # One operation per receipt root; the shared USD ledger also fences all roots.
-        with (self._receipts / ".operation.lock").open("a") as lock:
-            try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
+        with operation_lock(self._receipts / ".operation.lock") as acquired:
+            if not acquired:
                 # Returns before _invoke, so no receipt directory is ever created.
                 return self._failed(SUPPRESSED_ERROR_CODE, 0)
             return self._invoke(request)

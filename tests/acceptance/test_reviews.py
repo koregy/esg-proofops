@@ -463,6 +463,7 @@ console.log("ReviewWorkspace React render/accessibility/text-escaping checks pas
     bundle = tmp_path / "review-render.cjs"
     subprocess.run(
         [
+            "node",
             str(esbuild),
             str(entry),
             "--bundle",

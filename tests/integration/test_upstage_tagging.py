@@ -442,21 +442,23 @@ def test_incomplete_receipt_blocks_new_paid_replica_after_restart(tmp_path, monk
 
 
 def test_busy_operation_does_not_dispatch(tmp_path, monkeypatch):
-    import fcntl
+    from proofops_agent.operation_lock import operation_lock
 
     adapter, probe, calls, request = configured(tmp_path, monkeypatch)
-    with (tmp_path / "receipts" / ".operation.lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    with operation_lock(tmp_path / "receipts" / ".operation.lock") as acquired:
+        assert acquired
         assert adapter.invoke(request).usage.status == "failed"
     assert not calls and probe.summary()["calls"] == 0
 
 
 def test_missing_platform_lock_never_dispatches_or_reserves(tmp_path, monkeypatch):
+    import os
     import sys
 
     adapter, probe, calls, request = configured(tmp_path, monkeypatch)
-    monkeypatch.setitem(sys.modules, "fcntl", None)
-    with pytest.raises(ModuleNotFoundError, match="fcntl"):
+    module = "msvcrt" if os.name == "nt" else "fcntl"
+    monkeypatch.setitem(sys.modules, module, None)
+    with pytest.raises(ModuleNotFoundError, match=module):
         adapter.invoke(request)
     assert not calls and probe.summary()["calls"] == 0
     assert not list((tmp_path / "receipts").iterdir())

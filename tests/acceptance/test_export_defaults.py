@@ -45,6 +45,7 @@ console.log("review-draft export defaults passed");
     bundle = tmp_path / "export-workspace-render.cjs"
     subprocess.run(
         [
+            "node",
             str(esbuild),
             str(entry),
             "--bundle",

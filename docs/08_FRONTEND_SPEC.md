@@ -23,7 +23,7 @@
 | `/runs/:runId/safe-harbor` | category checklist, basis gaps, legal disclaimer | safe_harbor_get | 미확정 매핑은 “근거 기록 제공, 법적 효력 미판정” |
 | `/runs/:runId/audit` | 변경 timeline, 버전/hash 복사 | audit_get | 사용자 표시명, 시간, 변경 사유; 원문본문 로그 없음 |
 | `/runs/:runId/cost` | stage 별 calls/token/cache/cost | cost_get | unknown_cost 를0원으로 표시하지 않음 |
-| `/runs/:runId/report` | export 범위/포맷, snapshot history | export_create/get/download | partial 허용 checkbox 는 기본 false; 최종 배지와 검토용 배지 구별 |
+| `/runs/:runId/report` | export 범위/포맷, snapshot history | export_create/get/download | 검토용 부분 결과 허용 checkbox 기본 true(2026-09-25 구현 b70e897); 미완료 포함·최종본 아님을 표시하고, 해제 시 최종화 게이트 적용; 최종 배지와 검토용 배지 구별 |
 | `/runs/:runId/comparison` | prior version selector, change candidates | comparison_create/get | P1 flag, 전년 없으면 not_run; 삭제는 후보로만 표시 |
 | `/settings/rules` | 규칙 version·근거 승인 상태 | rulepacks_list, rulepack_activate | 관리자만 active 변경, 미검증 clause 표시 |
 | `/settings/runtime` | preflight checks, region/consent info | preflight | live probe 가 API 호출을 발생시킴을 표시, 관리자만 실행 |

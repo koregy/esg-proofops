@@ -13,11 +13,15 @@ export async function checkExportHttp() {
   await waitFor(() => button('내보내기 생성'), 'Report route did not mount');
   const partial = [...document.querySelectorAll('input[type=checkbox]')]
     .find(element => element.closest('label')?.textContent.includes('부분 결과 허용'));
-  assert(partial && !partial.checked, 'Partial export must default to false');
+  assert(partial && partial.checked, 'Review draft export must default to visibly partial');
+  assert(document.body.textContent.includes('최종본이 아닙니다'), 'Draft default must explain its limits');
+  partial.click();
+  await new Promise(resolve => setTimeout(resolve, 0));
   button('내보내기 생성').click();
-  await waitFor(() => document.body.textContent.includes('미완료 항목이 있습니다'),
+  await waitFor(() => document.body.textContent.includes('최종 내보내기를 만들 수 없습니다'),
     'Unfinished reports must explain the finalization gate');
   partial.click();
+  await new Promise(resolve => setTimeout(resolve, 0));
   button('다시 시도').click();
   await waitFor(() => document.body.textContent.includes('준비됨'), 'Actual export did not become ready');
   const exportId = new URL(location.href).searchParams.get('export_id');

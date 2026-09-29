@@ -588,6 +588,7 @@ console.log("ReportPreview audit-state checks passed");
     bundle = tmp_path / "report-render.cjs"
     subprocess.run(
         [
+            "node",
             str(esbuild),
             str(entry),
             "--bundle",
