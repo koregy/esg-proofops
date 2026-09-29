@@ -1,4 +1,29 @@
-## 2026-09-29 17:52 KST · Implemented and under integration
+## 2026-09-29 18:28 KST · Native API OCR and Solar Pro 3 integrated
+
+Commit `3ab69d6` adds a NEW-run native paragraph corroboration path using rendered
+image-only crops and stored Document Parse receipts, plus explicit Solar Pro 3
+selection for all live tagging roles. It preserves source glyph/geometry checks,
+the existing shared ledger, immutable snapshots and offline receipt replay.
+An unmatched crop stays unresolved. Windows/Linux-produced proofs currently
+refuse replay on macOS; the documented alternative is a new macOS run.
+
+The OCR worker passed 631 related regressions and 17 integration/17 unit checks;
+the model worker passed 30 new checks and 499 regression checks. Its one Windows
+test-fixture unlink failure was corrected without changing production receipt
+protection; the coordinator reran that case successfully. Coordinator lint,
+new-module mypy and architecture checks passed. A combined fake-provider rerun
+and real private-Kia p28 execution are underway; no actual full-run result is
+claimed yet. CI now runs the new model/OCR suites on all three operating systems
+(the off-macOS OCR suite is explicitly skipped on macOS).
+
+Commit `14dcac2` added full-source P4 consumer proofs and opt-in REC-002/006
+explanation/filing-lineage guards. Both its push and PR CI workflows succeeded.
+Actual DART collection returned five Kia annual filings with raw-response hashes;
+this does not establish reviewed correction lineage or source-verified financial
+periods. New OCR/model CI is pending. Whole-document absence review and the
+safe-harbor checklist producer remain active work. No AWS deployment was made.
+
+## Earlier 2026-09-29 17:52 KST · Implemented and under integration
 
 The submission branch now includes the immutable API candidate importer, Kia
 followup exporter (29 checks, 28 literal matches; six candidate records including
