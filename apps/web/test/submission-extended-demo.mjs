@@ -144,13 +144,29 @@ try {
   await check("extended routes are discoverable from the landing and demo pages", async () => {
     await open("/");
     const links = await evaluate("[...document.querySelectorAll('.xd-strip nav a')].map(a => a.getAttribute('href'))");
-    assert(JSON.stringify(links) === JSON.stringify(["/guide", "/replay", "/review", "/report/naver"]), `strip links ${JSON.stringify(links)}`);
+    assert(JSON.stringify(links) === JSON.stringify(["/validation/kia", "/guide", "/replay", "/review", "/report/naver"]), `strip links ${JSON.stringify(links)}`);
     assert(await evaluate("!!document.querySelector('.hero-actions .primary-link')"), "existing landing CTA missing");
     await evaluate("[...document.querySelectorAll('.xd-strip nav a')].find(a => a.getAttribute('href') === '/guide').click()");
     await waitFor("location.pathname === '/guide' && !!document.querySelector('#guide-title')", "guide via nav");
     assert(await evaluate("document.querySelector('.xd-strip a[href=\"/guide\"]').getAttribute('aria-current') === 'page'"), "aria-current");
     await open("/demo");
-    assert(await evaluate("document.querySelectorAll('.xd-strip nav a').length === 4 && !!document.querySelector('.claims-layout')"), "demo page lost strip or claim list");
+    assert(await evaluate("document.querySelectorAll('.xd-strip nav a').length === 5 && !!document.querySelector('.claims-layout')"), "demo page lost strip or claim list");
+  });
+
+  await check("Kia metadata keeps unresolved blocks and claims separate from grades", async () => {
+    const recorded = JSON.parse(readFileSync(join(repo, "evidence/kia-native-api-validation-20260929.json"), "utf8"));
+    const published = JSON.parse(readFileSync(join(root, "demo/kia-validation-20260929.json"), "utf8"));
+    assert(JSON.stringify(published) === JSON.stringify(recorded), "Kia public metadata differs from recorded evidence");
+    assert(published.source_body_included === false && published.whole_report_complete === false && published.accuracy_evaluated === false, "Kia trial scope changed");
+    await open("/validation/kia");
+    await waitFor("document.querySelectorAll('.kia-trials section').length === 2", "Kia metadata loaded");
+    const counts = await evaluate("[...document.querySelectorAll('.kia-counts')].map(dl => [...dl.querySelectorAll('dd')].map(dd => Number(dd.innerText)))");
+    const expected = recorded.runs.map(run => [run.ocr.corroborated, run.ocr.requested - run.ocr.corroborated, run.ocr.skipped]);
+    assert(JSON.stringify(counts) === JSON.stringify(expected), "Kia unresolved/skipped counts changed");
+    const body = await text();
+    for (const needle of ["부분 검증", "확정 등급 없음", "태깅 보류", "비공개 원문을 제외한"]) assert(body.includes(needle), `missing scope ${needle}`);
+    assert(await evaluate("!!document.querySelector('a[download=\"kia-validation-20260929.json\"]')"), "Kia metadata download missing");
+    await screenshot("kia-validation");
   });
 
   await check("decision guide quotes only sourced contract text", async () => {
@@ -263,7 +279,7 @@ try {
   });
 
   await viewport(390, 844, true);
-  for (const [name, path] of [["guide", "/guide"], ["replay", "/replay"], ["review-simulator", `/review/${decidedClaim.id}`], ["audit-report", "/report/naver"], ["landing", "/"]]) {
+  for (const [name, path] of [["kia-validation", "/validation/kia"], ["guide", "/guide"], ["replay", "/replay"], ["review-simulator", `/review/${decidedClaim.id}`], ["audit-report", "/report/naver"], ["landing", "/"]]) {
     await check(`mobile ${name} has no horizontal overflow and keeps the navigation strip`, async () => {
       await open(path);
       if (name === "replay") await evaluate("[...document.querySelectorAll('.replay-controls button')].find(b => b.innerText.includes('결과 바로 보기'))?.click()");
