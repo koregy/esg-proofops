@@ -53,7 +53,7 @@ export default function KiaValidation() {
         <p className="xd-muted">{run.offline_replay_with_network_blocked.matches_recorded_result ? "네트워크를 차단한 재생에서도 저장된 원문 검증 결과가 일치했습니다." : "오프라인 재생 확인 전입니다."}</p>
         <details><summary>실행 식별자</summary><code>{run.run_id}</code></details>
       </section>)}</div>
-      <section className="xd-card kia-source"><h2>어디까지 확인했나요?</h2><p>이 기록의 두 실행은 처리 경로를 확인하기 위한 시험입니다. 사업자 식별정보를 결속한 실제 기업 대사나 보증 범위 확정을 완료한 결과는 아닙니다.</p><p>원문 일치는 인용 가능성을 확인하는 단계입니다. 지표·기간·조직경계를 대조하고 검토를 마쳐야 보증 근거와 연결할 수 있습니다.</p><p>기록일 {data.recorded_date} · 원문 {data.source_pages}쪽</p><details><summary>원문 파일 해시</summary><code>{data.source_sha256}</code></details><p><a href={file} download="kia-validation-20260929.json">검증 수치 JSON 내려받기</a> · <Link to="/demo">NAVER 주장별 검토 결과 보기 →</Link></p></section>
+      <section className="xd-card kia-source"><h2>어디까지 확인했나요?</h2><p>이 기록의 두 실행은 처리 경로를 확인하기 위한 시험입니다. 사업자 식별정보를 결속한 실제 기업 대사나 보증 범위 확정을 완료한 결과는 아닙니다.</p><p>원문 일치는 인용 가능성을 확인하는 단계입니다. 지표·기간·조직경계를 대조하고 검토를 마쳐야 보증 근거와 연결할 수 있습니다.</p><p>기록일 {data.recorded_date} · 원문 {data.source_pages}쪽</p><details><summary>원문 파일 해시</summary><code>{data.source_sha256}</code></details><p><a href={file} download="kia-validation-20260929.json">검증 수치 JSON 내려받기</a> · <Link to="/demo">N사 주장별 검토 결과 보기 →</Link></p></section>
     </>}
   </main>;
 }
