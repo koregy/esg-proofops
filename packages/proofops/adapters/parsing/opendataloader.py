@@ -308,6 +308,10 @@ class OpenDataLoaderParser(ParserPort):
         )
         if final.exists():
             raise ParseFailure("PARSE_MANIFEST_EXISTS")
+        if not artifact_paths_fit(final):
+            # Refuse before anything is created: a parse whose immutable output
+            # cannot be reopened would publish a manifest no reader can verify.
+            raise ParseFailure("PARSER_ARTIFACT_PATH_TOO_LONG")
         java = shutil.which(profile.java_executable)
         if not java:
             raise ParseFailure("JAVA_21_REQUIRED")
@@ -317,7 +321,7 @@ class OpenDataLoaderParser(ParserPort):
             ).stderr.decode(errors="replace")
         except (OSError, subprocess.SubprocessError):
             raise ParseFailure("JAVA_21_REQUIRED") from None
-        if re.search(r'version "21\.', runtime) is None:
+        if not is_java_21(runtime):
             raise ParseFailure("JAVA_21_REQUIRED")
         verified = verify_quarantined_pdf(
             QuarantinedPdf(
@@ -693,6 +697,68 @@ def _child_limits(profile: dict[str, Any]) -> None:
 
     # SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX
     ctypes.WinDLL("kernel32", use_last_error=True).SetErrorMode(0x0001 | 0x0002 | 0x8000)
+
+
+# Every file this adapter may persist in a manifest directory. The random
+# `.parse-XXXXXXXX` work directory is shorter than the 36-character manifest id it
+# is renamed to, so the final directory is the binding constraint.
+_ARTIFACT_NAMES = (
+    "auxiliary.json",
+    "candidates.json",
+    "geometry.json",
+    "graph.json",
+    "manifest.json",
+    "quality.json",
+    "source-repaired.json",
+    "source.json",
+    "source.md",
+    "table-repair.json",
+    "table-source.json",
+)
+# Win32 MAX_PATH counts the terminating NUL: at most 259 usable characters.
+_WINDOWS_MAX_PATH = 260
+
+
+def _windows_long_paths_enabled() -> bool:
+    """Whether this process may open paths past MAX_PATH (registry + manifest)."""
+    import ctypes
+
+    try:
+        query = ctypes.WinDLL("ntdll").RtlAreLongPathsEnabled
+    except (OSError, AttributeError):
+        return False
+    query.restype = ctypes.c_ubyte
+    query.argtypes = []
+    return bool(query())
+
+
+def artifact_paths_fit(
+    final: Path, *, platform: str | None = None, long_paths: bool | None = None
+) -> bool:
+    """True when every artifact under ``final`` stays openable on this host.
+
+    Without Windows long-path support a longer path is not an error at write
+    time inside the short work directory, but after the rename the persisted
+    manifest and graph are unreachable: the parse "succeeds" and its immutable
+    output then fails as a generic read error. POSIX has no such limit here.
+    """
+    if (platform or sys.platform) != "win32":
+        return True
+    if long_paths if long_paths is not None else _windows_long_paths_enabled():
+        return True
+    longest = len(os.path.abspath(final)) + 1 + max(map(len, _ARTIFACT_NAMES))
+    return longest < _WINDOWS_MAX_PATH
+
+
+# `java -version` prints `version "21"` for the GA build and `version "21.0.2"`,
+# `"21-ea"` or `"21+35"` for later ones. The feature number must be exactly 21:
+# `"22"`, `"210"` or `"2.1"` are other runtimes.
+_JAVA_21_VERSION = re.compile(r'version "21(?:[.+-][^"\s]*)?"')
+
+
+def is_java_21(version_output: str) -> bool:
+    """True when `java -version` output names feature release 21 exactly."""
+    return _JAVA_21_VERSION.search(version_output) is not None
 
 
 def _child_environment(java: str, work: Path, profile) -> dict[str, str]:

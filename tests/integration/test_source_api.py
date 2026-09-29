@@ -1,5 +1,6 @@
 """Read actual fence-published parser evidence through the fixed source/quality API."""
 
+import sys
 from dataclasses import replace
 from hashlib import sha256
 from urllib.parse import parse_qs, urlsplit
@@ -242,7 +243,19 @@ def test_page_preview_uses_fixed_process_limits_and_returns_sanitized_failure(mo
         assert profile.timeout_seconds == 15
         assert profile.memory_bytes == 512 * 1024 * 1024
         assert profile.max_output_bytes == 16 * 1024 * 1024
-        assert env == {"PATH": "/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE": "1"}
+        if sys.platform != "win32":
+            assert env == {"PATH": "/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE": "1"}
+        else:
+            # Minimal and never inherited; TEMP stays inside the watched work directory.
+            assert set(env) == {
+                "PATH",
+                "SystemRoot",
+                "TEMP",
+                "TMP",
+                "PYTHONDONTWRITEBYTECODE",
+                "PYTHONUTF8",
+            }
+            assert env["TEMP"] == env["TMP"] == str(work)
         raise ParseFailure("PARSER_MEMORY_LIMIT")
 
     monkeypatch.setattr(OpenDataLoaderParser, "_execute", fail_within_preview_limits)
