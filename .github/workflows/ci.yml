@@ -79,7 +79,7 @@ jobs:
       - name: Cross-platform paid-dispatch exclusion (fake provider only)
         run: uv run --no-sync python -m pytest tests/unit/test_operation_lock.py tests/unit/test_tagging_platform.py tests/integration/test_upstage_tagging.py -q
       - name: Native API OCR and pinned Solar Pro 3 tagging (fake provider only)
-        run: uv run --no-sync python -m pytest tests/integration/test_native_upstage_ocr_worker.py tests/integration/test_solar_pro3_tagging.py tests/integration/test_solar_pro3_live_tagging_worker.py tests/unit/test_native_upstage_ocr.py tests/unit/test_solar_pro3_pilot_flag.py -q
+        run: uv run --no-sync python -m pytest tests/integration/test_native_upstage_ocr_worker.py tests/integration/test_native_widget_visibility.py tests/integration/test_solar_pro3_tagging.py tests/integration/test_solar_pro3_live_tagging_worker.py tests/unit/test_native_upstage_ocr.py tests/unit/test_solar_pro3_pilot_flag.py -q
       - name: Preserve verification evidence, including failures
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

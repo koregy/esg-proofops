@@ -1,4 +1,5 @@
 // 공개 데모 확장 화면(판정 안내 · 저장된 처리 재생 · 검토 시뮬레이터 · 감사 보고서)을 실제 Chrome으로 확인한다.
+// 통합 공개 UI(제출 A 화면: /analyze/replay · /review/:id · /report/:company · /demo/kia, 유지 화면: /guide/decision · /validation/kia) 기준 선택자다.
 // 사용법: VITE_DEMO_STATIC=true pnpm build 후 `node test/submission-extended-demo.mjs [--dist 빌드_폴더] [--out 스크린샷_폴더]`
 // submission-static-demo.mjs와 같은 방식(Chrome headless + DevTools Protocol, 추가 의존성 없음)이며 /api/ 요청과 쓰기 요청이 없어야 통과한다.
 import { spawn } from "node:child_process";
@@ -104,7 +105,7 @@ async function viewport(width, height, mobile) {
 }
 async function open(path) {
   await page("Page.navigate", { url: base + path });
-  await waitFor("document.readyState === 'complete' && !document.querySelector('[role=status]') && !!document.querySelector('main')", `load ${path}`);
+  await waitFor("document.readyState === 'complete' && !document.querySelector('[role=status]') && !!document.querySelector('main, .audit-page')", `load ${path}`);
   await sleep(200);
 }
 const shots = [];
@@ -131,26 +132,32 @@ async function check(name, run) {
 function assert(condition, message) { if (!condition) throw new Error(message); }
 
 try {
-  await check("data provenance: engine table and snapshot share the pinned rule pack; engine version matches guide", async () => {
+  await check("data provenance: engine table and snapshot share the pinned rule pack; shipped snapshot has no display-grade fallback", async () => {
     assert(table.rule_pack_sha256 === rulepack.sha256, `table ${table.rule_pack_sha256} != api/rulepack.json ${rulepack.sha256}`);
     assert(snapshot.run.rule_pack_hash === rulepack.sha256, "snapshot rule pack hash differs");
     assert(engineSource.includes('ENGINE_VERSION = "explicit-ladders-exceptions-3"'), "engine version changed; update domainContract.ts");
-    const bundle = readdirSync(join(root, "assets")).filter(name => name.endsWith(".js")).map(name => readFileSync(join(root, "assets", name), "utf8")).join("\n");
-    assert(!bundle.includes("display_grade") && !bundle.includes("display_note"), "bundle still references A display_grade fallback");
-    assert(!existsSync(join(root, "demo/kia-2025.json")), "Kia data must not ship in this submission yet");
+    // 통합 UI 코드에는 A의 display_grade 분기가 남아 있으므로, 배포되는 NAVER 스냅샷 자체에 표시용 등급이 없어야 한다.
+    const shipped = readFileSync(join(root, "demo/naver-2025.json"));
+    assert(shipped.equals(snapshotBytes), "shipped NAVER snapshot differs from public/demo/naver-2025.json");
+    const raw = snapshotBytes.toString("utf8");
+    for (const field of ["display_grade", "display_note", "display_label", "\"estimated\"", "review_bucket", "demo_mode"]) assert(!raw.includes(field), `NAVER snapshot contains ${field}`);
+    assert(snapshot.claims.filter(claim => claim.decision.grade).length === snapshot.coverage.claims_decided, "stored grade count differs from coverage");
   });
 
   await viewport(1440, 900, false);
-  await check("extended routes are discoverable from the landing and demo pages", async () => {
+  await check("extended routes are discoverable from the landing, footer and demo pages", async () => {
     await open("/");
-    const links = await evaluate("[...document.querySelectorAll('.xd-strip nav a')].map(a => a.getAttribute('href'))");
-    assert(JSON.stringify(links) === JSON.stringify(["/validation/kia", "/guide", "/replay", "/review", "/report/naver"]), `strip links ${JSON.stringify(links)}`);
-    assert(await evaluate("!!document.querySelector('.hero-actions .primary-link')"), "existing landing CTA missing");
-    await evaluate("[...document.querySelectorAll('.xd-strip nav a')].find(a => a.getAttribute('href') === '/guide').click()");
-    await waitFor("location.pathname === '/guide' && !!document.querySelector('#guide-title')", "guide via nav");
-    assert(await evaluate("document.querySelector('.xd-strip a[href=\"/guide\"]').getAttribute('aria-current') === 'page'"), "aria-current");
+    const links = await evaluate("[...document.querySelectorAll('a')].map(a => a.getAttribute('href'))");
+    for (const href of ["/analyze", "/analyze/replay", "/demo", "/demo/kia", "/report/naver", "/live", "/guide", "/guide/decision", "/validation/kia"]) assert(links.includes(href), `link missing ${href}`);
+    assert(links.some(href => href?.startsWith("/review/")), "review link missing");
+    await evaluate("document.querySelector('.site-footer a[href=\"/guide/decision\"]').click()");
+    await waitFor("location.pathname === '/guide/decision' && !!document.querySelector('#guide-title')", "decision guide via footer");
+    for (const [legacy, target] of [["/replay", "/analyze/replay"], ["/report", "/report/naver"], ["/validation", "/validation/kia"]]) {
+      await open(legacy);
+      assert((await evaluate("location.pathname")) === target, `${legacy} does not redirect to ${target}`);
+    }
     await open("/demo");
-    assert(await evaluate("document.querySelectorAll('.xd-strip nav a').length === 5 && !!document.querySelector('.claims-layout')"), "demo page lost strip or claim list");
+    assert(await evaluate("!!document.querySelector('.claims-layout') && document.querySelector('.company-tabs a[aria-current=page]')?.innerText === 'NAVER'"), "demo page lost claim list or company tab");
   });
 
   await check("Kia metadata keeps unresolved blocks and claims separate from grades", async () => {
@@ -169,8 +176,18 @@ try {
     await screenshot("kia-validation");
   });
 
+  await check("A-supplied Kia case and report are labelled as provided demonstration data with provisional grades", async () => {
+    for (const path of ["/demo/kia", "/report/kia"]) {
+      await open(path);
+      await waitFor("!!document.querySelector('.kia-provenance')", `Kia provenance ${path}`);
+      const note = await text(".kia-provenance");
+      assert(note.includes("제공된 시연 데이터") && note.includes("독립 검증하지 않았습니다") && note.includes("예비 등급은 확정 판정이 아닙니다"), `Kia provenance ${path}: ${note}`);
+    }
+    assert((await text()).includes("예비 등급"), "Kia report must separate provisional grades");
+  });
+
   await check("decision guide quotes only sourced contract text", async () => {
-    await open("/guide");
+    await open("/guide/decision");
     const grades = await evaluate("[...document.querySelectorAll('#guide-grades tbody tr')].map(tr => [...tr.children].map(td => td.innerText.trim()))");
     assert(grades.length === 4, "grade rows");
     for (const [grade, label, meaning] of grades) assert(original.includes(`| ${grade} | ${label} | ${meaning} |`), `grade row not in original §4.3: ${grade} ${meaning}`);
@@ -187,114 +204,113 @@ try {
     const status = await text("[data-testid=guide-snapshot-status]");
     assert(status.includes(`미판정 ${snapshot.claims.filter(c => c.decision.status === "not_run").length}건`) && status.includes(`규칙 판정 ${snapshot.coverage.claims_decided}건`), `status line ${status}`);
     assert((await text()).includes(snapshot.run.rule_pack_hash.slice(0, 16)), "rule pack hash");
+    await open("/guide");
+    assert((await text()).includes("확인하지 못한 근거를 “근거 없음”으로 처리하지 않습니다"), "service guide must keep unknown ≠ absent");
     await screenshot("desktop-guide");
   });
 
-  await check("replay is labelled stored replay with simulated timing and shows stored counts", async () => {
-    await open("/replay");
-    const banner = await text(".xd-banner[data-mode=stored-replay]");
-    for (const needle of ["STORED REPLAY", "실제 모델 실행이 아니며", "시뮬레이션된 타이밍", "demo/naver-2025.json"]) assert(banner.includes(needle), `banner missing ${needle}`);
-    assert(!(await evaluate("!!document.querySelector('[data-testid=replay-finish]')")), "replay should start before the finish");
-    await evaluate("[...document.querySelectorAll('.replay-controls button')].find(b => b.innerText.includes('결과 바로 보기')).click()");
-    await waitFor("!!document.querySelector('[data-testid=replay-finish]')", "finish");
-    const stages = await evaluate("[...document.querySelectorAll('.replay-step')].map(li => li.querySelector('strong').innerText.replace(/[^0-9]/g, ''))");
-    const expected = [snapshot.coverage.pages_processed, ...snapshot.funnel.map(step => step.count)].map(String);
-    assert(JSON.stringify(stages) === JSON.stringify(expected), `stage counts ${stages} != ${expected}`);
-    const finish = await text("[data-testid=replay-finish]");
-    const e3 = snapshot.claims.filter(c => c.decision.grade === "E3").length;
-    const notRun = snapshot.claims.filter(c => c.decision.status === "not_run").length;
-    const ranges = snapshot.claims.filter(c => !c.decision.grade && c.decision.grade_range).length;
-    for (const needle of [`E3 ${e3}건`, `미판정(not_run) ${notRun}건`, `가능 범위만 있는 보류 ${ranges}건`, `등급 미정 ${nullGrade.length}건`]) assert(finish.includes(needle), `finish missing ${needle}`);
+  await check("replay is labelled as a stored replay with simulated timing, not a live run", async () => {
+    await open("/analyze/replay");
+    assert(!(await evaluate("!!document.querySelector('.replay-finish')")), "replay should start before the finish");
+    const body0 = await text();
+    assert(body0.includes("저장") && (body0.includes("재생") || body0.includes("시뮬레이션")) && !body0.includes("실시간"), "replay must say it replays a stored run, not a live model run");
+  });
+
+  await check("replay shows the stored funnel, stored decision count, partial scope and recorded run values", async () => {
+    await open("/analyze/replay");
+    await evaluate("[...document.querySelectorAll('.replay-hero-bottom button')].find(b => b.innerText.includes('결과 바로 보기')).click()");
+    await waitFor("!!document.querySelector('.replay-finish')", "finish");
+    const funnel = await evaluate("[...document.querySelectorAll('.replay-funnel-row')].map(row => [row.querySelector('span').innerText, row.querySelector('strong').innerText.replace(/[^0-9]/g, '')])");
+    const expected = snapshot.funnel.map(step => [step.label, String(step.count)]);
+    assert(JSON.stringify(funnel) === JSON.stringify(expected), `stage counts ${JSON.stringify(funnel)} != ${JSON.stringify(expected)}`);
+    const finish = await text(".replay-finish");
+    assert(finish.includes(`${snapshot.coverage.claims_decided}건`) && !finish.includes(`${snapshot.claims.length}건`), `finish must count stored decisions only: ${finish}`);
     const body = await text();
+    assert(body.includes(`${snapshot.coverage.pages_processed} / ${snapshot.coverage.pages_total}쪽`), "partial page scope");
     assert(body.includes(snapshot.run.r72_paid_calls.toLocaleString("ko-KR")) && body.includes(`$${snapshot.run.r72_cost_usd.toFixed(2)}`), "recorded run values");
     await screenshot("desktop-replay");
   });
 
-  await check("review simulator is local simulation over the Python precomputed table; stored decision stays immutable", async () => {
+  await check("review simulator is local-only over the Python precomputed table; stored decision stays immutable", async () => {
     await open("/review");
-    const tracked = snapshot.claims.filter(c => c.track).length;
-    assert((await evaluate("document.querySelectorAll('.review-index tbody tr').length")) === tracked, "index rows");
+    assert((await evaluate("location.pathname")).startsWith("/review/"), "/review should open a stored E3 claim");
     await open(`/review/${decidedClaim.id}`);
-    await waitFor("!!document.querySelector('[data-testid=simulated-decision]')", "simulator");
-    const banner = await text(".xd-banner[data-mode=local-simulation]");
-    for (const needle of ["LOCAL SIMULATION", "로컬 시뮬레이션", "Python 규칙엔진", "미리 계산한 조회표", "수락된 태깅·판정 revision이 생기지 않고", "API 업로드", "사람 승인"]) assert(banner.includes(needle), `banner missing ${needle}`);
-    assert((await evaluate("document.querySelector('[data-consistency]').dataset.consistency")) === "match", "stored states should reproduce stored decision");
-    assert((await text("[data-testid=stored-decision] .review-sim-grade")) === "E3", "stored grade");
-    await evaluate("const s = document.querySelector('#sim-M3'); s.value = 'absent'; s.dispatchEvent(new Event('change', { bubbles: true }))");
-    await waitFor("document.querySelector('[data-testid=simulated-decision] .review-sim-grade').innerText === 'E2'", "simulated E2");
-    const expected = table.tracks.management.rows["ppa00"];
-    assert((await text("[data-testid=simulated-decision]")).includes(expected[2]), "simulated label from table");
-    assert((await text("[data-testid=stored-decision] .review-sim-grade")) === "E3", "stored decision must not change");
+    await waitFor("document.querySelector('.review-sim-grade strong')?.innerText === 'E3'", "stored states reproduce stored E3");
+    assert((await text(".review-sim")).includes("현재 화면에만 적용"), "simulation must say changes stay on this screen");
+    const m3 = `#review-${decidedClaim.id}-M3`;
+    await evaluate(`const s = document.querySelector('${m3}'); s.value = 'absent'; s.dispatchEvent(new Event('change', { bubbles: true }))`);
+    await waitFor("document.querySelector('.review-sim-grade strong').innerText === 'E2'", "simulated E2");
+    const expectedRow = table.tracks.management.rows["ppa00"];
+    assert((await text(".review-sim-grade")).includes(expectedRow[2]), "simulated label from table");
     assert((await evaluate("document.querySelectorAll('.review-sim-history li').length")) === 1, "history entry");
     await screenshot("desktop-review-simulator");
+    await open(`/demo/${decidedClaim.id}`);
+    await waitFor("!!document.querySelector('.claim-detail .decision-panel')", "stored detail");
+    assert((await text(".claim-detail .decision-panel strong")).startsWith("E3"), "stored decision must not change after simulation");
 
     await open(`/review/${rangeClaim.id}`);
-    await waitFor("!!document.querySelector('[data-testid=stored-decision]')", "range simulator");
-    const stored = await text("[data-testid=stored-decision]");
-    assert(stored.includes(gradeText(rangeClaim)) && stored.includes("null"), `range claim stored ${stored}`);
-    await evaluate("const s = document.querySelector('#sim-M3'); s.value = 'present'; s.dispatchEvent(new Event('change', { bubbles: true }))");
-    await waitFor("document.querySelector('[data-testid=simulated-decision] .review-sim-grade').innerText === 'E3'", "range claim simulated E3");
-    assert((await text("[data-testid=stored-decision] .review-sim-grade")) === gradeText(rangeClaim), "stored range decision must not change");
+    await waitFor(`document.querySelector('.review-sim-grade strong')?.innerText === '${rangeClaim.decision.grade_range.floor}–${rangeClaim.decision.grade_range.ceiling}'`, "range claim starts as a range");
+    await evaluate(`const s = document.querySelector('#review-${rangeClaim.id}-M3'); s.value = 'present'; s.dispatchEvent(new Event('change', { bubbles: true }))`);
+    await waitFor("document.querySelector('.review-sim-grade strong').innerText === 'E3'", "range claim simulated E3");
+    await open(`/demo/${rangeClaim.id}`);
+    await waitFor("!!document.querySelector('.claim-detail .decision-panel')", "range stored detail");
+    assert(!(await text(".claim-detail .decision-panel strong")).startsWith("E3"), "stored range decision must not change");
 
-    await open(`/review/${notRunTracked.id}`);
-    await waitFor("!!document.querySelector('[data-consistency]')", "not_run simulator");
-    assert((await evaluate("document.querySelector('[data-consistency]').dataset.consistency")) === "not_run", "not_run consistency");
-    assert((await text("[data-testid=stored-decision] .review-sim-grade")) === "미판정", "not_run stored grade");
+    await open(`/demo/${notRunTracked.id}`);
+    await waitFor("!!document.querySelector('.claim-detail .decision-panel')", "not_run detail");
+    assert(!/E[0-3]/.test(await text(".claim-detail .decision-panel strong")), "not_run claim must not show a stored grade");
     await open(`/review/${untracked.id}`);
-    assert((await text()).includes("트랙이 정해지지 않은 주장입니다"), "untracked claim must not be simulated");
+    assert((await text()).includes("주장 유형을 확인하면") && !(await evaluate("!!document.querySelector('.review-sim select')")), "untracked claim must not be simulated");
   });
 
-  await check("audit report uses stored immutable claims, keeps null grades unresolved and links sources", async () => {
+  await check("audit report uses stored immutable claims, keeps null grades unresolved and exports provenance", async () => {
     await open("/report/naver");
-    const banner = await text(".xd-banner[data-mode=stored-snapshot]");
-    assert(banner.includes("다시 계산하지 않습니다") && banner.includes("null로 두고 E0이나 근거 부재로 세지 않습니다"), "report banner");
-    assert((await text("[data-testid=audit-null-grade] strong")).replace(/[^0-9]/g, "") === String(nullGrade.length), "null-grade count");
-    assert((await text("[data-testid=audit-provenance]")).includes(snapshotSha), "snapshot sha256 in provenance");
-    assert(await evaluate(`[...document.querySelectorAll('a[href="https://www.navercorp.com/esg/esgReports"]')].length > 0`), "official source link");
-    await evaluate("[...document.querySelectorAll('.audit-filter button')].find(b => b.innerText.startsWith('전체')).click()");
-    await sleep(300);
-    const rows = await evaluate("[...document.querySelectorAll('.audit-table tbody tr')].map(tr => ({ id: tr.dataset.claim, status: tr.dataset.status, grade: tr.querySelector('.audit-grade').innerText.trim(), demo: !!tr.querySelector(`a[href=\"/demo/${tr.dataset.claim}\"]`) }))");
+    const body = await text();
+    assert(body.includes("근거 부재로 바꾸지 않습니다") && body.includes(`${snapshot.coverage.pages_processed}/${snapshot.coverage.pages_total}쪽`), "report scope and unknown ≠ absent");
+    const ranges = snapshot.claims.filter(c => !c.decision.grade && c.decision.grade_range).length;
+    assert(body.includes(`범위 보류 ${ranges}건 · 미판정 ${nullGrade.length - ranges}건`), "null-grade counts");
+    assert(!body.includes("예비 등급"), "NAVER report must not show provisional grades");
+    const rows = await evaluate("[...document.querySelectorAll('.audit-claims tbody tr')].map(tr => tr.children[3].querySelector('strong').innerText.trim())");
     assert(rows.length === snapshot.claims.length, `rows ${rows.length}`);
-    for (const row of rows) {
-      const claim = snapshot.claims.find(item => item.id === row.id);
-      assert(claim && row.status === claim.decision.status && row.grade === gradeText(claim) && row.demo, `row mismatch ${row.id}`);
-      if (claim.decision.grade === null) assert(!/^E[0-3]$/.test(row.grade), `null grade shown as ${row.grade} for ${row.id}`);
-    }
-    await evaluate("[...document.querySelectorAll('.audit-actions button')].find(b => b.innerText.startsWith('JSON')).click()");
-    const exported = JSON.parse(await waitDownload("naver-proofops-audit-report.json"));
-    assert(exported.provenance.snapshot_sha256 === snapshotSha && exported.provenance.rule_pack_hash === snapshot.run.rule_pack_hash, "export provenance");
-    assert(exported.claims.filter(claim => claim.evidenceGrade === null).length === nullGrade.length, "export null grades");
+    const rowGrade = claim => claim.decision.grade ?? (claim.decision.grade_range ? `${claim.decision.grade_range.floor}–${claim.decision.grade_range.ceiling} 범위` : "미판정");
+    const sorted = [...rows].sort().join("|");
+    assert(sorted === snapshot.claims.map(rowGrade).sort().join("|"), "row grades differ from stored grades");
+    assert(rows.filter(grade => /^E[0-3]$/.test(grade)).length === snapshot.coverage.claims_decided, "null grade shown as an E grade");
+    await evaluate("[...document.querySelectorAll('.audit-toolbar button')].find(b => b.innerText.startsWith('JSON')).click()");
+    const exported = JSON.parse(await waitDownload("naver-proofops-audit.json"));
+    assert(exported.rule_pack_hash === snapshot.run.rule_pack_hash && exported.pending_count === nullGrade.length - ranges && exported.range_count === ranges, "export provenance and null counts");
     for (const claim of exported.claims) {
       const stored = snapshot.claims.find(item => item.id === claim.id);
-      assert(claim.evidenceGrade === stored.decision.grade && claim.label === stored.decision.label && claim.decisionRevision === stored.review.decision_revision, `export differs ${claim.id}`);
+      assert(claim.grade === rowGrade(stored), `export differs ${claim.id}`);
     }
-    await evaluate("[...document.querySelectorAll('.audit-actions button')].find(b => b.innerText.startsWith('CSV')).click()");
-    const csv = (await waitDownload("naver-proofops-claims.csv")).replace(/^\uFEFF/, "").split("\r\n");
-    assert(csv.length === snapshot.claims.length + 1 && csv[0].startsWith('"claim_id"'), "csv rows");
+    await evaluate("[...document.querySelectorAll('.audit-toolbar button')].find(b => b.innerText.startsWith('CSV')).click()");
+    const csv = (await waitDownload("naver-proofops-claims.csv")).replace(/^﻿/, "").split("\r\n");
+    assert(csv.length === snapshot.claims.length + 1 && csv[0].startsWith('"주장 ID"'), "csv rows");
     const nullRow = csv.find(line => line.startsWith(`"${nullGrade[0].id}"`));
-    assert(nullRow && nullRow.includes(`"${nullGrade[0].decision.status}","",""`), `csv null grade row ${nullRow}`);
+    assert(nullRow && !/"E[0-3]"/.test(nullRow), `csv null grade row ${nullRow}`);
     await screenshot("desktop-audit-report");
-    await open("/report/kia");
-    assert((await text()).includes("NAVER 저장 스냅샷의 보고서만"), "Kia must not be integrated yet");
   });
 
   await viewport(390, 844, true);
-  for (const [name, path] of [["kia-validation", "/validation/kia"], ["guide", "/guide"], ["replay", "/replay"], ["review-simulator", `/review/${decidedClaim.id}`], ["audit-report", "/report/naver"], ["landing", "/"]]) {
-    await check(`mobile ${name} has no horizontal overflow and keeps the navigation strip`, async () => {
+  for (const [name, path, phrase] of [["kia-validation", "/validation/kia", "부분 검증"], ["guide", "/guide/decision", "미확인은 부재가 아닙니다"], ["replay", "/analyze/replay", `${snapshot.coverage.pages_processed} / ${snapshot.coverage.pages_total}쪽`], ["review-simulator", `/review/${decidedClaim.id}`, "현재 화면에만 적용"], ["audit-report", "/report/naver", "근거 부재로 바꾸지 않습니다"], ["landing", "/", "제3자 보증"]]) {
+    await check(`mobile ${name} has no horizontal overflow, keeps navigation and its scope caveat`, async () => {
       await open(path);
-      if (name === "replay") await evaluate("[...document.querySelectorAll('.replay-controls button')].find(b => b.innerText.includes('결과 바로 보기'))?.click()");
+      if (name === "replay") await evaluate("[...document.querySelectorAll('.replay-hero-bottom button')].find(b => b.innerText.includes('결과 바로 보기'))?.click()");
       await sleep(200);
       assert(await noHorizontalOverflow(), `${path} overflows horizontally`);
-      assert(await evaluate("[...document.querySelectorAll('.xd-strip nav a')].every(a => a.getBoundingClientRect().height > 0)"), "strip links hidden");
-      if (["replay", "review-simulator", "audit-report"].includes(name)) assert(await evaluate("!!document.querySelector('.xd-banner')"), "stored/simulation banner missing on mobile");
+      if (name !== "audit-report") assert(await evaluate("document.querySelector('.menu-toggle')?.getBoundingClientRect().height > 0"), "mobile menu toggle hidden");
+      else assert(await evaluate("document.querySelector('.audit-toolbar a[href=\"/demo\"]')?.getBoundingClientRect().height > 0"), "report back link hidden");
+      assert((await text()).includes(phrase), `missing caveat ${phrase}`);
       await screenshot(`mobile-${name}`);
     });
   }
 
-  await check("extended demo made no /api/, /v1/ or write requests and threw no page errors", async () => {
+  await check("extended demo made no /api/, /v1/, outside or write requests and threw no page errors", async () => {
     const api = requests.filter(request => request.url.startsWith(base + "/api/") || request.url.startsWith(base + "/v1/"));
+    const outside = requests.filter(request => /^https?:/.test(request.url) && !request.url.startsWith(base));
     const writes = requests.filter(request => !["GET", "HEAD"].includes(request.method));
     assert(api.length === 0, `api requests ${api.map(request => request.url).join(", ")}`);
+    assert(outside.length === 0, `outside requests ${outside.map(request => request.url).join(", ")}`);
     assert(writes.length === 0, `write requests ${writes.map(request => `${request.method} ${request.url}`).join(", ")}`);
     assert(consoleErrors.length === 0, `page errors ${consoleErrors.join(" | ")}`);
   });

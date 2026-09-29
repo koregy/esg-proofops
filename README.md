@@ -1,5 +1,9 @@
 # ESG ProofOps
 
+**제출용 배포: [esg-proofops-koregy.vercel.app](https://esg-proofops-koregy.vercel.app)** · [PDF 분석](https://esg-proofops-koregy.vercel.app/analyze) · [배포·시연 안내](docs/VERCEL_SUBMISSION.md)
+
+공개 사이트에는 NAVER 저장 결과, 기아 시연 사례, 검토·보고서 화면과 Upstage 기반 새 PDF 후보 추출을 연결했습니다. 새 PDF의 텍스트 일치는 원문 검증 완료가 아니므로 등급을 보류합니다. 영속 작업공간과 전체 검증 워커는 로컬 실행 구성에 포함되며, 현재 Vercel 공개 배포에는 연결하지 않았습니다.
+
 **지속가능성 공시의 환경 관련 주장을 발간 전에 근거와 함께 검토하는 도구입니다.** 기업의 실제 환경성과나 위법 여부를 판정하지 않습니다. 각 주장에 대해 같은 공시의 어느 문장·표·쪽이 근거인지, 무엇이 빠졌는지, 사람의 확인이 어디에 필요한지를 보여줍니다.
 
 ## 문제와 작동 방식

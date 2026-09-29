@@ -13,14 +13,7 @@ import { RecentRuns, RunResultCallout } from "./features/runs/RecentRuns";
 import { ApiError, errorMessage, isSessionError, requestJson, type Session } from "./features/session/api";
 import { CompanySelector, type RuntimeOptions, type UploadSelection } from "./features/upload/CompanySelector";
 import { UploadForm, type ReadyDocumentVersion } from "./features/upload/UploadForm";
-import AuditReportPage from "./features/auditreport/AuditReportPage";
-import { loadSnapshot, type LoadedSnapshot } from "./features/auditreport/snapshot";
-import { DecisionGuide } from "./features/decisionguide/DecisionGuide";
-import ReplayPage from "./features/replay/ReplayPage";
-import ReviewPage from "./features/reviewsim/ReviewPage";
-import KiaValidation from "./features/validation/KiaValidation";
 import "./static-demo.css";
-import "./features/decisionguide/extended-shell.css";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 const UPLOAD_ORIGIN = import.meta.env.VITE_UPLOAD_ORIGIN;
@@ -28,15 +21,9 @@ const LOCAL_SYNTHETIC = import.meta.env.VITE_LOCAL_SYNTHETIC === "true";
 const emptySelection: UploadSelection = { companyId: "", rightsProfileId: "", consentProfileId: "", runtimeBindingId: "" };
 const emptyOptions: RuntimeOptions = { rights_profiles: [], consent_profiles: [], runtime_bindings: [], rule_packs: [], enabled_modes: [] };
 
-// 공개 데모 확장 화면. 저장된 NAVER 스냅샷만 읽고 세션·API를 쓰지 않는다.
-const extendedLinks = [
-  { to: "/validation/kia", prefix: "/validation", label: "기아 원문 검증" },
-  { to: "/guide", prefix: "/guide", label: "판정 안내" },
-  { to: "/replay", prefix: "/replay", label: "저장된 처리 재생" },
-  { to: "/review", prefix: "/review", label: "검토 시뮬레이터" },
-  { to: "/report/naver", prefix: "/report", label: "감사 보고서" },
-];
-const isUnder = (pathname: string, prefix: string) => pathname === prefix || pathname.startsWith(`${prefix}/`);
+// 공개 화면(소개·분석·사례·보고서·검토·문장 분석·안내·검증). 세션·인증 API 없이 저장된 스냅샷과 공개 분석 경로만 쓴다.
+const publicPrefixes = ["/demo", "/analyze", "/review", "/report", "/live", "/guide", "/replay", "/validation"];
+const isPublicPath = (pathname: string) => pathname === "/" || publicPrefixes.some(prefix => pathname === prefix || pathname.startsWith(`${prefix}/`));
 
 type LocalSubmission = {
   worker_enabled: boolean;
@@ -51,8 +38,7 @@ export function App() {
 function SessionApp() {
   const navigate = useNavigate();
   const location = useLocation();
-  const extendedPage = extendedLinks.some(link => isUnder(location.pathname, link.prefix));
-  const publicPage = location.pathname === "/" || location.pathname.startsWith("/demo") || location.pathname === "/live" || extendedPage;
+  const publicPage = isPublicPath(location.pathname);
   const [staticMode, setStaticMode] = useState(import.meta.env.VITE_DEMO_STATIC === "true");
   const [session, setSession] = useState<Session | null>(null);
   const [sessionStatus, setSessionStatus] = useState<"loading" | "ready" | "missing" | "error">("loading");
@@ -149,8 +135,8 @@ function SessionApp() {
   const loginUrl = `/auth/login?return_to=${encodeURIComponent(location.pathname.startsWith("/runs/") ? location.pathname : "/documents/new")}`;
   const changed = useCallback(() => setDataRevision(current => current + 1), []);
 
-  if (extendedPage) return <ExtendedDemo />;
-  if (staticMode || publicPage) return <><ExtendedStrip /><StaticDemo /></>;
+  // 정적 배포(VITE_DEMO_STATIC)에서는 세션 API가 없으므로 작업 공간 진입 링크를 숨긴다.
+  if (staticMode || publicPage) return <StaticDemo workspaceEntry={!staticMode} />;
 
   return <main style={{ fontFamily: "system-ui, 'Noto Sans KR', sans-serif", lineHeight: 1.5, maxWidth: 1200, margin: "32px auto", padding: "0 16px 48px" }}>
     {sessionStatus === "loading" ? <p role="status">세션을 확인하는 중입니다.</p> : null}
@@ -191,47 +177,6 @@ function SessionApp() {
       </Routes> : null}
     </> : null}
   </main>;
-}
-
-function ExtendedStrip() {
-  const { pathname } = useLocation();
-  return <div className="xd-strip"><div className="xd-strip-inner"><span>MORE</span>
-    <nav aria-label="추가 데모 화면">{extendedLinks.map(link => <Link key={link.to} to={link.to} aria-current={isUnder(pathname, link.prefix) ? "page" : undefined}>{link.label}</Link>)}</nav>
-  </div></div>;
-}
-
-function ExtendedDemo() {
-  const { pathname } = useLocation();
-  const kiaPage = pathname === "/validation/kia";
-  const [snapshot, setSnapshot] = useState<LoadedSnapshot | null>(null);
-  const [error, setError] = useState(false);
-  useEffect(() => {
-    if (kiaPage) return;
-    const controller = new AbortController();
-    loadSnapshot(controller.signal).then(setSnapshot).catch(() => { if (!controller.signal.aborted) setError(true); });
-    return () => controller.abort();
-  }, [kiaPage]);
-  useEffect(() => { window.scrollTo(0, 0); }, [pathname]);
-  return <div className="demo-site">
-    <ExtendedStrip />
-    <header className="site-header"><div className="site-header-inner">
-      <Link className="brand" to="/" aria-label="ProofOps 홈"><span className="brand-mark">P<span>◦</span></span> ProofOps</Link>
-      <nav aria-label="주요 메뉴"><Link to="/">소개</Link><Link to="/demo">실제 결과 보기</Link><Link to="/live">실시간 체험</Link></nav>
-      <Link className="header-cta" to="/demo">데모 열기 <span aria-hidden="true">↗</span></Link>
-    </div></header>
-    {kiaPage ? <KiaValidation /> : error ? <main className="static-main xd-page"><section className="xd-empty"><h1>저장된 스냅샷을 불러오지 못했습니다</h1><p>잠시 후 새로고침해 주세요.</p></section></main>
-      : !snapshot ? <main className="static-main xd-page"><p role="status">저장된 스냅샷을 불러오는 중입니다…</p></main>
-      : <Routes>
-        <Route path="/guide" element={<DecisionGuide data={snapshot.data} />} />
-        <Route path="/replay" element={<ReplayPage data={snapshot.data} />} />
-        <Route path="/review" element={<ReviewPage data={snapshot.data} />} />
-        <Route path="/review/:claimId" element={<ReviewPage data={snapshot.data} />} />
-        <Route path="/report" element={<Navigate to="/report/naver" replace />} />
-        <Route path="/report/:company" element={<AuditReportPage snapshot={snapshot} />} />
-        <Route path="*" element={<main className="static-main xd-page"><section className="xd-empty"><h1>화면을 찾을 수 없습니다</h1><Link to="/">소개로 돌아가기</Link></section></main>} />
-      </Routes>}
-    <footer className="site-footer"><div><strong>ProofOps</strong><span>공시 문장의 근거를 읽을 수 있는 검토 기록으로.</span></div><span>저장된 스냅샷 · 부분 실행 · AI 위임 검토 · 사용자 최종 검토 전</span></footer>
-  </div>;
 }
 
 type DocumentFlowProps = {

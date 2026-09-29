@@ -1,114 +1,139 @@
-import { useMemo, useState } from "react";
-import { Link } from "react-router";
+import { useEffect, useMemo, useState } from "react";
 import { getElementLabel } from "../labels";
-import { stateText, statusText, storedGradeText, trackText, type SnapshotClaim } from "../auditreport/snapshot";
-import { lookup, rowGradeText, SIM_STATES, TABLE_PATH, toSimState, type EngineTable, type SimState, type Track } from "./engineTable";
+import "./reviewsim.css";
 
-type Change = { seq: number; change: string; before: string; after: string };
+type Track = "goal" | "performance" | "management";
+type State = "present" | "unknown" | "absent" | "conflict";
+export type SimulatorClaim = {
+  id: string;
+  quote: string;
+  page: number | null;
+  track: string | null;
+  elements: { id: string; state: string; evidence?: { page: number | null; quote: string }[] }[];
+  decision: { grade: string | null; status: string };
+  review: { tag_revision: number; decision_revision: number };
+};
+type Result = [string, string | null, string | null, [string, string, string[]] | null, string[], string[], string[], string[]];
+type Table = {
+  rule_pack_sha256: string;
+  tracks: Record<Track, { ladder: string[]; other: string[]; rows: Record<string, Result> }>;
+};
+type Revision = { number: number; change: string; before: string; after: string; note: string };
 
-function initialStates(claim: SnapshotClaim, table: EngineTable, track: Track): Record<string, SimState> {
-  const group = table.tracks[track];
-  const stored = Object.fromEntries(claim.elements.map(element => [element.id, element.state]));
-  // 저장된 상태가 없거나 조회표가 다루지 않는 상태는 미확인으로 둔다. 부재로 바꾸지 않는다.
-  return Object.fromEntries([...group.ladder, ...group.other].map(id => [id, toSimState(stored[id] ?? "unknown") ?? "unknown"]));
+const elementIds: Record<Track, string[]> = {
+  management: ["M1", "M2", "M3", "M4", "M5", "M6"],
+  performance: ["P1", "P2", "P3", "P4", "P5", "P6"],
+  goal: ["G1", "G2", "G3", "G4", "G5", "G6", "G7", "G8"],
+};
+const code: Record<State, string> = { present: "p", unknown: "u", absent: "a", conflict: "n" };
+const stateText: Record<State, string> = { present: "확인", unknown: "미확인", absent: "부재", conflict: "상충" };
+const statusText: Record<string, string> = {
+  decided: "규칙 판정", blocked_evidence: "근거 확인 필요", blocked_rule_gap: "규칙 확인 필요",
+};
+let tablePromise: Promise<Table> | undefined;
+function loadTable(): Promise<Table> {
+  tablePromise ??= fetch(`${import.meta.env.BASE_URL}demo/engine-table.json`)
+    .then(response => { if (!response.ok) throw new Error("조회표를 불러오지 못했습니다."); return response.json() as Promise<Table>; })
+    .catch(error => { tablePromise = undefined; throw error; });
+  return tablePromise;
 }
 
-export default function ReviewSimulator({ claim, track, table, rulePackHash }: { claim: SnapshotClaim; track: Track; table: EngineTable; rulePackHash: string }) {
-  const group = table.tracks[track];
-  const hashMatches = table.rule_pack_sha256 === rulePackHash;
-  const stored = useMemo(() => initialStates(claim, table, track), [claim, table, track]);
-  const [states, setStates] = useState(stored);
+function initialStates(claim: SimulatorClaim): Record<string, State> {
+  return Object.fromEntries(claim.elements.map(element => [element.id,
+    element.state in code ? element.state as State : "unknown",
+  ]));
+}
+
+function display(result?: Result): string {
+  if (!result) return "–";
+  return result[1] ?? (result[3] ? `${result[3][0]}–${result[3][1]}` : "판정 보류");
+}
+
+export default function ReviewSimulator({ claim }: { claim: SimulatorClaim }) {
+  const track = claim.track && claim.track in elementIds ? claim.track as Track : null;
+  const [table, setTable] = useState<Table | null>(null);
+  const [error, setError] = useState("");
+  const [states, setStates] = useState<Record<string, State>>(() => initialStates(claim));
+  const [notes, setNotes] = useState<Record<string, string>>({});
+  const [savedNotes, setSavedNotes] = useState<Record<string, string>>({});
+  const [history, setHistory] = useState<Revision[]>([]);
   const [willingnessOnly, setWillingnessOnly] = useState(false);
-  const [history, setHistory] = useState<Change[]>([]);
-  const storedRow = lookup(table, track, stored, false);
-  const row = lookup(table, track, states, willingnessOnly);
-  const unsupported = claim.elements.filter(element => !toSimState(element.state));
-  const decision = claim.decision;
-  const storedRange = decision.grade_range ? [decision.grade_range.floor, decision.grade_range.ceiling, decision.grade_range.open_elements] : null;
-  const consistency = decision.status === "not_run" ? "not_run"
-    : storedRow && storedRow[0] === decision.status && storedRow[1] === decision.grade && storedRow[2] === decision.label && JSON.stringify(storedRow[3]) === JSON.stringify(storedRange) ? "match" : "mismatch";
 
-  function record(change: string, nextStates: Record<string, SimState>, nextWillingness: boolean) {
-    const after = lookup(table, track, nextStates, nextWillingness);
-    setHistory(current => [{ seq: current.length + 1, change, before: rowGradeText(row), after: rowGradeText(after) }, ...current]);
-  }
-  function changeState(id: string, next: SimState) {
-    if (states[id] === next) return;
+  useEffect(() => {
+    let active = true;
+    loadTable().then(value => { if (active) setTable(value); }).catch(reason => { if (active) setError(String(reason)); });
+    return () => { active = false; };
+  }, []);
+
+  const result = useMemo(() => {
+    if (!track || !table) return undefined;
+    const group = table.tracks[track];
+    const vector = group.ladder.map(id => code[states[id] ?? "unknown"]).join("");
+    const other = group.other.some(id => ["unknown", "conflict"].includes(states[id] ?? "unknown")) ? "1" : "0";
+    return group.rows[`${vector}${other}${track === "management" ? Number(willingnessOnly) : ""}`];
+  }, [table, track, states, willingnessOnly]);
+
+  function changeState(id: string, next: State) {
+    const previous = states[id] ?? "unknown";
+    if (next === previous) return;
     const nextStates = { ...states, [id]: next };
-    record(`${id} ${stateText[states[id]]} → ${stateText[next]}`, nextStates, willingnessOnly);
+    const group = track && table?.tracks[track];
+    const vector = group?.ladder.map(element => code[nextStates[element] ?? "unknown"]).join("") ?? "";
+    const other = group?.other.some(element => ["unknown", "conflict"].includes(nextStates[element] ?? "unknown")) ? "1" : "0";
+    const nextResult = group?.rows[`${vector}${other}${track === "management" ? Number(willingnessOnly) : ""}`];
     setStates(nextStates);
+    setSavedNotes(current => ({ ...current, [id]: notes[id]?.trim() ?? "" }));
+    setHistory(current => [{
+      number: claim.review.decision_revision + current.length + 1,
+      change: `${id} ${stateText[previous]}→${stateText[next]}`,
+      before: display(result), after: display(nextResult), note: notes[id]?.trim() ?? "",
+    }, ...current]);
   }
-  function changeWillingness(next: boolean) {
-    record(`의지 표현만: ${next ? "예" : "아니오"}`, states, next);
-    setWillingnessOnly(next);
+
+  function saveNote(id: string) {
+    const note = notes[id]?.trim() ?? "";
+    if (note === (savedNotes[id] ?? "")) return;
+    setSavedNotes(current => ({ ...current, [id]: note }));
+    setHistory(current => [{
+      number: claim.review.decision_revision + current.length + 1,
+      change: `${id} 메모 ${note ? "기록" : "삭제"}`,
+      before: display(result), after: display(result), note,
+    }, ...current]);
   }
 
-  const ladderOnly = (ids: string[]) => ids.filter(id => group.ladder.includes(id));
-  const additionalOpen = group.other.filter(id => states[id] === "unknown" || states[id] === "conflict");
-  const additionalMissing = group.other.filter(id => states[id] === "absent");
-  const changed = history.length > 0;
-
-  return <section className="review-sim" aria-labelledby="review-sim-title">
-    <div className="review-sim-head">
-      <div><p className="eyebrow">DECISION REVIEW · LOCAL SIMULATION</p><h1 id="review-sim-title">판정 검토 시뮬레이터</h1><p>{trackText[track]} 주장 · 원문 p.{claim.page ?? "?"} · <Link to={`/demo/${claim.id}`}>저장된 주장 상세 ↗</Link></p></div>
-    </div>
-    <blockquote className="review-sim-quote">“{claim.quote}”</blockquote>
-    {!hashMatches ? <p role="alert" className="xd-note">조회표 규칙집 해시({table.rule_pack_sha256.slice(0, 12)}…)가 스냅샷 규칙집({rulePackHash.slice(0, 12)}…)과 다릅니다. 시뮬레이션 결과를 표시하지 않습니다.</p> : null}
-
-    <div className="review-sim-compare">
-      <article className="review-sim-panel stored" aria-labelledby="stored-title" data-testid="stored-decision">
-        <h2 id="stored-title">저장된 판정 <span className="xd-pill muted">불변 기록</span></h2>
-        <strong className="review-sim-grade">{storedGradeText(claim)}</strong>
-        <dl>
-          <div><dt>상태</dt><dd><code>{decision.status}</code> · {statusText[decision.status] ?? decision.status}</dd></div>
-          <div><dt>evidence_grade</dt><dd><code>{decision.grade ?? "null"}</code></dd></div>
-          <div><dt>label</dt><dd><code>{decision.label ?? "null"}</code></dd></div>
-          <div><dt>revision</dt><dd>태깅 {claim.review.tag_revision} · 판정 {claim.review.decision_revision}</dd></div>
-          <div><dt>검토 상태</dt><dd><code>{claim.review.status}</code>{claim.review.audit ? ` · 독립 읽기 ${claim.review.audit}` : ""}</dd></div>
-        </dl>
-      </article>
-      <article className="review-sim-panel sim" aria-labelledby="sim-title" aria-live="polite" data-testid="simulated-decision">
-        <h2 id="sim-title">시뮬레이션 결과 <span className="xd-pill info">저장되지 않음</span></h2>
-        <strong className="review-sim-grade">{hashMatches ? rowGradeText(row) : "—"}</strong>
-        {hashMatches && row ? <dl>
-          <div><dt>상태</dt><dd><code>{row[0]}</code> · {statusText[row[0]] ?? row[0]}</dd></div>
-          <div><dt>evidence_grade</dt><dd><code>{row[1] ?? "null"}</code></dd></div>
-          <div><dt>label</dt><dd><code>{row[2] ?? "null"}</code></dd></div>
-          {row[3] ? <div><dt>가능 범위</dt><dd>{row[3][0]}–{row[3][1]} (확정 등급 아님) · 좁힐 요소 {row[3][2].join(", ")}</dd></div> : null}
-          {ladderOnly(row[6]).length ? <div><dt>사다리 결손</dt><dd>{ladderOnly(row[6]).map(getElementLabel).join(", ")}</dd></div> : null}
-          {ladderOnly(row[7]).length ? <div><dt>사다리 미확정</dt><dd>{ladderOnly(row[7]).map(getElementLabel).join(", ")}</dd></div> : null}
-          {row[4].length ? <div><dt>적용 분기</dt><dd><code>{row[4].join(", ")}</code></dd></div> : null}
-          {row[5].length ? <div><dt>미정 계약</dt><dd>{row[5].join(", ")}</dd></div> : null}
-        </dl> : null}
-      </article>
-    </div>
-    <p className="review-sim-consistency" data-consistency={consistency}>
-      {consistency === "match" ? "저장된 요소 상태를 그대로 조회하면 저장된 판정과 같은 결과가 나옵니다." :
-        consistency === "not_run" ? "이 주장은 스냅샷에서 규칙엔진이 실행되지 않았습니다(not_run). 시뮬레이션 결과는 저장된 판정이 아닙니다." :
-        "저장된 요소 상태로 조회한 결과가 저장된 판정과 다릅니다. 조회표에 없는 원문 예외 경로가 적용됐을 수 있으므로 저장된 판정을 기준으로 보세요."}
-      {changed ? " 현재 화면은 요소 상태를 바꾼 가정 결과입니다." : ""}
-    </p>
-
+  if (!track) return <section className="review-sim"><h2>판정 검토</h2><p>주장 유형을 확인하면 요소별 판정을 검토할 수 있습니다.</p></section>;
+  const group = table?.tracks[track];
+  const title = { management: "관리체계", performance: "성과", goal: "목표" }[track];
+  const grade = display(result);
+  return <section className="review-sim" aria-label="판정 검토">
+    <div className="review-sim-head"><div><span className="review-sim-kicker">DECISION REVIEW</span><h2>판정 검토</h2><p>{title} 주장 · 원문 {claim.page ?? "?"}쪽</p></div><span className="review-sim-mode">현재 화면에서 조정</span></div>
+    <blockquote>{claim.quote}</blockquote>
     <div className="review-sim-grid">
-      <div className="xd-card">
-        <h2>요소 상태 가정</h2>
-        <p className="xd-muted">사다리 요소만 등급을 바꿉니다. 추가 요소는 등급에 영향이 없습니다(R00 §7 A-2). ‘근거 부재’를 고르면 검색 범위 검증이 끝났다고 가정한 것입니다.</p>
-        {[...group.ladder, ...group.other].map(id => <div className={`review-sim-row ${group.ladder.includes(id) ? "ladder" : "additional"}`} key={id}>
-          <label htmlFor={`sim-${id}`}>{getElementLabel(id)}<small>{group.ladder.includes(id) ? "사다리 요소" : "추가 요소 · 등급 영향 없음"}{stored[id] !== states[id] ? ` · 저장값 ${stateText[stored[id]]}` : ""}</small></label>
-          <select id={`sim-${id}`} value={states[id]} disabled={!hashMatches} onChange={event => changeState(id, event.target.value as SimState)}>
-            {SIM_STATES.map(state => <option key={state} value={state}>{stateText[state]}</option>)}
+      <div className="review-sim-elements"><h3>입증 요소</h3><p className="review-sim-sub">요소 상태를 변경하면 판정 결과를 바로 확인할 수 있습니다.</p>
+        {elementIds[track].map(id => <div className="review-sim-row" key={id}>
+          <label htmlFor={`review-${claim.id}-${id}`}>{getElementLabel(id)}</label>
+          <select id={`review-${claim.id}-${id}`} value={states[id] ?? "unknown"} disabled={!table} onChange={event => changeState(id, event.target.value as State)}>
+            {(Object.keys(code) as State[]).map(state => <option key={state} value={state}>{stateText[state]}</option>)}
           </select>
+          <input aria-label={`${id} 검토자 메모`} placeholder="검토자 메모" maxLength={200} value={notes[id] ?? ""} onChange={event => setNotes(current => ({ ...current, [id]: event.target.value }))} onBlur={() => saveNote(id)} />
         </div>)}
-        {track === "management" ? <label className="review-sim-check"><input type="checkbox" checked={willingnessOnly} disabled={!hashMatches} onChange={event => changeWillingness(event.target.checked)} /> 의지 표현만 서술한 주장으로 가정 (원문 §4.4 관리체계 E0)</label> : null}
-        {unsupported.length ? <p className="xd-muted">조회표 밖 저장 상태({unsupported.map(element => `${element.id}:${element.state}`).join(", ")})는 미확인으로 시작합니다.</p> : null}
-        {(additionalOpen.length || additionalMissing.length) ? <p className="xd-muted">추가 요소 현황: {additionalOpen.length ? `미확정 ${additionalOpen.join(", ")}` : ""}{additionalOpen.length && additionalMissing.length ? " · " : ""}{additionalMissing.length ? `결손 ${additionalMissing.join(", ")}` : ""} → 검토 필요로 남습니다.</p> : null}
-        <button type="button" className="review-sim-reset" disabled={!changed} onClick={() => { setStates(stored); setWillingnessOnly(false); setHistory([]); }}>저장된 상태로 되돌리기</button>
+        {track === "management" && <label className="review-sim-check"><input type="checkbox" checked={willingnessOnly} onChange={event => setWillingnessOnly(event.target.checked)} /> 의향만 서술한 주장</label>}
       </div>
-      <aside className="xd-card review-sim-history">
-        <h2>시뮬레이션 변경 기록</h2>
-        <p className="xd-muted">이 브라우저 화면에만 남습니다. 태깅·판정 revision을 만들지 않고 서버로 보내지 않습니다.</p>
-        {history.length ? <ol>{history.map(item => <li key={item.seq}><b>#{item.seq}</b> {item.change}<span>{item.before} → {item.after}</span></li>)}</ol> : <p>요소 상태를 바꾸면 여기에 기록됩니다.</p>}
-        <p className="xd-muted">조회표: <code>{TABLE_PATH}</code> · 규칙집 SHA-256 <code>{table.rule_pack_sha256.slice(0, 16)}…</code>{hashMatches ? " (스냅샷과 일치)" : ""}</p>
+      <aside className="review-sim-side"><div className="review-sim-grade" key={grade + result?.[0]}>
+        <span>판정 결과</span><strong>{error ? "조회 오류" : !table ? "불러오는 중" : grade}</strong>
+        <p>{result?.[2] ?? statusText[result?.[0] ?? ""] ?? ""}</p>
+        {result?.[3] && <small>가능 범위 {result[3][0]}–{result[3][1]} · 확인할 요소 {result[3][2].map(getElementLabel).join(", ")}</small>}
+      </div>
+        {result && <div className="review-sim-reason"><h3>판정 근거</h3>
+          <p>{result[0] === "decided" ? "현재 입력으로 판정 가능" : statusText[result[0]]}</p>
+          {result[6].filter(id => group?.ladder.includes(id)).length > 0 && <p>부족: {result[6].filter(id => group?.ladder.includes(id)).map(getElementLabel).join(", ")}</p>}
+          {result[7].filter(id => group?.ladder.includes(id)).length > 0 && <p>확인 중: {result[7].filter(id => group?.ladder.includes(id)).map(getElementLabel).join(", ")}</p>}
+          {result[5].length > 0 && <p>규칙 검토: {result[5].join(", ")}</p>}
+          <small>변경 사항은 현재 화면에만 적용됩니다.</small>
+        </div>}
+        <div className="review-sim-history"><h3>변경 기록</h3><p className="review-sim-match">현재 화면에서 변경한 요소와 판정</p>
+          {history.length ? <ol>{history.map(item => <li key={item.number}><b>{item.number}.</b> {item.change} · {item.before}→{item.after}{item.note && <small>“{item.note}”</small>}</li>)}</ol> : <p>요소 상태를 변경하면 기록이 여기에 표시됩니다.</p>}
+        </div>
       </aside>
     </div>
   </section>;

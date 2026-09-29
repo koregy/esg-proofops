@@ -1,5 +1,7 @@
 # 개발자 A 제출용 로컬 실행
 
+> 2026-09-29 23:05 KST: 개발자 A 공개 화면을 통합해 https://esg-proofops-koregy.vercel.app 에 배포했습니다. 실제 POSCO PDF 업로드와 후보 5건 표시를 확인했습니다. 최신 공개 배포 범위와 제한은 [VERCEL_SUBMISSION.md](VERCEL_SUBMISSION.md)를 참고하세요. 이전의 배포 미정 기록은 과거 작업 기록입니다.
+
 개발자 B의 DART·C1~C4 연계 판정은 포함하지 않습니다. 실제 PDF를 입력받아 파싱·주장 추출·근거 검증·모델 태깅을 수행하고, Python 규칙엔진의 판정 또는 보류를 검토·내보내는 로컬 흐름입니다. 승인되지 않은 규칙집으로 최종 등급을 만들지 않습니다.
 
 ## 저장된 실제 결과 열기 — API 비용 없음
@@ -140,6 +142,13 @@ uv run python -m evaluation.local_upstage_pilot \
 - `--serve-worker` 없이 `--serve`(또는 `--resume --serve`)만 실행하면 워커는 시작되지 않고 저장된 결과만 재열람합니다. 이때 `/local/submission`의 `worker_enabled`는 `false`이며 웹에서 유료 분석 시작이 비활성화됩니다.
 
 정확한 실행 명령: `uv run python -m evaluation.local_upstage_pilot --resume --state <상태디렉터리> --key-file <키파일> --serve --serve-worker --port <포트>`
+
+로컬 Upstage 실행의 분석 범위는 **선택 페이지**이다. PDF 물리 페이지를 명시하며,
+전체 범위 옵션은 이 실행 환경에서 비활성화된다. `--serve-bootstrap`으로 최초 업로드
+화면만 준비할 수 있지만 seed 실행과 웹에서 시작한 실행은 별도다. 준비 과정에서 생성한
+seed를 실행하지 않을 때는 워커를 켜기 전에 취소한다. 새 문서 화면의 **최근 분석**에는
+이 작업 공간의 실행이 표시되며, 결과가 생기면 주장·진행·검토 큐·보고서로 이동할 수 있다.
+`부분 완료`와 검토 보류 건수는 문서 전체 평가나 0점으로 해석하지 않는다.
 
 ## 실행 환경과 보류
 

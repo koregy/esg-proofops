@@ -1,4 +1,37 @@
-## 2026-09-29 19:18 KST · Source review paths and actual API trials
+## 2026-09-29 22:20 KST · Actual POSCO browser analysis
+
+> 2026-09-29 23:05 KST: 개발자 A 공개 화면을 통합해 https://esg-proofops-koregy.vercel.app 에 배포했습니다. 실제 POSCO PDF 업로드와 후보 5건 표시를 확인했습니다. 최신 공개 배포 범위와 제한은 [VERCEL_SUBMISSION.md](VERCEL_SUBMISSION.md)를 참고하세요. 이전의 배포 미정 기록은 과거 작업 기록입니다.
+
+The local browser now starts declared-subset analyses explicitly, shows preflight
+failures, and retains recent runs with links to their claims. The bootstrap seed
+is cancelled before any model calls. Whole-document processing is not offered by
+this local launcher. The full web build and 13 focused navigation/scope tests pass.
+
+An opt-in policy for new runs permits non-overlapping static PDF navigation
+buttons only after the existing glyph/geometry checks and image-only Upstage
+corroboration. Dynamic controls, overlapping appearances and mismatched text
+remain unresolved. The original pinned verifiers are unchanged. The new gate
+and launcher passed 28 focused checks.
+
+Actual POSCO International report page 35 (1 of 133 pages) completed as a partial
+run: 28 eligible paragraphs were compared, 10 corroborated and 18 unresolved.
+Extraction produced 34 claims; 25 require source validation and 9 require
+preliminary-tag resolution. No final E grade was assigned. This is a working
+partial analysis and review flow, not a complete report or an accuracy result.
+The original browser test also rendered the original PDF page in a claim detail.
+
+REC-006 v2 now represents proven no-timely-filing as an explicit not-applicable
+outcome with immutable collector provenance. Its HTTP collection wiring and
+real source-bound examples remain separate work. Numeric P6 implementation and
+independent review are complete; verified real table-cell application remains.
+The combined Kia trial ended with 56 blocked claims (37 source, 19 preliminary),
+not completed assurance linkage.
+
+Push and PR CI passed at `fa65336`. The subsequent `d490eb8` CI found one missing
+set type annotation; its correction and another real run are being verified.
+No AWS deployment has been made. PPT is outside the current development task.
+
+## Earlier 2026-09-29 19:18 KST · Source review paths and actual API trials
 
 Whole-document search coverage now checks every original word and requires an
 explicit review before an absence fact can enter an immutable review revision.

@@ -48,6 +48,18 @@ Solar Pro 3를 사용한다. `--tagging-model solar-pro3`는 사전 분류·요�
 
 ## 결과 및 이식성
 
+PDF에 정적인 페이지 이동 버튼이 있는 경우, **새로운**
+`evaluation.local_upstage_pilot` 실행에서 `--native-upstage-ocr`와
+`--native-widget-visibility`를 함께 지정할 수 있다. 기존 실행에 옵션을 추가하는
+재개는 거절한다. 문단과 겹치지 않는 정적 pushbutton만 대상이 되며 JavaScript,
+동적 가시성, 알 수 없는 주석과 문단을 가리는 버튼은 계속 보류한다. 이 옵션도 원문
+문자·위치 검사와 Upstage 이미지 일치 검사를 모두 요구한다. 정책은 검증기와 결합 코드의
+바이트 해시를 포함하므로 코드가 바뀌면 과거 실행을 덮어쓰지 말고 새 실행을 만든다.
+
+Windows에서는 저장소와 `--state` 경로를 짧게 유지한다(예: `C:/work/proofops`,
+`.local/p1`). UUID가 포함된 파서 하위 경로가 시스템 경로 길이 제한을 넘으면
+`PARSER_ARTIFACT_PATH_TOO_LONG`으로 호출 전에 중단될 수 있다.
+
 파싱 체크포인트의 `native_paragraph_upstage_ocr_coverage`는 대상, 요청, 건너뜀,
 일치·불일치 원천 ID와 `complete`를 제공한다. 이 값은 선택된 대상 문단의 처리 범위다.
 주장의 인용 범위 검증은 별도로 수행하며, 원천 문단 검증만으로 주장을 확정하지 않는다.

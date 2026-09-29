@@ -1,6 +1,7 @@
 // 정적 제출 데모(VITE_DEMO_STATIC=true 빌드)의 심사 경로를 실제 Chrome으로 확인한다.
 // 사용법: VITE_DEMO_STATIC=true pnpm build 후 `node test/submission-static-demo.mjs [--out 스크린샷_폴더]`
-// 추가 의존성 없이 Chrome headless + DevTools Protocol(WebSocket)만 사용하며 /api/ 요청이 없어야 통과한다.
+// 추가 의존성 없이 Chrome headless + DevTools Protocol(WebSocket)만 사용하며 /api/ 요청과 외부 출처 요청이 없어야 통과한다.
+// 통합 공개 UI(제출 A 화면 + 저장된 NAVER 스냅샷) 기준 선택자다. 저장 등급·원문 대조·부분 범위 안전장치 의미는 유지한다.
 import { spawn } from "node:child_process";
 import { createReadStream, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
@@ -105,67 +106,96 @@ async function check(name, run) {
 function assert(condition, message) { if (!condition) throw new Error(message); }
 
 try {
+  const featured = snapshot.claims.find(claim => claim.id === featuredId);
+  const c = snapshot.coverage;
   await viewport(1440, 900, false);
-  await check("landing links to the stored NAVER E3 claim and shows scope/cost/audit limits", async () => {
+  await check("landing shows the stored NAVER partial scope and a trace that matches the stored E3 claim", async () => {
     await open("/");
-    const href = await evaluate("document.querySelector('.hero-actions .primary-link')?.getAttribute('href')");
-    assert(href === `/demo/${featuredId}`, `primary CTA ${href}`);
+    await sleep(1200); // CountUp 애니메이션이 끝난 뒤의 값을 읽는다.
     const body = await text();
-    const c = snapshot.coverage;
-    for (const needle of [`${c.pages_processed} / ${c.pages_total}쪽`, `${c.claims_decided} / ${c.claims_discovered}건`, "사람 정답셋 아님", `$${snapshot.run.r72_cost_usd.toFixed(2)}`, "Operation(환경운영부서)", "SUBSTANTIATED", "사용자 최종 검토 전"]) assert(body.includes(needle), `missing ${needle}`);
-    assert(!body.includes("LIVE CASE"), "stored snapshot must not be labelled live");
-    const ladder = await evaluate("[...document.querySelectorAll('.mock-ladder li')].map(li => li.innerText.replace(/\\s+/g, ' '))");
-    assert(ladder.length === 3 && ladder[2].includes("M3") && ladder[2].includes("p.230, 242"), `ladder ${JSON.stringify(ladder)}`);
+    for (const needle of [`분석 쪽수 (전체 ${c.pages_total}쪽 중)`, "Operation(환경운영부서)", "SUBSTANTIATED", "제3자 보증"]) assert(body.includes(needle), `missing ${needle}`);
+    const proof = await evaluate("[...document.querySelectorAll('.proof dd')].map(dd => Number(dd.innerText.replace(/[^0-9]/g, '')))");
+    assert(JSON.stringify(proof) === JSON.stringify([c.pages_processed, c.claims_discovered, snapshot.funnel[1].count, c.claims_decided]), `proof counts ${JSON.stringify(proof)}`);
+    assert(!body.includes("LIVE CASE") && !body.includes("등급 표시"), "stored snapshot must not be labelled live or as fully graded");
+    // 첫 화면의 판정 경로 예시는 저장된 실제 주장의 요소 근거 쪽수와 일치해야 한다.
+    const trace = await evaluate("[...document.querySelectorAll('.trace-rows li')].map(li => li.innerText.replace(/\\s+/g, ' '))");
+    assert(featured.decision.grade === "E3" && trace.length === 3, `trace ${JSON.stringify(trace)}`);
+    for (const [index, id] of ["M1", "M2", "M3"].entries()) {
+      const pages = [...new Set(featured.elements.find(element => element.id === id).evidence.map(ref => String(ref.page)))];
+      assert(trace[index].includes(id) && pages.every(page => trace[index].includes(page)), `trace ${id} pages ${pages} vs ${trace[index]}`);
+    }
     await screenshot("desktop-landing");
   });
 
-  await check("CTA opens claim detail with focus, evidence pages and full provenance", async () => {
-    await evaluate("document.querySelector('.hero-actions .primary-link').click()");
-    await waitFor("location.pathname.includes('eb706579') && !!document.querySelector('[data-detail-heading]')", "detail");
-    await sleep(200);
-    assert(await evaluate("document.activeElement?.hasAttribute('data-detail-heading')"), "detail heading not focused");
+  await check("header and landing navigation reach analyze, cases, report, live and guide", async () => {
+    const nav = await evaluate("[...document.querySelectorAll('#site-menu a')].map(a => a.getAttribute('href'))");
+    for (const href of ["/", "/analyze", "/demo", "/report/naver", "/live", "/guide"]) assert(nav.includes(href), `header nav missing ${href}: ${JSON.stringify(nav)}`);
+    const links = await evaluate("[...document.querySelectorAll('main a')].map(a => a.getAttribute('href'))");
+    for (const href of ["/analyze", "/demo", "/demo/kia", "/report/naver", "/analyze/replay"]) assert(links.includes(href), `landing link missing ${href}`);
+    assert(!(await evaluate("!!document.querySelector('a[href=\"/documents/new\"]')")), "static build must not offer the session workspace");
+    await evaluate("document.querySelector('.header-actions a[href=\"/demo\"]').click()");
+    await waitFor("location.pathname === '/demo' && !!document.querySelector('.claims-layout')", "demo via header");
+  });
+
+  await check("claim detail shows the stored E3 with evidence pages and review status before user final review", async () => {
+    await open(`/demo/${featuredId}`);
+    await waitFor("!!document.querySelector('.claim-detail .decision-panel')", "detail");
     const detail = await evaluate("document.querySelector('.claim-detail').innerText");
-    for (const needle of ["E3", "SUBSTANTIATED", featuredId, "AA1000AS v3", "다른 페이지", snapshot.run.rule_pack_hash.slice(0, 16), "선택 주장 JSON 내보내기"]) assert(detail.includes(needle), `detail missing ${needle}`);
-    const current = await evaluate(`[...document.querySelectorAll('.claim-item')].filter(a => a.getAttribute('href') === '/demo/${featuredId}').map(a => a.getAttribute('aria-current'))`);
-    assert(current.every(value => value === "true"), `aria-current ${JSON.stringify(current)}`);
+    for (const needle of ["E3", "SUBSTANTIATED", "AA1000AS v3", "p.230", "p.2 ", "원문 인용 검증 기록 있음", "사용자 최종 검토 전"]) assert(detail.includes(needle), `detail missing ${needle}`);
+    assert(await evaluate(`[...document.querySelectorAll('.claim-item.selected')].length === 1 && document.querySelector('.claim-item.selected').getAttribute('href').startsWith('/demo/${featuredId}')`), "selected claim item");
     const lefts = await evaluate("[...new Set([...document.querySelectorAll('.claim-item')].map(a => Math.round(a.getBoundingClientRect().left)))]");
     assert(lefts.length === 1, `claim list items are not stacked: ${JSON.stringify(lefts)}`);
-    const notice = await evaluate("document.querySelector('.notice').innerText");
-    assert(notice.includes(`${snapshot.audit.agreed}건 동의`) && notice.includes("gold"), `notice ${notice}`);
+    const heading = await evaluate("document.querySelector('.demo-heading').innerText");
+    assert(heading.includes(`${c.pages_processed}/${c.pages_total}쪽`) && heading.includes("사용자 최종 검토 전") && !heading.includes("검토 완료"), `heading ${heading}`);
+    assert(await evaluate(`!!document.querySelector('a[href="https://www.navercorp.com/esg/esgReports"]')`), "official source link");
     await screenshot("desktop-demo-featured-claim");
   });
 
-  await check("export downloads the stored claim unchanged with run provenance", async () => {
-    await evaluate("document.querySelector('.export-button').click()");
-    const expected = `proofops-naver-2025-claim-${featuredId}.json`;
+  await check("audit report export copies stored grades unchanged with run provenance", async () => {
+    await page("Page.navigate", { url: base + "/report/naver" });
+    await waitFor("!!document.querySelector('.audit-toolbar')", "report");
+    await evaluate("[...document.querySelectorAll('.audit-toolbar button')].find(b => b.innerText.startsWith('JSON')).click()");
+    const expected = "naver-proofops-audit.json";
     const until = Date.now() + 10000;
     while (!readdirSync(downloads).includes(expected) && Date.now() < until) await sleep(100);
+    await sleep(200);
     const exported = JSON.parse(readFileSync(join(downloads, expected), "utf8"));
-    const stored = snapshot.claims.find(claim => claim.id === featuredId);
-    assert(JSON.stringify(exported.claim) === JSON.stringify(stored), "claim differs from snapshot");
-    assert(exported.run.rule_pack_hash === snapshot.run.rule_pack_hash && exported.snapshot.partial === true, "provenance");
-    assert(exported.export_notice.includes("다시 계산하지 않았습니다"), "notice");
+    assert(exported.rule_pack_hash === snapshot.run.rule_pack_hash && JSON.stringify(exported.coverage) === JSON.stringify(snapshot.coverage), "provenance");
+    assert(exported.claims.length === snapshot.claims.length, "claim count");
+    for (const row of exported.claims) {
+      const stored = snapshot.claims.find(claim => claim.id === row.id);
+      const want = stored.decision.grade || (stored.decision.grade_range ? `${stored.decision.grade_range.floor}–${stored.decision.grade_range.ceiling} 범위` : "미판정");
+      assert(row.grade === want && row.estimated === false, `export grade differs ${row.id}: ${row.grade} vs ${want}`);
+    }
   });
 
-  await check("unknown claim id shows a not-found state instead of a blank panel", async () => {
+  await check("unknown claim id shows a not-found state instead of another claim", async () => {
     await open("/demo/00000000-0000-0000-0000-000000000000");
-    assert((await text()).includes("이 스냅샷에 없는 주장입니다"), "no not-found message");
+    const body = await text();
+    assert(body.includes("없는 주장") || body.includes("찾을 수 없"), "no not-found message");
+    assert(!(await evaluate("!!document.querySelector('.claim-detail .decision-panel')")), "another claim is shown as if it were the requested one");
   });
 
-  await check("uncertain audit and range claims keep their caveats", async () => {
+  await check("uncertain audit, range and source-unverified claims keep their caveats", async () => {
     const uncertain = snapshot.claims.find(claim => claim.review.audit === "uncertain");
     await open(`/demo/${uncertain.id}`);
     assert((await evaluate("document.querySelector('.claim-detail').innerText")).includes("확인 필요"), "uncertain caveat");
     const range = snapshot.claims.find(claim => claim.decision.grade_range);
     await open(`/demo/${range.id}`);
     const detail = await evaluate("document.querySelector('.claim-detail').innerText");
-    assert(detail.includes("가능") && detail.includes("확정 등급이 아닙니다"), "range caveat");
+    assert(detail.includes("가능") && detail.includes("확정 등급은 아닙니다"), "range caveat");
+    const unverified = snapshot.claims.find(claim => !claim.source_verified);
+    await open(`/demo/${unverified.id}`);
+    const shown = await evaluate("document.querySelector('.claim-detail .decision-panel strong').innerText.trim()");
+    assert(shown.startsWith("원문 대조 필요") && !/E[0-3]/.test(shown), `source-unverified claim shown as ${shown}`);
   });
 
   await viewport(390, 844, true);
-  await check("mobile landing has no horizontal overflow", async () => {
+  await check("mobile landing has no horizontal overflow and the menu opens", async () => {
     await open("/");
     assert(await noHorizontalOverflow(), "landing overflows horizontally");
+    await evaluate("document.querySelector('.menu-toggle').click()");
+    await waitFor("document.querySelector('.menu-toggle').getAttribute('aria-expanded') === 'true'", "menu open");
     await screenshot("mobile-landing");
   });
 
@@ -189,6 +219,8 @@ try {
   await check("static demo made no /api/ or model requests", async () => {
     const api = requests.filter(url => url.startsWith(base + "/api/"));
     assert(api.length === 0, `api requests ${api.join(", ")}`);
+    const outside = requests.filter(url => /^https?:/.test(url) && !url.startsWith(base));
+    assert(outside.length === 0, `outside requests ${outside.join(", ")}`);
   });
 } finally {
   socket.close();

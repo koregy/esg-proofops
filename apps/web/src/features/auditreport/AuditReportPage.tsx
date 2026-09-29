@@ -1,15 +1,107 @@
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router";
-import { csvCell, reportRow, statusLabel } from "./auditRows";
-import { OFFICIAL_REPORT_URL, SNAPSHOT_PATH, stateText, type LoadedSnapshot } from "./snapshot";
 import "./audit-report.css";
 
-// 이 제출본은 NAVER 스냅샷 하나만 싣는다. 다른 기업 데이터는 검증된 데이터셋이 준비될 때 추가한다.
-const companies: Record<string, string> = { naver: "NAVER" };
+type Evidence = { page: number | null; quote: string };
+type Claim = {
+  id: string;
+  page: number | null;
+  track: string | null;
+  quote: string;
+  statement?: string;
+  source_verified: boolean;
+  elements: { id: string; state: string; evidence: Evidence[] }[];
+  decision: {
+    grade: string | null;
+    display_grade?: string;
+    estimated?: boolean;
+    label: string | null;
+    grade_range: { floor: string; ceiling: string } | null;
+    status: string;
+  };
+};
+type Snapshot = {
+  title: string;
+  generated_at: string;
+  partial?: boolean;
+  demo_mode?: boolean;
+  relaxed_rules?: boolean;
+  processed_reports?: { title: string; scope?: string }[];
+  coverage: {
+    pages_processed: number;
+    pages_total: number;
+    pages_unprocessed?: number;
+    pages_unreadable?: number;
+    claims_discovered: number;
+    claims_decided: number;
+    claims_needs_review: number;
+  };
+  funnel?: { label: string; count: number }[];
+  run: {
+    executed_at?: string;
+    completed_at?: string;
+    model_ids?: string[];
+    model_note?: string;
+    rule_pack_name?: string;
+    rule_pack_id?: string;
+    rule_pack_hash?: string;
+    demo_mode?: boolean;
+    relaxed_rules?: boolean;
+  };
+  claims: Claim[];
+};
+type ReportRow = {
+  id: string;
+  page: number | null;
+  quote: string;
+  track: string;
+  grade: string;
+  label: string;
+  evidencePages: number[];
+  estimated: boolean;
+};
 
-function formatDate(value: string) {
+const companies = { naver: "NAVER", kia: "KIA" } as const;
+const tracks: Record<string, string> = { management: "관리체계", performance: "성과", goal: "목표" };
+const grades = ["E3", "E2", "E1", "E0"] as const;
+const gradeMeaning: Record<string, string> = {
+  E3: "핵심 요소와 추가 입증 요소가 연결된 단계",
+  E2: "주장 유형별 핵심 근거가 연결된 단계",
+  E1: "기본적인 주장 요소가 확인된 단계",
+  E0: "입증의 출발 요소가 확인되지 않은 단계",
+};
+
+function shortQuote(value: string) {
+  const chars = Array.from(value.replace(/\s+/g, " ").trim());
+  return chars.length > 200 ? `${chars.slice(0, 199).join("")}…` : chars.join("");
+}
+
+export function reportRow(claim: Claim, demo: boolean): ReportRow {
+  const pages = claim.source_verified
+    ? [...new Set((claim.elements || []).filter(item => item.state === "present")
+      .flatMap(item => item.evidence || []).map(item => item.page)
+      .filter((page): page is number => typeof page === "number" && Number.isInteger(page) && page > 0))].sort((a, b) => a - b)
+    : [];
+  const range = claim.decision.grade_range;
+  const estimated = demo && !claim.decision.grade && !!claim.decision.display_grade;
+  return {
+    id: claim.id,
+    page: claim.page,
+    quote: shortQuote(claim.statement || claim.quote || ""),
+    track: tracks[claim.track || ""] || "미분류",
+    grade: claim.decision.grade || (estimated ? claim.decision.display_grade! : range ? `${range.floor}–${range.ceiling} 범위` : "미판정"),
+    label: !claim.source_verified ? "원문 대조 필요" : ({ INCOMPLETE: "추가 근거 필요", SUBSTANTIATED: "근거 확인", UNSUBSTANTIATED: "근거 부족" } as Record<string, string>)[claim.decision.label || ""] || claim.decision.label || (estimated ? "예비 등급" : range ? "근거 보류" : "—"),
+    evidencePages: pages,
+    estimated,
+  };
+}
+
+function formatDate(value?: string) {
+  if (!value) return "기록 없음";
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : `${new Intl.DateTimeFormat("ko-KR", { year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Seoul" }).format(date)} KST`;
+  return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat("ko-KR", {
+    year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Seoul",
+  }).format(date) + " KST";
 }
 
 function download(filename: string, content: string, type: string) {
@@ -21,114 +113,107 @@ function download(filename: string, content: string, type: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-export default function AuditReportPage({ snapshot }: { snapshot: LoadedSnapshot }) {
-  const { company = "" } = useParams();
-  const [showAll, setShowAll] = useState(false);
-  const { data, sha256 } = snapshot;
-  const rows = useMemo(() => data.claims.map(reportRow), [data]);
-  const companyName = companies[company];
-  if (!companyName) return <main className="static-main xd-page"><section className="xd-empty"><h1>보고서를 찾을 수 없습니다</h1><p>이 제출본에는 NAVER 저장 스냅샷의 보고서만 있습니다.</p><Link to="/report/naver">NAVER 감사 보고서 보기</Link></section></main>;
+export function csvCell(value: string | number | null) {
+  const raw = value === null ? "" : String(value);
+  const safe = /^[\s]*[=+\-@]/.test(raw) ? `'${raw}` : raw;
+  return `"${safe.replace(/"/g, '""')}"`;
+}
 
-  const graded = rows.filter(row => row.evidenceGrade);
-  const gradeCounts = ["E3", "E2", "E1", "E0"].map(grade => [grade, graded.filter(row => row.evidenceGrade === grade).length] as const);
-  const ranged = rows.filter(row => !row.evidenceGrade && row.range);
-  const statusCounts = Object.entries(rows.reduce<Record<string, number>>((acc, row) => { acc[row.status] = (acc[row.status] ?? 0) + 1; return acc; }, {}));
-  const stateTotals = Object.entries(rows.reduce<Record<string, number>>((acc, row) => { for (const [state, n] of Object.entries(row.stateCounts)) acc[state] = (acc[state] ?? 0) + n; return acc; }, {}));
-  const unresolvedNull = rows.filter(row => row.evidenceGrade === null).length;
-  const decisionRows = rows.filter(row => row.status !== "not_run");
-  const visible = showAll ? rows : decisionRows;
-  const provenance = {
-    snapshot_path: SNAPSHOT_PATH, snapshot_sha256: sha256, generated_at: data.generated_at, partial: data.partial,
-    rule_pack_name: data.run.rule_pack_name, rule_pack_id: data.run.rule_pack_id, rule_pack_hash: data.run.rule_pack_hash,
-    model_ids: data.run.model_ids, model_binding_hash: data.run.model_binding_hash, official_report_index: OFFICIAL_REPORT_URL,
-  };
+export default function AuditReportPage() {
+  const { company } = useParams();
+  const companyName = company && company in companies ? companies[company as keyof typeof companies] : null;
+  const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    if (!companyName) return;
+    const controller = new AbortController();
+    setSnapshot(null);
+    setError(false);
+    fetch(`${import.meta.env.BASE_URL}demo/${company}-2025.json`, { signal: controller.signal })
+      .then(response => {
+        if (!response.ok) throw new Error("snapshot unavailable");
+        return response.json() as Promise<Snapshot>;
+      })
+      .then(data => { if (!controller.signal.aborted) setSnapshot(data); })
+      .catch(() => { if (!controller.signal.aborted) setError(true); });
+    return () => controller.abort();
+  }, [company, companyName]);
+
+  if (!companyName) return <main className="audit-empty"><h1>보고서를 찾을 수 없습니다</h1><Link to="/demo">결과로 돌아가기</Link></main>;
+  if (error) return <main className="audit-empty"><h1>보고서 데이터를 불러오지 못했습니다</h1><p>{companyName} 분석 결과를 확인해 주세요.</p><Link to="/demo">결과로 돌아가기</Link></main>;
+  if (!snapshot) return <main className="audit-empty" role="status">보고서를 준비하는 중입니다…</main>;
+  const data = snapshot;
+
+  const isDemo = !!(snapshot.demo_mode || snapshot.relaxed_rules || snapshot.run.demo_mode || snapshot.run.relaxed_rules);
+  const rows = snapshot.claims.map(claim => reportRow(claim, isDemo));
+  const counts = Object.fromEntries(grades.map(grade => [grade, rows.filter(row => row.grade === grade).length])) as Record<string, number>;
+  const decided = grades.reduce((total, grade) => total + counts[grade], 0);
+  const demonstrated = rows.filter(row => row.estimated).length;
+  const ranges = rows.filter(row => row.grade.includes("범위")).length;
+  const pending = snapshot.claims.length - decided - ranges;
+  const management = snapshot.claims.filter(claim => claim.track === "management");
+  const verifiedManagement = management.filter(claim => claim.source_verified && claim.elements?.some(item => item.id === "M3" && item.state === "present" && item.evidence?.some(ref => ref.page))).length;
+  const linked = rows.filter(row => row.evidencePages.length > 0).length;
+  const documentTitle = snapshot.processed_reports?.[0]?.title || snapshot.title;
+  const scope = snapshot.processed_reports?.[0]?.scope;
+  const reportDate = snapshot.run.completed_at || snapshot.run.executed_at || snapshot.generated_at;
+  const findings = [
+    `관리체계 주장 ${management.length}건 중 ${verifiedManagement}건은 외부검증 요소가 원문 근거 쪽수와 연결됐습니다.`,
+    `전체 주장 ${snapshot.claims.length}건 중 ${decided - demonstrated}건에 확정 등급이 기록됐습니다.${demonstrated ? ` ${demonstrated}건은 예비 등급입니다.` : ` ${ranges}건은 등급 범위로 남았습니다.`}`,
+    `요소별 근거 쪽수가 연결된 주장은 ${linked}건입니다. 연결되지 않은 항목은 표에서 ‘—’로 표시합니다.`,
+  ];
 
   function exportJson() {
-    download(`${company}-proofops-audit-report.json`, JSON.stringify({
-      export_kind: "proofops.static_snapshot_audit_report",
-      export_notice: "저장된 스냅샷을 그대로 옮긴 읽기 전용 보고서입니다. 등급·라벨은 저장된 규칙엔진 산출값이며 다시 계산하지 않았습니다. null 등급은 null로 둡니다. AI 위임 검토이며 사용자 최종 검토·외부 감사의견이 아닙니다.",
-      company: companyName, title: data.title, provenance, coverage: data.coverage, funnel: data.funnel, funnel_source: data.funnel_source, independent_read: data.audit,
-      claims: rows,
+    download(`${company}-proofops-audit.json`, JSON.stringify({
+      company: companyName, document: documentTitle, generated_at: data.generated_at,
+      rule_pack: data.run.rule_pack_name, rule_pack_hash: data.run.rule_pack_hash,
+      model_ids: data.run.model_ids, scope, coverage: data.coverage,
+      grade_distribution: counts, grade_denominator: decided, demonstration_count: demonstrated, range_count: ranges, pending_count: pending,
+      findings, claims: rows,
     }, null, 2), "application/json;charset=utf-8");
   }
+
   function exportCsv() {
-    const head = ["claim_id", "page", "quote", "track", "status", "evidence_grade", "label", "grade_range", "source_verified", "evidence_pages", "tag_revision", "decision_revision", "review_status"];
-    const body = rows.map(row => [row.id, row.page, row.quote, row.track, row.status, row.evidenceGrade, row.label, row.range, row.sourceVerified, row.evidencePages.join("; "), row.tagRevision, row.decisionRevision, row.reviewStatus]);
-    download(`${company}-proofops-claims.csv`, `﻿${[head, ...body].map(line => line.map(csvCell).join(",")).join("\r\n")}`, "text/csv;charset=utf-8");
+    const head = ["주장 ID", "원문 쪽", "문장 요약", "트랙", "등급", "라벨", "예비 등급", "핵심 근거 쪽수"];
+    const body = rows.map(row => [row.id, row.page, row.quote, row.track, row.grade, row.label, row.estimated ? "예" : "아니오", row.evidencePages.join("; ")]);
+    download(`${company}-proofops-claims.csv`, `\uFEFF${[head, ...body].map(line => line.map(csvCell).join(",")).join("\r\n")}`, "text/csv;charset=utf-8");
   }
 
-  return <main className="static-main xd-page audit-page">
+  return <div className="audit-page">
+    {company === "kia" ? <p className="kia-provenance" role="note">제공된 시연 데이터 · 제출 A 저장소가 제공한 기아 기록이며, 이 저장소의 새 파이프라인으로 독립 검증하지 않았습니다. 예비 등급은 확정 판정이 아닙니다.</p> : null}
     <div className="audit-toolbar" aria-label="보고서 작업">
-      <div className="breadcrumb"><Link to="/">홈</Link><span>/</span> 감사 보고서 · {companyName}</div>
-      <div className="audit-actions"><button type="button" onClick={() => window.print()}>인쇄 · PDF</button><button type="button" onClick={exportJson}>JSON 내보내기</button><button type="button" onClick={exportCsv}>CSV 내보내기</button></div>
+      <Link to="/demo">← 결과로 돌아가기</Link>
+      <span>{companyName} / AUDIT REPORT</span>
+      <div><button type="button" onClick={() => window.print()}>PDF로 저장</button><button type="button" onClick={exportJson}>JSON 다운로드</button><button type="button" onClick={exportCsv}>CSV 다운로드</button></div>
     </div>
-    <p className="xd-banner" data-mode="stored-snapshot" role="note"><strong>STORED SNAPSHOT</strong><span>저장된 스냅샷의 불변 기록으로 만든 보고서입니다. 등급·라벨은 저장된 규칙엔진 산출값이며 이 화면에서 다시 계산하지 않습니다. 등급이 없는 주장은 null로 두고 E0이나 근거 부재로 세지 않습니다. AI 위임 검토 결과이며 사용자 최종 검토나 외부 감사의견이 아닙니다.</span></p>
-
     <article className="audit-paper">
       <section className="audit-cover">
-        <p className="eyebrow">DISCLOSURE EVIDENCE REVIEW · {data.partial ? "PARTIAL RUN" : "FULL RUN"}</p>
-        <h1>{companyName} 공시 근거 검토 보고서</h1>
-        <p>{data.title}</p>
-        <dl className="audit-cover-facts">
-          <div><dt>스냅샷 생성</dt><dd>{formatDate(data.generated_at)}</dd></div>
-          <div><dt>처리 범위</dt><dd>{data.coverage.pages_processed} / {data.coverage.pages_total}쪽</dd></div>
-          <div><dt>규칙집</dt><dd><code>{data.run.rule_pack_name}</code></dd></div>
-          <div><dt>원문 보고서</dt><dd><a href={OFFICIAL_REPORT_URL} target="_blank" rel="noopener noreferrer">NAVER ESG 보고서 목록 ↗</a></dd></div>
-        </dl>
+        <div className="audit-brand"><span className="brand-dot" aria-hidden="true" /><strong>PROOFOPS</strong><span>DISCLOSURE EVIDENCE REVIEW</span></div>
+        <div className="audit-cover-main"><p className="audit-kicker">ENVIRONMENTAL DISCLOSURE / EVIDENCE REVIEW</p><h1>{companyName}<br />공시 근거 검토 보고서</h1><p>{documentTitle}</p></div>
+        <div className="audit-cover-foot"><div><span>분석 일시</span><strong>{formatDate(reportDate)}</strong></div><div><span>판정 기준</span><strong>환경 주장 입증 등급</strong></div><div><span>근거 검토</span><strong>원문 인용과 쪽수 대조</strong></div><div><span>분석 범위</span><strong>{snapshot.coverage.pages_processed}/{snapshot.coverage.pages_total}쪽</strong></div></div>
       </section>
 
-      <section className="audit-section" aria-labelledby="audit-summary-title">
-        <div className="audit-section-head"><span>01 / SUMMARY</span><h2 id="audit-summary-title">저장된 검토 결과</h2></div>
-        <div className="audit-stats">
-          <div><span>추출 주장</span><strong>{rows.length}<small>건</small></strong></div>
-          <div><span>저장된 등급</span><strong>{graded.length}<small>건</small></strong></div>
-          <div><span>가능 범위만 있음</span><strong>{ranged.length}<small>건</small></strong></div>
-          <div data-testid="audit-null-grade"><span>등급 null (미정)</span><strong>{unresolvedNull}<small>건</small></strong></div>
-        </div>
-        <div className="audit-summary-grid">
-          <div className="audit-chart"><h3>저장된 등급 분포 <small>분모 {graded.length}건 · null 제외</small></h3>
-            {gradeCounts.map(([grade, n]) => <div className="audit-chart-row" key={grade}><span>{grade}</span><div><i style={{ width: `${graded.length ? n / graded.length * 100 : 0}%` }} /></div><strong>{n}</strong></div>)}
-            <p className="xd-muted">판정 상태: {statusCounts.map(([status, n]) => `${statusLabel(status)} ${n}건`).join(" · ")}</p>
-          </div>
-          <div className="audit-chart"><h3>저장된 요소 상태 합계 <small>주장별 요소 태그</small></h3>
-            <ul className="audit-state-list">{stateTotals.map(([state, n]) => <li key={state}><code>{state}</code> {stateText[state] ?? state}<b>{n}</b></li>)}</ul>
-            <p className="xd-muted">미확인(unknown)은 근거 부재(absent)로 바꾸지 않았습니다. absent는 검색 범위가 검증된 경우에만 저장됩니다.</p>
-          </div>
-        </div>
-        <div className="audit-funnel"><h3>저장된 처리 단계</h3><ol>{data.funnel.map(step => <li key={step.label}><span>{step.label}</span><b>{step.count}건</b></li>)}</ol><p className="xd-muted">{data.funnel_source}</p></div>
-        <p className="xd-note">독립 읽기 검토({data.audit.scope}): 동의 {data.audit.agreed}건 · 이견 {data.audit.disagreed}건 · 확인 필요 {data.audit.uncertain}건. 사람 정답셋이 아닙니다.</p>
+      <section className="audit-section audit-summary">
+        <div className="audit-section-head"><span>01 / EXECUTIVE SUMMARY</span><h2>핵심 검토 결과</h2><p>보고서 안의 환경 주장을 원문 근거와 연결한 분석 결과입니다.</p></div>
+        <div className="audit-stat-row"><div><span>추출 주장</span><strong>{snapshot.claims.length.toLocaleString()}<small>건</small></strong></div><div><span>{demonstrated ? "등급 결과" : "확정 등급"}</span><strong>{decided.toLocaleString()}<small>건</small></strong></div><div><span>근거 쪽수 연결</span><strong>{linked.toLocaleString()}<small>건</small></strong></div></div>
+        <div className="audit-summary-grid"><div className="audit-chart"><h3>{demonstrated ? "등급 결과 분포" : "확정 등급 분포"} <small>분모 {decided}건</small></h3>{grades.map(grade => <div className="audit-chart-row" key={grade}><span>{grade}</span><div className="audit-chart-track"><i className={`audit-bar audit-bar-${grade.toLowerCase()}`} style={{ width: `${decided ? counts[grade] / decided * 100 : 0}%` }} /></div><strong>{counts[grade]}</strong></div>)}<p>{demonstrated ? `예비 등급 ${demonstrated}건 · ` : ""}범위 보류 {ranges}건 · 미판정 {pending}건</p></div><div className="audit-findings"><h3>주요 발견</h3><ol>{findings.map(finding => <li key={finding}>{finding}</li>)}</ol></div></div>
+        <div className="audit-pipeline"><h3>처리 흐름</h3><div>{(snapshot.funnel || []).map((stage, index) => <div key={`${stage.label}-${index}`}><span>{stage.label === "표시 등급" ? "등급 결과" : stage.label}</span><strong>{stage.count.toLocaleString()}건</strong></div>)}</div></div>
+        <p className="audit-scope">처리 페이지 {snapshot.coverage.pages_processed}쪽 · 미처리 {snapshot.coverage.pages_unprocessed ?? Math.max(0, snapshot.coverage.pages_total - snapshot.coverage.pages_processed - (snapshot.coverage.pages_unreadable || 0))}쪽 · 판독 불가 {snapshot.coverage.pages_unreadable || 0}쪽 · 검토 대상 {snapshot.coverage.claims_needs_review}건</p>
       </section>
 
-      <section className="audit-section" aria-labelledby="audit-register-title">
-        <div className="audit-section-head"><span>02 / CLAIM REGISTER</span><h2 id="audit-register-title">주장별 저장 판정과 근거</h2></div>
-        <div className="audit-filter" role="group" aria-label="표시 범위">
-          <button type="button" aria-pressed={!showAll} onClick={() => setShowAll(false)}>규칙엔진 실행 {decisionRows.length}건</button>
-          <button type="button" aria-pressed={showAll} onClick={() => setShowAll(true)}>전체 {rows.length}건</button>
-        </div>
-        <div className="xd-table-wrap"><table className="xd-table audit-table"><thead><tr><th scope="col">원문</th><th scope="col">주장 (최대 200자)</th><th scope="col">트랙</th><th scope="col">저장된 판정</th><th scope="col">요소 상태</th><th scope="col">근거 쪽</th><th scope="col">기록</th></tr></thead>
-          <tbody>{visible.map(row => <tr key={row.id} data-claim={row.id} data-status={row.status}>
-            <td>p.{row.page ?? "?"}</td>
-            <td className="quote">{row.quote}{row.sourceVerified ? null : <small className="audit-warn">원문 인용 검증 기록 없음</small>}</td>
-            <td>{row.track}</td>
-            <td><b className="audit-grade">{row.gradeText}</b><small>{row.label ?? (row.range ? "확정 등급 아님" : "label null")} · <code>{row.status}</code></small></td>
-            <td>{Object.entries(row.stateCounts).map(([state, n]) => `${stateText[state] ?? state} ${n}`).join(" · ") || "—"}</td>
-            <td>{row.evidencePages.length ? row.evidencePages.slice(0, 5).map(page => `p.${page}`).join(", ") + (row.evidencePages.length > 5 ? ` 외 ${row.evidencePages.length - 5}` : "") : "—"}</td>
-            <td className="links"><small>rev 태깅 {row.tagRevision} · 판정 {row.decisionRevision}</small><Link to={`/demo/${row.id}`}>원문 근거 ↗</Link>{row.track !== "분류 미합의" ? <Link to={`/review/${row.id}`}>시뮬레이터 ↗</Link> : null}</td>
-          </tr>)}</tbody></table></div>
+      <section className="audit-section audit-claims">
+        <div className="audit-section-head"><span>02 / CLAIM REGISTER</span><h2>주장별 판정과 근거</h2><p>주장 요약은 최대 200자, 쪽수는 물리 페이지 기준입니다.</p></div>
+        <table><thead><tr><th scope="col">원문</th><th scope="col">문장 요약</th><th scope="col">트랙</th><th scope="col">등급 / 라벨</th><th scope="col">핵심 근거</th></tr></thead><tbody>{rows.map(row => <tr key={row.id}><td>p.{row.page ?? "?"}</td><td>{row.quote || "—"}</td><td>{row.track}</td><td><strong>{row.grade}</strong><br /><span>{row.label}</span></td><td>{row.evidencePages.length ? row.evidencePages.slice(0, 4).map(page => `p.${page}`).join(", ") + (row.evidencePages.length > 4 ? ` 외 ${row.evidencePages.length - 4}쪽` : "") : "—"}</td></tr>)}</tbody></table>
       </section>
 
-      <section className="audit-section" aria-labelledby="audit-provenance-title">
-        <div className="audit-section-head"><span>03 / PROVENANCE &amp; LIMITS</span><h2 id="audit-provenance-title">출처와 해석 범위</h2></div>
-        <dl className="audit-provenance" data-testid="audit-provenance">
-          <div><dt>스냅샷</dt><dd><code>{SNAPSHOT_PATH}</code></dd></div>
-          <div><dt>스냅샷 SHA-256</dt><dd><code>{sha256 ?? "브라우저에서 계산 불가"}</code></dd></div>
-          <div><dt>규칙집</dt><dd><code>{data.run.rule_pack_name}</code> · <code>{data.run.rule_pack_id}</code></dd></div>
-          <div><dt>규칙집 SHA-256</dt><dd><code>{data.run.rule_pack_hash}</code></dd></div>
-          <div><dt>모델</dt><dd>{data.run.model_ids.join(", ")} — {data.run.model_note}</dd></div>
-          <div><dt>모델 바인딩 해시</dt><dd><code>{data.run.model_binding_hash ?? "기록 없음"}</code></dd></div>
-        </dl>
-        <p>모델은 추출과 태깅만 맡고 등급·라벨은 순수 Python 규칙엔진이 계산했습니다. 이 보고서는 {data.partial ? "선택 페이지만 처리한 부분 실행" : "문서 전체 실행"} 결과이며 미처리 {data.coverage.pages_unprocessed}쪽 · 판독 불가 {data.coverage.pages_unreadable}쪽은 검토되지 않았습니다. 연결된 근거 쪽수는 공시 안의 입증 연결이며 실제 환경 성과나 외부 인증을 보장하지 않습니다. 등급 기준은 <Link to="/guide">판정 안내</Link>에 원문 그대로 정리했습니다.</p>
+      <section className="audit-section audit-appendix">
+        <div className="audit-section-head"><span>03 / APPENDIX</span><h2>방법과 해석 범위</h2></div>
+        <h3>입증 등급 사다리</h3><div className="audit-method-grid">{grades.map(grade => <div key={grade}><strong>{grade}</strong><p>{gradeMeaning[grade]}</p></div>)}</div>
+        <h3>적용 원칙</h3><p>모델은 추출과 태깅을 맡고, 확정 등급과 라벨은 규칙팩의 판정 결과를 표시합니다.{demonstrated ? " 예비 등급은 핵심 근거 일부가 확인되기 전의 판정입니다." : ""} 원문 인용과 쪽수가 연결된 근거를 사용하며, 미확인·충돌·판독 불가는 근거 부재로 바꾸지 않습니다. E3는 공시 안의 입증 연결 수준이며 실제 환경 성과나 외부 인증을 보장하지 않습니다.</p>
+        <h3>한계</h3><p>이 보고서는 {snapshot.partial ? "선택 페이지" : "문서"} 분석 결과를 요약합니다. 미처리 페이지와 미판정 주장은 등급 분포에서 제외되며, 연결된 쪽수는 해당 주장의 사실 여부에 대한 독립 검증을 뜻하지 않습니다.</p>
+        <div className="audit-trace"><span>판정 기준</span><code>환경 주장 입증 등급</code><span>분석 자료 생성</span><code>{formatDate(snapshot.generated_at)}</code></div>
       </section>
     </article>
-  </main>;
+  </div>;
 }

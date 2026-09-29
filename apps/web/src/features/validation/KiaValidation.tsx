@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
+import "../decisionguide/extended-shell.css";
 import "./validation.css";
 
 type Trial = {

@@ -2,6 +2,7 @@ import { Link } from "react-router";
 import { elementLabels } from "../labels";
 import { stateText, statusText, type DemoSnapshot } from "../auditreport/snapshot";
 import { CONDITIONAL, DECISIONS, ELEMENT_STATES, ENGINE_VERSION, GAPS, GRADES, LADDER_ELEMENTS, LADDERS, SOURCES, SPLIT, SUPERLATIVE, UNRESOLVED_GAP_IDS } from "./domainContract";
+import "./extended-shell.css";
 import "./decision-guide.css";
 
 const trackPrefix = { goal: "G", performance: "P", management: "M" } as const;
