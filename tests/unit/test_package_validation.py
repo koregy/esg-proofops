@@ -20,6 +20,7 @@ class PackageValidationTests(unittest.TestCase):
                 "CODEX_START_PROMPT.md",
                 ".env.example",
                 "docs",
+                "evidence",
                 "contracts",
                 "config",
                 "fixtures",

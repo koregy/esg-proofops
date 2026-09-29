@@ -34,6 +34,35 @@ from tests.acceptance.test_parsing import TENANT, candidate
 from tests.integration.test_batch_attestation_cache import discovery_for
 
 LOCAL = Path(__file__).resolve().parents[2] / "packages/proofops/adapters/local"
+# Portable reader regression pins reconstructed from committed history, not the
+# unavailable private R24 proof. Values are the LF blob digests at 8767306, the commit
+# that introduced this check against that proof; none of these files changed in
+# 8767306 or since. Independent committed pins: claim_source_verification.py and
+# claim_span_bullet_alignment.py in native_replay_cache.py; native_glyph_geometry.py
+# in evidence/native-ocr-padding-20260919.json; source_verification.py in
+# evidence/native-replay-cache-benchmark-20260919.json; claim_span_render_resolution.py
+# in outputs/agent-results/R19-bullet-spacing.json.
+R24_READER_DIGESTS = {
+    "claim_source_verification.py": (
+        "8b95383c73d76b2bf838e51f208448c8b1995271a6639e5726df659e7cef2a61"
+    ),
+    "claim_span_render_resolution.py": (
+        "48f24a69ec1061c4329510a993fd5c8a7a363489c74286df1ef4596614eb321b"
+    ),
+    "claim_span_bullet_alignment.py": (
+        "b82a2023b0a42d3868fd21868fb3494c27a14f774a0479a3e20da6b1a1e4185d"
+    ),
+    "selected_cell_table_verification.py": (
+        "045f4dca825e35a29f12307e234c30be546d53c5a18fc916e8c98c852a1389db"
+    ),
+    "native_glyph_geometry.py": "71da3f12656dc00bc6791d78aee83cda8ce2f233503b7f6320a8bc2e6b154685",
+    "source_verification.py": "e9062fb57f98ae0db3a90a2431328c65d315bee87a23c0d11898503f2fdb8fe0",
+    "native_ocr.swift": "a379e2901aa0e20d6b325f3e711abbf53324265855ad0e0c0e316cdd616cd74d",
+    "native_paragraph_typography.py": (
+        "83491c030b214962d5b98b6214a189e1f648ee478e8bb751cec2f6571e3fc84f"
+    ),
+    "citations.py": "cbbd174a53628edd54777b7ee47d9ec792d9fa3ff11d72b2fe1a611a1b0bdc26",
+}
 
 # The document's own ink: U+00B7. The rendered reader returns U+2022 for it.
 DOT, BULLET = "\u00b7", "\u2022"
@@ -497,12 +526,7 @@ def test_the_older_policies_and_their_receipts_are_unchanged(monkeypatch):
     """
     from proofops.adapters.local import native_replay_cache
 
-    pinned = json.loads(
-        (
-            Path(__file__).resolve().parents[4]
-            / "outputs/agent-results/R24/typography-original-proof/results.json"
-        ).read_text()
-    )["code_hashes"]["readers"]
+    pinned = R24_READER_DIGESTS
     for name, digest in pinned.items():
         path = Path(citations.__file__) if name == "citations.py" else LOCAL / name
         assert sha256(path.read_bytes()).hexdigest() == digest, name

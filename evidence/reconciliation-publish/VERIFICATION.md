@@ -751,3 +751,60 @@ The global mypy command on Windows reports 9 Unix-only resource/fcntl attribute
 errors in existing source_preview.py and upstage_tagging.py. The CI global mypy
 job targets Linux; this broad Windows result is not counted as a pass or hidden
 with ignores. B's cross-platform release mypy gates passed separately.
+
+### CI integration repairs after the formatting gate
+
+Run 36506414531 passed all three reconciliation platforms but exposed two unit
+failures; the broad acceptance/integration job in run 36506112322 exposed six
+more failures (3441 passed, 5 skipped). These were investigated instead of
+skipping tests or marking the PR complete:
+
+- The package-validator test copied README but omitted its referenced evidence
+  directory. The fixture now copies evidence and retains the invalid-JSON
+  rejection assertion.
+- The fixed receipt hashes depended on host substitution of unembedded Helvetica.
+  Claude reproduced the Linux value on Windows using PDFium's bundled font, and
+  also reproduced it at pre-change commits f8c4a2f/bf67f32. The test now controls
+  that font lookup for the two attestations, restores the default afterward,
+  and compares the full receipts to those historically reproduced hashes.
+- The typography regression depended on an unavailable private R24 results path.
+  It now pins nine reader hashes reconstructed from commit 8767306, including
+  five independently recorded in committed evidence. These are reconstructed
+  regression pins, not a claim to have received the missing private proof.
+  Changing one native_ocr.swift byte was confirmed to fail the check.
+- Git attributes now preserve LF Python/Swift source bytes across platforms.
+  Frozen reader Git blobs were not edited; this makes a Windows checkout match
+  the already-pinned canonical blobs instead of introducing CRLF-specific hashes.
+- Reprocess targets are no longer published before the lineage check. Their
+  validated review inputs are published inside the fenced commit transaction
+  after verify_publication; ordinary/recovery per-claim publication is preserved.
+- The pilot uses a fresh create_app() composition after setting its state and
+  origin. The regression deliberately replaces the module singleton and checks
+  fresh initialization and resume without invoking any model.
+- Tag input loading reuses the evidence already replayed to verify a tag
+  checkpoint; the branch without a tag job still loads its own evidence. Existing
+  replay-count, deterministic-result and tamper-rejection assertions are retained.
+
+Claude Opus handled receipt fixtures (task task_af0f545f9664) and atomic publication
+(task task_c2a35e7486ba) in parallel with coordinator-owned pilot/replay fixes.
+Both settled; cleanup returned retained/user_takeover without stopping user-owned
+processes, and no reclaimable terminals remained. The atomicity worker reports
+9/9 focused tests and Linux-target mypy passed. Its broader Windows-only probe
+had 87 passes and 22 fcntl/POSIX-path failures reproduced on unmodified HEAD;
+those are not recorded as passes. Full Linux CI is required for that scope.
+
+Final local integration checks: the seven-file targeted suite passed 84/84
+(exit 0), including all six failing broad-CI cases and the two unit regressions.
+Repository-wide ruff check and format check passed. The global Windows Python
+job scope produced 561 passes, 62 skips and two fixture failures caused by
+POSIX-shaped saved paths; those two fixtures now use platform-resolved absolute
+paths, and all 12 submission-demo resume tests passed. No runtime path or budget
+guard was loosened. The complete Python scope is rechecked by final Linux CI.
+
+The pilot's local preflight initially rejected an SBOM whose lockfile hashes did
+not match CRLF-converted Windows lockfile bytes. Generating SBOM diagnosed that
+boundary; pinning both lockfiles to LF makes their bytes and regenerated SBOM
+match the existing committed inventory. No dependency or SBOM content change
+was needed. License/supply-chain gate passed, package checks passed 974/974,
+and the pilot new/resume profile test passed with its draft policy retained
+(no AI-review opt-in and no model invocation).
