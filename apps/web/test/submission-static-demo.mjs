@@ -109,32 +109,42 @@ try {
   const featured = snapshot.claims.find(claim => claim.id === featuredId);
   const c = snapshot.coverage;
   await viewport(1440, 900, false);
-  await check("landing shows the stored NAVER partial scope and a trace that matches the stored E3 claim", async () => {
+  await check("home stays honest and the guide trace and funnel match the stored NAVER run", async () => {
     await open("/");
-    await sleep(1200); // CountUp 애니메이션이 끝난 뒤의 값을 읽는다.
+    const home = await text();
+    assert((await evaluate("document.querySelector('main h1')?.innerText.trim()")) === "ProofOps", "home title");
+    assert(home.includes("제3자 보증"), "home must keep the service-scope disclaimer");
+    assert(!home.includes("LIVE CASE") && !home.includes("등급 표시") && !home.includes(`${c.claims_discovered}건 판정`), "home must not claim live or full grading");
+    // 활용 사례(판정 경로·처리 과정·보고서 미리보기)는 서비스 가이드라인으로 옮겨졌다.
+    await open("/guide");
+    await sleep(600);
     const body = await text();
-    for (const needle of [`분석 쪽수 (전체 ${c.pages_total}쪽 중)`, "Operation(환경운영부서)", "SUBSTANTIATED", "제3자 보증"]) assert(body.includes(needle), `missing ${needle}`);
-    const proof = await evaluate("[...document.querySelectorAll('.proof dd')].map(dd => Number(dd.innerText.replace(/[^0-9]/g, '')))");
-    assert(JSON.stringify(proof) === JSON.stringify([c.pages_processed, c.claims_discovered, snapshot.funnel[1].count, c.claims_decided]), `proof counts ${JSON.stringify(proof)}`);
-    assert(!body.includes("LIVE CASE") && !body.includes("등급 표시"), "stored snapshot must not be labelled live or as fully graded");
-    // 첫 화면의 판정 경로 예시는 저장된 실제 주장의 요소 근거 쪽수와 일치해야 한다.
+    for (const needle of ["Operation(환경운영부서)", "SUBSTANTIATED", "제3자 보증"]) assert(body.includes(needle), `missing ${needle}`);
+    const funnel = await evaluate("[...document.querySelectorAll('.mini-card:not(.report-mini) .mini-bar')].map(row => [row.querySelector('span').innerText, Number(row.querySelector('strong').innerText)])");
+    assert(JSON.stringify(funnel) === JSON.stringify([["추출 주장", c.claims_discovered], ["원문 대조", snapshot.funnel[1].count], ["검토 필요", c.claims_needs_review], ["규칙 판정", c.claims_decided]]), `funnel preview ${JSON.stringify(funnel)}`);
+    // 판정 경로 예시는 저장된 실제 주장의 요소 근거 쪽수와 일치해야 한다.
     const trace = await evaluate("[...document.querySelectorAll('.trace-rows li')].map(li => li.innerText.replace(/\\s+/g, ' '))");
     assert(featured.decision.grade === "E3" && trace.length === 3, `trace ${JSON.stringify(trace)}`);
     for (const [index, id] of ["M1", "M2", "M3"].entries()) {
       const pages = [...new Set(featured.elements.find(element => element.id === id).evidence.map(ref => String(ref.page)))];
       assert(trace[index].includes(id) && pages.every(page => trace[index].includes(page)), `trace ${id} pages ${pages} vs ${trace[index]}`);
     }
+    await open("/");
     await screenshot("desktop-landing");
   });
 
-  await check("header and landing navigation reach analyze, cases, report, live and guide", async () => {
+  await check("header and home navigation reach analyze, case and guide; report and replay stay one step away", async () => {
     const nav = await evaluate("[...document.querySelectorAll('#site-menu a')].map(a => a.getAttribute('href'))");
-    for (const href of ["/", "/analyze", "/demo", "/report/naver", "/live", "/guide"]) assert(nav.includes(href), `header nav missing ${href}: ${JSON.stringify(nav)}`);
+    assert(JSON.stringify(nav) === JSON.stringify(["/", "/analyze", "/demo", "/guide"]), `header nav ${JSON.stringify(nav)}`);
     const links = await evaluate("[...document.querySelectorAll('main a')].map(a => a.getAttribute('href'))");
-    for (const href of ["/analyze", "/demo", "/demo/kia", "/report/naver", "/analyze/replay"]) assert(links.includes(href), `landing link missing ${href}`);
+    for (const href of ["/analyze", "/demo", "/guide"]) assert(links.includes(href), `home link missing ${href}`);
     assert(!(await evaluate("!!document.querySelector('a[href=\"/documents/new\"]')")), "static build must not offer the session workspace");
-    await evaluate("document.querySelector('.header-actions a[href=\"/demo\"]').click()");
-    await waitFor("location.pathname === '/demo' && !!document.querySelector('.claims-layout')", "demo via header");
+    const footer = await evaluate("[...document.querySelectorAll('.site-footer a')].map(a => a.getAttribute('href'))");
+    assert(footer.includes("https://github.com/koregy/esg-proofops/tree/submission/deadline-20260929"), `footer code link ${JSON.stringify(footer)}`);
+    await evaluate("document.querySelector('#site-menu a[href=\"/guide\"]').click()");
+    await waitFor("location.pathname === '/guide' && !!document.querySelector('.guide-main a[href=\"/report/naver\"]') && !!document.querySelector('.guide-main a[href=\"/analyze/replay\"]')", "guide links to report and replay");
+    await evaluate("document.querySelector('#site-menu a[href=\"/demo\"]').click()");
+    await waitFor("location.pathname === '/demo' && !!document.querySelector('.claims-layout') && !!document.querySelector('.demo-heading a[href=\"/report/naver\"]')", "demo via header links to report");
   });
 
   await check("claim detail shows the stored E3 with evidence pages and review status before user final review", async () => {

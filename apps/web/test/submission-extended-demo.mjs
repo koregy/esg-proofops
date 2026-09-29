@@ -145,19 +145,27 @@ try {
   });
 
   await viewport(1440, 900, false);
-  await check("extended routes are discoverable from the landing, footer and demo pages", async () => {
+  await check("extended routes are discoverable from home, guide, footer and demo; direct routes and aliases still resolve", async () => {
     await open("/");
-    const links = await evaluate("[...document.querySelectorAll('a')].map(a => a.getAttribute('href'))");
-    for (const href of ["/analyze", "/analyze/replay", "/demo", "/demo/kia", "/report/naver", "/live", "/guide", "/guide/decision", "/validation/kia"]) assert(links.includes(href), `link missing ${href}`);
-    assert(links.some(href => href?.startsWith("/review/")), "review link missing");
+    const home = await evaluate("[...document.querySelectorAll('a')].map(a => a.getAttribute('href'))");
+    for (const href of ["/analyze", "/demo", "/guide", "/guide/decision"]) assert(home.includes(href), `home/footer link missing ${href}`);
+    await open("/guide");
+    const guide = await evaluate("[...document.querySelectorAll('main a')].map(a => a.getAttribute('href'))");
+    for (const href of ["/demo", "/analyze/replay", "/report/naver", "/analyze"]) assert(guide.includes(href), `guide link missing ${href}`);
     await evaluate("document.querySelector('.site-footer a[href=\"/guide/decision\"]').click()");
     await waitFor("location.pathname === '/guide/decision' && !!document.querySelector('#guide-title')", "decision guide via footer");
+    // 메뉴에서 뺀 화면(문장 분석·기아 사례·기아 원문 검증)도 직접 주소로는 계속 열린다.
+    for (const [path, selector] of [["/live", ".live-main"], ["/demo/kia", ".kia-case"], ["/validation/kia", ".kia-validation"]]) {
+      await open(path);
+      assert(await evaluate(`!!document.querySelector(${JSON.stringify(selector)})`), `${path} no longer resolves`);
+    }
     for (const [legacy, target] of [["/replay", "/analyze/replay"], ["/report", "/report/naver"], ["/validation", "/validation/kia"]]) {
       await open(legacy);
       assert((await evaluate("location.pathname")) === target, `${legacy} does not redirect to ${target}`);
     }
-    await open("/demo");
-    assert(await evaluate("!!document.querySelector('.claims-layout') && document.querySelector('.company-tabs a[aria-current=page]')?.innerText === 'NAVER'"), "demo page lost claim list or company tab");
+    await open(`/demo/${decidedClaim.id}`);
+    await waitFor("!!document.querySelector('.claim-detail .detail-actions button')", "review mode entry");
+    assert(await evaluate("!!document.querySelector('.claims-layout') && !!document.querySelector('.demo-heading a[href=\"/report/naver\"]')"), "demo page lost claim list or report link");
   });
 
   await check("Kia metadata keeps unresolved blocks and claims separate from grades", async () => {

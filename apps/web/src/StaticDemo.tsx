@@ -73,13 +73,13 @@ export function StaticDemo({ workspaceEntry = false }: { workspaceEntry?: boolea
     <header className="site-header"><div className="site-header-inner">
       <Link className="brand" to="/" aria-label="ProofOps 홈"><span className="brand-dot" aria-hidden="true" />ProofOps</Link>
       <button className="menu-toggle" type="button" aria-expanded={menuOpen} aria-controls="site-menu" onClick={() => setMenuOpen(!menuOpen)}>{menuOpen ? "닫기" : "메뉴"}<span aria-hidden="true">{menuOpen ? "×" : "☰"}</span></button>
-      <nav id="site-menu" className={menuOpen ? "open" : ""} aria-label="주요 메뉴" onClick={() => setMenuOpen(false)}><Link to="/">서비스</Link><Link to="/analyze">분석</Link><Link to="/demo">분석 사례</Link><Link to="/report/naver">보고서 예시</Link><Link to="/live">문장 분석</Link><Link to="/guide">서비스 가이드라인</Link></nav>
-      <div className="header-actions">{workspaceEntry ? <a className="pill pill-line" href="/documents/new">작업 공간</a> : null}<Link className="pill pill-line" to="/demo">분석 사례</Link><Link className="pill pill-dark" to="/analyze">분석 시작</Link></div>
+      <nav id="site-menu" className={menuOpen ? "open" : ""} aria-label="주요 메뉴" onClick={() => setMenuOpen(false)}><Link to="/">서비스</Link><Link to="/analyze">분석</Link><Link to="/demo">분석 사례</Link><Link to="/guide">서비스 가이드라인</Link></nav>
+      {workspaceEntry ? <div className="header-actions"><a className="pill pill-line" href="/documents/new">작업 공간</a></div> : null}
     </div></header>
     {isLive ? <LiveClaim /> : error ? <main className="static-main"><section className="surface"><h1>분석 결과를 불러오지 못했습니다</h1><p>잠시 후 새로고침해 주세요.</p></section></main> :
       !data ? <main className="static-main loading-main" role="status" aria-label="검토 결과 불러오는 중"><div className="skeleton skeleton-title" /><div className="skeleton skeleton-card" /><div className="skeleton skeleton-card" /></main> :
-      <Routes><Route path="/" element={<Landing data={data} />} /><Route path="/analyze" element={<Analyze data={data} />} /><Route path="/guide" element={<Guide />} /><Route path="/guide/decision" element={<DomainDecisionGuide data={data as unknown as DemoSnapshot} />} /><Route path="/validation/kia" element={<KiaValidation />} /><Route path="/validation" element={<Navigate to="/validation/kia" replace />} /><Route path="/replay" element={<Navigate to={replayPath} replace />} /><Route path="/report" element={<Navigate to="/report/naver" replace />} /><Route path="/review" element={<Navigate to={`/review/${data.claims.find(claim => claim.decision.grade === "E3")?.id || data.claims[0]?.id || ""}`} replace />} /><Route path={replayPath} element={<ReplayPage snapshot={data} />} /><Route path="/demo" element={<Demo data={data} />} /><Route path="/demo/:claimId" element={<Demo data={data} />} /><Route path={kiaRoute.path} element={<><div className="kia-route-toolbar"><CompanyTabs selected="kia" /><Link to="/report/kia">기아 검토 보고서 ↗</Link></div><kiaRoute.Component /></>} /><Route path={reviewRoutePath} element={<ReviewPage claims={data.claims} />} /><Route path={auditReportRoute.path} element={<AuditReportPage />} /><Route path="*" element={<NotFound />} /></Routes>}
-    <footer className="site-footer"><div className="wrap footer-inner"><div><strong>ProofOps</strong><p>본 서비스는 공시 발간 전 근거 점검을 돕는 도구이며, 제3자 보증, 기업 성과 진위, 법률·회계 판단을 대신하지 않습니다.</p></div><nav aria-label="바닥글"><Link to="/analyze">분석</Link><Link to="/demo">분석 사례</Link><Link to="/report/naver">보고서 예시</Link><Link to="/live">문장 분석</Link><Link to="/guide">서비스 가이드라인</Link><Link to="/guide/decision">판정 규칙 안내</Link><Link to="/validation/kia">기아 원문 검증</Link><a href="https://github.com/koregy/esg-proofops" target="_blank" rel="noopener noreferrer">GitHub</a></nav><span>© 2026 ProofOps</span></div></footer>
+      <Routes><Route path="/" element={<Landing />} /><Route path="/analyze" element={<Analyze data={data} />} /><Route path="/guide" element={<Guide data={data} />} /><Route path="/guide/decision" element={<DomainDecisionGuide data={data as unknown as DemoSnapshot} />} /><Route path="/validation/kia" element={<KiaValidation />} /><Route path="/validation" element={<Navigate to="/validation/kia" replace />} /><Route path="/replay" element={<Navigate to={replayPath} replace />} /><Route path="/report" element={<Navigate to="/report/naver" replace />} /><Route path="/review" element={<Navigate to={`/review/${data.claims.find(claim => claim.decision.grade === "E3")?.id || data.claims[0]?.id || ""}`} replace />} /><Route path={replayPath} element={<ReplayPage snapshot={data} />} /><Route path="/demo" element={<Demo data={data} />} /><Route path="/demo/:claimId" element={<Demo data={data} />} /><Route path={kiaRoute.path} element={<><div className="kia-route-toolbar"><CompanyTabs selected="kia" /><Link to="/report/kia">기아 검토 보고서 ↗</Link></div><kiaRoute.Component /></>} /><Route path={reviewRoutePath} element={<ReviewPage claims={data.claims} />} /><Route path={auditReportRoute.path} element={<AuditReportPage />} /><Route path="*" element={<NotFound />} /></Routes>}
+    <footer className="site-footer"><div className="wrap footer-inner"><div><strong>ProofOps</strong><p>본 서비스는 공시 발간 전 근거 점검을 돕는 도구이며, 제3자 보증, 기업 성과 진위, 법률·회계 판단을 대신하지 않습니다.</p></div><nav aria-label="바닥글"><Link to="/analyze">분석</Link><Link to="/demo">분석 사례</Link><Link to="/guide">서비스 가이드라인</Link><Link to="/guide/decision">판정 규칙 안내</Link><a href="https://github.com/koregy/esg-proofops/tree/submission/deadline-20260929" target="_blank" rel="noopener noreferrer">GitHub</a></nav><span>© 2026 ProofOps</span></div></footer>
   </div>;
 }
 
@@ -111,7 +111,7 @@ function Analyze({ data }: { data: Snapshot }) {
     <section className="analyze-heading"><p className="eyebrow">REPORT ANALYSIS</p><h1>보고서 분석 시작</h1><p>지속가능경영보고서 PDF를 올리면 분석할 쪽을 골라 바로 분석합니다. 이미 분석한 보고서는 저장된 결과도 함께 볼 수 있습니다.</p></section>
     <section className="analyze-grid"><div className="surface analyze-upload"><h2>PDF 보고서 선택</h2><p>파일을 놓거나 눌러 선택하세요.</p><label className="drop-zone" onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); void inspect(event.dataTransfer.files[0]); }}><span aria-hidden="true">↥</span><strong>{busy ? "파일 지문 계산 중…" : "PDF 파일을 여기에 놓기"}</strong><small>또는 클릭해 파일 선택 · PDF는 이 브라우저 안에서만 읽습니다</small><input type="file" accept=".pdf,application/pdf" aria-label="분석할 PDF 선택" disabled={busy} onChange={event => { void inspect(event.target.files?.[0]); event.target.value = ""; }} /></label>
       {result && <div className={`analyze-result ${result.matched ? "match" : "no-match"}`} role="status"><small>{result.name}</small><h3>{result.message}</h3>{result.matched ? <><Link to="/analyze/replay">분석 과정 보기 ↗</Link><small>아래에서 실시간 분석도 선택할 수 있습니다.</small></> : <p>아래에서 분석할 쪽을 선택해 주세요.</p>}</div>}
-    </div><aside className="surface analyze-info"><p className="eyebrow">ANALYSIS</p><h2>모든 기업 보고서 분석</h2><p>글자를 선택할 수 있는 지속가능경영보고서 PDF라면 기업과 관계없이 분석합니다.</p><div><span>쪽 선택</span><strong style={{ fontFamily: "inherit", fontSize: 15 }}>목차 기반 자동 · 수정 가능</strong></div><div><span>기본 범위</span><strong style={{ fontFamily: "inherit", fontSize: 15 }}>환경(E) + 부록</strong></div><div><span>최대 분량</span><strong style={{ fontFamily: "inherit", fontSize: 15 }}>60쪽 · 10쪽씩 순차 처리</strong></div><p className="analyze-note">결과에는 주장별 인용·쪽수·원문 대조 여부·등급 또는 보류 사유가 표시됩니다. 실시간 분석에는 접근 코드가 필요합니다. 분석 사례: <Link to="/demo">NAVER</Link> · <Link to="/demo/kia">기아</Link></p></aside></section>
+    </div><aside className="surface analyze-info"><p className="eyebrow">ANALYSIS</p><h2>모든 기업 보고서 분석</h2><p>글자를 선택할 수 있는 지속가능경영보고서 PDF라면 기업과 관계없이 분석합니다.</p><div><span>쪽 선택</span><strong style={{ fontFamily: "inherit", fontSize: 15 }}>목차 기반 자동 · 수정 가능</strong></div><div><span>기본 범위</span><strong style={{ fontFamily: "inherit", fontSize: 15 }}>환경(E) + 부록</strong></div><div><span>최대 분량</span><strong style={{ fontFamily: "inherit", fontSize: 15 }}>60쪽 · 10쪽씩 순차 처리</strong></div><p className="analyze-note">결과에는 주장별 인용·쪽수·원문 대조 여부·등급 또는 보류 사유가 표시됩니다. 실시간 분석에는 접근 코드가 필요합니다. 분석 사례: <Link to="/demo">NAVER 2025</Link></p></aside></section>
     {file && <LiveReport key={file.name + file.lastModified} file={file} />}
   </main>;
 }
@@ -158,52 +158,26 @@ function ReportPreview({ data }: { data: Snapshot }) {
   return <figure className="mini-card report-mini"><div className="mini-head"><span>감사 보고서</span><span>PDF · JSON · CSV</span></div><h4>NAVER 공시 근거 검토 보고서</h4><div className="stack">{grades.map(grade => <i key={grade} className={grade.toLowerCase()} style={{ width: `${count(grade) / total * 100}%` }} />)}</div><ul>{grades.map(grade => <li key={grade}><span className={`sw ${grade.toLowerCase()}`} />{grade}<strong>{count(grade)}</strong></li>)}</ul></figure>;
 }
 
-function Landing({ data }: { data: Snapshot }) {
+function Landing() {
   const navigate = useNavigate();
   const [draft, setDraft] = useState("");
-  const verified = data.funnel[1]?.count ?? 0;
-  const reviewTarget = data.claims.find(claim => claim.decision.grade === "E3")?.id || data.claims[0]?.id;
   const example = "업로드 한 보고서 및 재무제표를 기반으로, 그린워싱으로 판별된 리스크가 높은 문장과 그 원인을 분석해줘.";
   const tools: [string, string, string, string][] = [
     ["/analyze", "보고서 분석", "어떤 기업 보고서든 선택한 쪽을 바로 분석합니다", "t-upload"],
     ["/demo", "분석 사례 · NAVER", "NAVER 2025 보고서의 주장·근거·판정", "t-results"],
-    [`/review/${reviewTarget}`, "검토", "요소를 바꾸면 판정이 다시 계산됩니다", "t-review"],
-    ["/report/naver", "감사 보고서", "판정 분포와 주장별 근거", "t-report"],
-    ["/live", "문장 분석", "한 문장을 바로 분석합니다", "t-live"],
-    ["/demo/kia", "분석 사례 · 기아", "수치 검산과 검증의견서 연결", "t-kia"],
+    ["/guide", "서비스 가이드라인", "작동 방식·기능·판정 기준 안내", "t-kia"],
   ];
   return <main className="landing">
     <section className="hero">
       <p className="eyebrow-c">ESG · 지속가능경영보고서 공시 검증</p>
-      <h1>ESG · 지속가능경영보고서 공시 검증 |<br />모든 주장을 원문 근거까지, 한 번에</h1>
+      <h1 className="hero-brand">ProofOps</h1>
       <p className="hero-sub">기업 보고서 내 환경 주장의 근거를 공시 안에서 찾으며, 규칙엔진을 기반으로 근거 수준을 판정합니다. 근거에 대한 쪽수·원문 인용 또는 확인 범위가 함께 표시됩니다.</p>
       <Link className="pill pill-dark" to="/analyze">보고서 분석 시작 <span aria-hidden="true">→</span></Link>
-      <form className="prompt" onSubmit={event => { event.preventDefault(); navigate(draft.trim() ? `/live?claim=${encodeURIComponent(draft.trim().slice(0, 500))}` : "/analyze"); }}>
-        <textarea aria-label="분석할 환경 주장" value={draft} onChange={event => setDraft(event.target.value)} placeholder={example} rows={3} />
-        <div className="prompt-bar"><div className="chips"><Link to="/analyze" className="chip"><span className="ic">⬆</span>PDF 업로드</Link><Link to="/demo" className="chip"><span className="ic">◎</span>분석 사례</Link><Link to="/report/naver" className="chip"><span className="ic">▤</span>보고서</Link><Link to="/demo/kia" className="chip"><span className="ic">◇</span>기아 사례</Link></div><button type="submit" className="send" aria-label="문장 분석">↑</button></div>
+      <form className="prompt" onSubmit={event => { event.preventDefault(); navigate("/analyze"); }}>
+        <textarea aria-label="분석 요청" value={draft} onChange={event => setDraft(event.target.value)} placeholder={example} rows={3} />
+        <div className="prompt-bar"><div className="chips"><Link to="/analyze" className="chip"><span className="ic">⬆</span>PDF 업로드</Link><Link to="/demo" className="chip"><span className="ic">◎</span>분석 사례</Link><Link to="/guide" className="chip"><span className="ic">◇</span>서비스 가이드라인</Link></div><button type="submit" className="send" aria-label="보고서 분석">↑</button></div>
       </form>
-      <p className="hero-note">문장을 입력하면 분류 → 요소 태깅 → 규칙엔진 판정을 바로 실행합니다</p>
-    </section>
-
-    <section className="sec sec-beige" id="how">
-      <p className="eyebrow-c center">작동 방식</p><h2 className="serif center">단 몇 분 만에 핵심 근거 확인</h2>
-      <div className="steps">{steps.map(([title, body], index) => <article className="card" key={title}><span className="num">{index + 1}</span><h3>{title}</h3><p>{body}</p></article>)}</div>
-      <div className="proof"><p className="proof-kicker">분석 사례 · NAVER 2025 통합보고서</p><h3 className="serif center">공개된 실제 보고서로 전체 흐름을 검증했습니다.</h3>
-        <dl><div><dt>분석 쪽수 (전체 {data.coverage.pages_total}쪽 중)</dt><dd><CountUp value={data.coverage.pages_processed} /></dd></div><div><dt>추출 주장</dt><dd><CountUp value={data.coverage.claims_discovered} /></dd></div><div><dt>원문 대조</dt><dd><CountUp value={verified} /></dd></div><div><dt>확정 판정</dt><dd><CountUp value={data.coverage.claims_decided} /></dd></div></dl></div>
-    </section>
-
-    <section className="sec sec-cream">
-      <p className="eyebrow-c center">기능</p><h2 className="serif center">검증에 필요한 모든 기능</h2>
-      <div className="features">{features.map(([title, body]) => <article className="card" key={title}><h3>{title}</h3><p>{body}</p></article>)}</div>
-    </section>
-
-    <section className="sec sec-beige">
-      <p className="eyebrow-c">활용 사례</p><h2 className="serif">실무를 위한 설계</h2>
-      <div className="uses">
-        <div className="use"><div className="use-copy"><h3>문장마다 근거 경로를 추적</h3><p>주장 하나에 필요한 입증 요소를 원문 쪽수와 인용으로 연결합니다. 이행 주체, 적용 범위, 외부 검증이 모두 확인되면 규칙엔진이 E3로 판정합니다.</p><Link className="more" to="/demo">분석 결과 보기 →</Link></div><EvidenceTrace /></div>
-        <div className="use reverse"><div className="use-copy"><h3>보고서 한 권의 처리 과정을 한눈에</h3><p>파싱부터 판정까지 단계별 처리량과 시간, 모델 호출 수를 기록합니다. 어디서 막혔는지, 무엇이 확인되지 않았는지 숨기지 않습니다.</p><Link className="more" to="/analyze/replay">처리 과정 보기 →</Link></div><FunnelPreview data={data} /></div>
-        <div className="use"><div className="use-copy"><h3>감사 보고서로 바로 공유</h3><p>판정 분포, 핵심 발견, 주장별 근거를 담은 보고서를 A4 PDF와 JSON·CSV로 내보내 검토 조직과 공유합니다.</p><Link className="more" to="/report/naver">감사 보고서 보기 →</Link></div><ReportPreview data={data} /></div>
-      </div>
+      <p className="hero-note">PDF를 올리면 분석할 쪽을 골라 바로 분석합니다</p>
     </section>
 
     <section className="sec sec-cream">
@@ -222,7 +196,7 @@ function Landing({ data }: { data: Snapshot }) {
   </main>;
 }
 
-function Guide() {
+function Guide({ data }: { data: Snapshot }) {
   const tracks: [string, string][] = [
     ["목표형", "목표연도·수치, 기준값·적용범위, 진척·이행수단을 확인합니다."],
     ["성과형", "수치·단위, 비교기준·산정방법·경계, 외부 검증 연결을 확인합니다."],
@@ -252,6 +226,14 @@ function Guide() {
       <p className="eyebrow-c center">판정 기준</p><h2 className="serif center">주장 유형과 근거 수준</h2>
       <div className="features">{tracks.map(([title, body]) => <article className="card" key={title}><h3>{title}</h3><p>{body}</p></article>)}</div>
       <div className="features">{grades.map(([grade, label, body]) => <article className="card" key={grade}><h3>{grade}</h3><p><strong>{label}</strong></p><p>{body}</p></article>)}</div>
+    </section>
+    <section className="sec sec-beige">
+      <p className="eyebrow-c">활용 사례</p><h2 className="serif">실무를 위한 설계</h2>
+      <div className="uses">
+        <div className="use"><div className="use-copy"><h3>문장마다 근거 경로를 추적</h3><p>주장 하나에 필요한 입증 요소를 원문 쪽수와 인용으로 연결합니다. 이행 주체, 적용 범위, 외부 검증이 모두 확인되면 규칙엔진이 E3로 판정합니다.</p><Link className="more" to="/demo">분석 결과 보기 →</Link></div><EvidenceTrace /></div>
+        <div className="use reverse"><div className="use-copy"><h3>보고서 한 권의 처리 과정을 한눈에</h3><p>파싱부터 판정까지 단계별 처리량과 시간, 모델 호출 수를 기록합니다. 어디서 막혔는지, 무엇이 확인되지 않았는지 숨기지 않습니다.</p><Link className="more" to="/analyze/replay">처리 과정 보기 →</Link></div><FunnelPreview data={data} /></div>
+        <div className="use"><div className="use-copy"><h3>감사 보고서로 바로 공유</h3><p>판정 분포, 핵심 발견, 주장별 근거를 담은 보고서를 A4 PDF와 JSON·CSV로 내보내 검토 조직과 공유합니다.</p><Link className="more" to="/report/naver">감사 보고서 보기 →</Link></div><ReportPreview data={data} /></div>
+      </div>
     </section>
     <section className="sec sec-cream faq">
       <div className="faq-inner">
@@ -373,7 +355,7 @@ function Demo({ data }: { data: Snapshot }) {
   }, [claimId, hash]);
   const counts = { decided: data.claims.filter(c => queueFor(c) === "decided").length, range: data.claims.filter(c => queueFor(c) === "estimated").length, pending: data.claims.filter(c => queueFor(c) === "unverified" || queueFor(c) === "unclassified").length };
   const queueCounts = Object.fromEntries(queues.map(name => [name, data.claims.filter(claim => queueFor(claim) === name).length])) as Record<Queue, number>;
-  return <main className="static-main demo-main"><div className="breadcrumb"><Link to="/">홈</Link><span>/</span> 분석 결과</div><CompanyTabs selected="naver" />
+  return <main className="static-main demo-main"><div className="breadcrumb"><Link to="/">홈</Link><span>/</span> 분석 결과</div>
     <section className="demo-heading"><div><p className="eyebrow">ANALYSIS · 2025</p><h1>분석 사례 · NAVER 2025</h1><p>실제 보고서에서 추출한 주장과 원문 근거, 규칙 판정을 탐색할 수 있습니다.</p><div className="badges"><span className="badge amber">분석 범위: {data.coverage.pages_processed}/{data.coverage.pages_total}쪽</span><span className="badge blue">검토 기록 {delegatedCount(data.claims)}건 · 사용자 최종 검토 전</span></div><Link className="report-link" to="/report/naver">검토 보고서 보기 ↗</Link></div><div className="heading-side"><span>REVIEW STATUS</span><strong>{data.partial ? "부분 실행" : "실행 완료"} · 검토 기록 {delegatedCount(data.claims)}건 <i /></strong><small>검토일 {new Date(data.generated_at).toLocaleDateString("ko-KR", { timeZone: "Asia/Seoul" })}</small></div></section>
     <section className="metrics" aria-label="분석 요약"><div><span>추출 주장</span><strong><CountUp value={data.coverage.claims_discovered} /><small>건</small></strong><p>공시 문장</p></div><div><span>원문 검증</span><strong><CountUp value={data.funnel[1].count} /><small>건</small></strong><p>원문 대조 완료</p></div><div><span>확정 판정</span><strong><CountUp value={counts.decided} /><small>건</small></strong><p>규칙 판정</p></div><div><span>검토 필요</span><strong><CountUp value={data.coverage.claims_needs_review} /><small>건</small></strong><p>범위·보류·미판정</p></div></section>
     <section className="overview-grid"><div className="surface funnel-card"><div className="card-heading"><div><p className="eyebrow">PROCESS FUNNEL</p><h2>처리 흐름</h2></div><span>추출 → 태깅 → 판정</span></div><div className="funnel-list">{data.funnel.map((step, index) => <div className="funnel-row" key={step.label}><span className="step-name"><b>{String(index + 1).padStart(2, "0")}</b>{step.label}</span><div className="bar-track"><div style={{ width: `${Math.max(step.count / data.coverage.claims_discovered * 100, 3)}%` }} /></div><strong>{step.count}</strong></div>)}</div></div>
