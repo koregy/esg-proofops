@@ -395,6 +395,13 @@ def claim_source_policy_for(args):
     return claim_source_policy()
 
 
+def _windows_ocr_option(args, stage: str) -> dict:
+    """Only a chosen NEW-run Windows OCR opt-in reaches the composition."""
+    if getattr(args, "native_windows_ocr", False) and stage == "parse":
+        return {"native_windows_ocr": True}
+    return {}
+
+
 def apply_resume_metadata(args, saved: dict) -> None:
     """Reconstruct create-time inputs on ``args`` from a saved ``pilot.json``.
 
@@ -450,6 +457,7 @@ def apply_resume_metadata(args, saved: dict) -> None:
     args.verify_merged_tables = bool(saved.get("verify_merged_tables", False))
     args.verify_selected_cells = bool(saved.get("verify_selected_cells", False))
     args.native_quote_typography = bool(saved.get("native_quote_typography", False))
+    args.native_windows_ocr = bool(saved.get("native_windows_ocr", False))
     args.repair_table_headers = bool(saved.get("repair_table_headers", False))
     args.verify_claim_spans = bool(saved.get("verify_claim_spans", False))
     args.claim_span_render_resolution = bool(saved.get("claim_span_render_resolution", False))
@@ -502,6 +510,7 @@ def run_live_stages(args, *, tenant_id: str, run_id: str) -> dict:
             verify_paragraphs=args.verify_paragraphs and stage == "parse",
             native_typography_tolerance=args.native_quote_typography and stage == "parse",
             raster_ocr=args.raster_ocr and stage == "parse",
+            **_windows_ocr_option(args, stage),
         )
         try:
             outcome = worker.run_once(tenant_id=tenant, run_id=run_id)
@@ -628,6 +637,13 @@ def main():
     parser.add_argument("--model", choices=["solar-pro3", "solar-pro4"], default="solar-pro3")
     parser.add_argument("--verify-paragraphs", action="store_true")
     parser.add_argument("--native-quote-typography", action="store_true")
+    parser.add_argument(
+        "--native-windows-ocr",
+        action="store_true",
+        help="NEW runs on Windows: corroborate native paragraphs with the pinned Korean "
+        "Windows.Media.Ocr engine (macOS Vision is unavailable off macOS); requires "
+        "--verify-paragraphs, excludes --native-quote-typography/--raster-ocr",
+    )
     table_checks = parser.add_mutually_exclusive_group()
     table_checks.add_argument("--verify-tables", action="store_true")
     table_checks.add_argument("--verify-merged-tables", action="store_true")
@@ -966,6 +982,25 @@ def main():
         parser.error("--raster-ocr requires --verify-paragraphs")
     if args.native_quote_typography and (not args.verify_paragraphs or args.raster_ocr):
         parser.error("--native-quote-typography requires --verify-paragraphs without --raster-ocr")
+    if getattr(args, "native_windows_ocr", False) and (
+        not args.verify_paragraphs or args.raster_ocr or args.native_quote_typography
+    ):
+        parser.error(
+            "--native-windows-ocr requires --verify-paragraphs without --raster-ocr "
+            "or --native-quote-typography"
+        )
+    if getattr(args, "native_windows_ocr", False) and sys.platform != "win32":
+        parser.error("--native-windows-ocr is only available on Windows")
+    if (
+        args.verify_paragraphs
+        and sys.platform == "win32"
+        and not getattr(args, "native_windows_ocr", False)
+    ):
+        print(
+            "note: --verify-paragraphs on Windows leaves rendered text unresolved "
+            "(macOS Vision only); add --native-windows-ocr for a NEW run",
+            file=sys.stderr,
+        )
     raster = (
         raster_settings(max_pages=args.raster_max_pages, max_calls=args.raster_max_calls)
         if args.raster_ocr
@@ -1438,6 +1473,8 @@ def main():
             manifest["claim_span_typography"] = True
         if args.native_quote_typography:
             manifest["native_quote_typography"] = True
+        if getattr(args, "native_windows_ocr", False):
+            manifest["native_windows_ocr"] = True
         if args.extraction_year_notation:
             manifest["extraction_year_notation"] = True
         if args.extraction_context:
@@ -1515,6 +1552,8 @@ def main():
             raise ValueError("pilot selected cell policy changed; create a new state directory")
         if manifest.get("native_quote_typography", False) != args.native_quote_typography:
             raise ValueError("pilot quote typography policy changed; create a new state directory")
+        if manifest.get("native_windows_ocr", False) != getattr(args, "native_windows_ocr", False):
+            raise ValueError("pilot Windows OCR policy changed; create a new state directory")
         if manifest.get("extraction_year_notation", False) != args.extraction_year_notation:
             raise ValueError(
                 "pilot extraction year-notation policy changed; create a new state directory"
@@ -1688,6 +1727,7 @@ def main():
                     verify_paragraphs=args.verify_paragraphs and stage == "parse",
                     native_typography_tolerance=args.native_quote_typography and stage == "parse",
                     raster_ocr=args.raster_ocr and stage == "parse",
+                    **_windows_ocr_option(args, stage),
                 )
 
             worker_thread, worker_stop = start_background(build_stage, c.runs, tenant)

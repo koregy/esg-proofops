@@ -307,6 +307,7 @@ def checkpoint_native_attestation(envelope):
             or not isinstance(typography_proof.get("base_verified_source_ids"), list)
         ):
             raise ParseFailure("NATIVE_PARAGRAPH_CHECKPOINT_INVALID")
+    _checkpoint_windows_ocr(envelope)
     if (
         not isinstance(receipt, dict)
         or receipt.get("schema") != "native_paragraph_attestation_v2"
@@ -323,6 +324,53 @@ def checkpoint_native_attestation(envelope):
     ):
         raise ParseFailure("NATIVE_PARAGRAPH_CHECKPOINT_INVALID")
     return receipt
+
+
+def _checkpoint_windows_ocr(envelope):
+    """Optional NEW-run Windows OCR proof: both keys or neither, never with typography.
+
+    The digest must equal the live policy, which pins the installed engine identity;
+    an unavailable or changed engine therefore fails closed here.
+    """
+    digest = envelope.get("native_paragraph_windows_ocr_policy_sha256")
+    proof = envelope.get("native_paragraph_windows_ocr_proof")
+    if digest is None and proof is None:
+        return
+    if (
+        digest is None
+        or proof is None
+        or envelope.get("native_paragraph_typography_policy_sha256") is not None
+        or envelope.get("native_paragraph_typography_proof") is not None
+        or envelope.get("schema") == "local_parser_checkpoint_v5"
+    ):
+        raise ParseFailure("NATIVE_PARAGRAPH_CHECKPOINT_INVALID")
+    from proofops.adapters.local.windows_ocr import WindowsOcrUnavailable
+    from proofops.adapters.local.windows_rendered_verification import (
+        PROOF_SCHEMA,
+        native_paragraph_windows_ocr_policy,
+    )
+
+    try:
+        expected = canonical_hash(native_paragraph_windows_ocr_policy())
+    except WindowsOcrUnavailable:
+        raise ParseFailure("NATIVE_PARAGRAPH_WINDOWS_OCR_UNAVAILABLE") from None
+    if (
+        digest != expected
+        or not isinstance(proof, dict)
+        or proof.get("schema") != PROOF_SCHEMA
+        or proof.get("policy_sha256") != expected
+        or not isinstance(proof.get("artifact_sha256"), str)
+        or canonical_hash({k: v for k, v in proof.items() if k != "artifact_sha256"})
+        != proof["artifact_sha256"]
+        or proof.get("tenant_id") != envelope.get("tenant_id")
+        or proof.get("document_version_id") != envelope.get("document_version_id")
+        or proof.get("parse_manifest_id") != envelope.get("parse_manifest_id")
+        or proof.get("source_sha256") != envelope.get("source_sha256")
+        or proof.get("output_graph_sha256") != envelope.get("graph_sha256")
+        or proof.get("native_attestation_sha256")
+        != canonical_hash(envelope.get("native_paragraph_attestation"))
+    ):
+        raise ParseFailure("NATIVE_PARAGRAPH_WINDOWS_OCR_POLICY_MISMATCH")
 
 
 def validate_automatic_note_reviews(graph, artifacts, policy, *, selected_pages=None):
@@ -524,6 +572,16 @@ def load_run_evidence(store, uploads, parser, *, tenant_id: str, run_id: str):
             != typography_proof.get("promoted_source_ids")
         ):
             raise ParseFailure("NATIVE_PARAGRAPH_TYPOGRAPHY_PROOF_MISMATCH")
+    windows_proof = envelope.get("native_paragraph_windows_ocr_proof")
+    if windows_proof is not None:
+        from proofops.adapters.local.windows_rendered_verification import replay_windows_ocr
+
+        try:
+            graph = replay_windows_ocr(
+                windows_proof, native_receipt, pre_native_graph, source.content, tenant_id=tenant_id
+            )
+        except (ValueError, TypeError, KeyError, RuntimeError):
+            raise ParseFailure("NATIVE_PARAGRAPH_WINDOWS_OCR_REPLAY_INVALID") from None
     if note_reviews or policy is not None or native_receipt is not None:
         if canonical_hash(asdict(graph)) != envelope["graph_sha256"]:
             raise ParseFailure("NOTE_REVIEW_GRAPH_MISMATCH")
@@ -538,6 +596,7 @@ def load_run_evidence(store, uploads, parser, *, tenant_id: str, run_id: str):
         note_reviews=note_reviews,
         native_attestation=native_receipt,
         typography_proof=typography_proof or recomputed_typography_proof,
+        windows_ocr_proof=windows_proof,
         input_hash=snapshot["input_hash"],
         parse_checkpoint_sha256=sha256(payload).hexdigest(),
     )

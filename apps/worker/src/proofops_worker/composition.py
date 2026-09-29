@@ -45,11 +45,23 @@ def build_composition(
     verify_paragraphs: bool = False,
     native_typography_tolerance: bool = False,
     raster_ocr: bool = False,
+    native_windows_ocr: bool = False,
 ) -> LocalParserRunner | LocalExtractRunner | LocalTagRunner:
     if type(native_typography_tolerance) is not bool or (
         native_typography_tolerance and (not verify_paragraphs or stage != "parse" or raster_ocr)
     ):
         raise ValueError("NATIVE_TYPOGRAPHY_REQUIRE_NATIVE_PARSE_WITHOUT_RASTER")
+    if type(native_windows_ocr) is not bool or (
+        native_windows_ocr
+        and (
+            not verify_paragraphs
+            or stage != "parse"
+            or raster_ocr
+            or native_typography_tolerance
+            or sys.platform != "win32"
+        )
+    ):
+        raise ValueError("NATIVE_WINDOWS_OCR_REQUIRE_WINDOWS_NATIVE_PARSE_ONLY")
     if type(raster_ocr) is not bool or (
         raster_ocr
         and (type(verify_paragraphs) is not bool or not verify_paragraphs or stage != "parse")
@@ -110,6 +122,7 @@ def build_composition(
         profile=profile,
         verify_paragraphs=verify_paragraphs,
         native_typography_tolerance=native_typography_tolerance,
+        native_windows_ocr=native_windows_ocr,
         note_client=note_client,
         note_ledger=note_ledger,
         raster_probe=raster_probe,

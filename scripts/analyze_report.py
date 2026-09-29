@@ -26,7 +26,8 @@ Delegation reuses the reviewed pilot flags: verify-paragraphs, verify-claim-span
 one of verify-merged-tables (legacy default) / --verify-selected-cells,
 repair-table-headers, model ``solar-pro3``, extraction ``--max-calls 8`` with an
 optional ``--extraction-total-calls`` cap, ``--live-tagging --tagging-max-calls 48``
-with optional ``--native-quote-typography``, ``--live-relations`` (aliased as
+with optional ``--native-quote-typography`` or (Windows) ``--native-windows-ocr``,
+``--live-relations`` (aliased as
 ``--evidence-relations``), ``--preliminary-context``, and ``--ai-project-review``, plus opt-in
 ``--extraction-year-notation`` (off by default).
 ``--serve`` is a separate explicit opt-in (never auto-enabled) to avoid hanging
@@ -406,6 +407,7 @@ def build_pilot_argv(
     tagging_max_calls: int = TAGGING_MAX_CALLS,
     verify_selected_cells: bool = False,
     native_quote_typography: bool = False,
+    native_windows_ocr: bool = False,
     claim_span_typography: bool = False,
     live_relations: bool = False,
     capacity_refresh: bool = False,
@@ -474,8 +476,12 @@ def build_pilot_argv(
         argv += ["--company-name", company_name, "--company-registration", company_registration]
     if extraction_total_calls is not None:
         argv += ["--extraction-total-calls", str(extraction_total_calls)]
+    if native_quote_typography and native_windows_ocr:
+        raise PlanError("--native-windows-ocr cannot be combined with --native-quote-typography")
     if native_quote_typography:
         argv.append("--native-quote-typography")
+    if native_windows_ocr:
+        argv.append("--native-windows-ocr")
     if claim_span_typography:
         argv += [
             "--claim-span-render-resolution",
@@ -629,6 +635,7 @@ def plan_run(args: argparse.Namespace) -> dict:
     _validate_extraction_total(EXTRACTION_MAX_CALLS, extraction_total_calls)
     verify_selected_cells = bool(getattr(args, "verify_selected_cells", False))
     native_quote_typography = bool(getattr(args, "native_quote_typography", False))
+    native_windows_ocr = bool(getattr(args, "native_windows_ocr", False))
     claim_span_typography = bool(getattr(args, "claim_span_typography", False))
     live_relations = bool(getattr(args, "live_relations", False))
     preliminary_actor_role = bool(getattr(args, "preliminary_actor_role", False))
@@ -658,6 +665,7 @@ def plan_run(args: argparse.Namespace) -> dict:
         tagging_max_calls=tagging_max_calls,
         verify_selected_cells=verify_selected_cells,
         native_quote_typography=native_quote_typography,
+        native_windows_ocr=native_windows_ocr,
         claim_span_typography=claim_span_typography,
         live_relations=live_relations,
         capacity_refresh=bool(getattr(args, "capacity_refresh", False)),
@@ -701,6 +709,7 @@ def plan_run(args: argparse.Namespace) -> dict:
         "tagging_max_calls": tagging_max_calls,
         "verify_selected_cells": verify_selected_cells,
         "native_quote_typography": native_quote_typography,
+        "native_windows_ocr": native_windows_ocr,
         "claim_span_typography": claim_span_typography,
         "live_relations": live_relations,
         "capacity_refresh": bool(getattr(args, "capacity_refresh", False)),
@@ -756,6 +765,7 @@ def print_plan(plan: dict) -> None:
         pilot_opts.append(f"extraction-total-calls={plan['extraction_total_calls']}")
     for flag in (
         "native_quote_typography",
+        "native_windows_ocr",
         "claim_span_typography",
         "live_relations",
         "preliminary_context",
@@ -917,6 +927,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Pass the pilot's --native-quote-typography (requires its built-in "
         "--verify-paragraphs without raster OCR, which this launcher always uses).",
+    )
+    parser.add_argument(
+        "--native-windows-ocr",
+        action="store_true",
+        help="Windows NEW runs: pass the pilot's --native-windows-ocr so native paragraphs "
+        "are corroborated by the pinned Korean Windows.Media.Ocr engine (macOS Vision is "
+        "unavailable off macOS). Not combinable with --native-quote-typography.",
     )
     parser.add_argument(
         "--claim-span-typography",

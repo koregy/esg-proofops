@@ -60,6 +60,7 @@ class LocalParserRunner:
         raster_probe=None,
         raster_ledger=None,
         native_typography_tolerance: bool = False,
+        native_windows_ocr: bool = False,
     ):
         if not uploads.local_synthetic or not isinstance(profile, ParserProfile):
             raise ValueError("local parser requires local storage and executable configuration")
@@ -69,6 +70,10 @@ class LocalParserRunner:
             raise ValueError("native_typography_tolerance must be a boolean")
         if native_typography_tolerance and not verify_paragraphs:
             raise ValueError("native_typography_tolerance requires verify_paragraphs")
+        if type(native_windows_ocr) is not bool:
+            raise ValueError("native_windows_ocr must be a boolean")
+        if native_windows_ocr and (not verify_paragraphs or native_typography_tolerance):
+            raise ValueError("native_windows_ocr requires verify_paragraphs without typography")
         self.store, self.uploads, self.parser = store, uploads, parser
         self.profile, self.telemetry, self.clock = profile, telemetry, clock
         self.verify_paragraphs = verify_paragraphs
@@ -80,6 +85,10 @@ class LocalParserRunner:
         # native_paragraph_typography.py) after the unchanged base replay.
         self.native_typography_tolerance = native_typography_tolerance
         self.last_typography_proof = None
+        # Opt-in NEW-run Windows.Media.Ocr corroboration (windows_rendered_verification.py):
+        # a separately hashed proof beside the unchanged base receipt and policy.
+        self.native_windows_ocr = native_windows_ocr
+        self.last_windows_ocr_proof = None
         self.note_client = note_client
         self.note_ledger = (
             note_ledger if note_ledger is not None else getattr(note_client, "ledger", None)
@@ -212,6 +221,8 @@ class LocalParserRunner:
                         # promotions, so committing both would publish a
                         # checkpoint no reader can reproduce. Fail closed.
                         raise StageFailure("NATIVE_TYPOGRAPHY_RASTER_UNSUPPORTED", usage=usage)
+                    if raster_enabled and self.native_windows_ocr:
+                        raise StageFailure("NATIVE_WINDOWS_OCR_RASTER_UNSUPPORTED", usage=usage)
                     if (
                         message.tenant_id,
                         message.run_id,
@@ -308,6 +319,23 @@ class LocalParserRunner:
                                 source.content,
                                 tenant_id=tenant_id,
                             )
+                        elif self.native_windows_ocr:
+                            from proofops.adapters.local.windows_ocr import (
+                                WindowsOcrUnavailable,
+                            )
+                            from proofops.adapters.local.windows_rendered_verification import (
+                                apply_windows_ocr,
+                            )
+
+                            # Like typography: start from the attested-input graph.
+                            try:
+                                graph, self.last_windows_ocr_proof = apply_windows_ocr(
+                                    native_receipt, graph, source.content, tenant_id=tenant_id
+                                )
+                            except WindowsOcrUnavailable:
+                                raise StageFailure(
+                                    "NATIVE_WINDOWS_OCR_UNAVAILABLE", usage=usage
+                                ) from None
                         else:
                             graph = replay_native_sources(
                                 native_receipt, graph, source.content, tenant_id=tenant_id
@@ -443,6 +471,12 @@ class LocalParserRunner:
                                     native_paragraph_typography_policy()
                                 ),
                                 native_paragraph_typography_proof=self.last_typography_proof,
+                            )
+                        if self.native_windows_ocr:
+                            proof = self.last_windows_ocr_proof
+                            payload.update(
+                                native_paragraph_windows_ocr_policy_sha256=proof["policy_sha256"],
+                                native_paragraph_windows_ocr_proof=proof,
                             )
                     if raster_enabled:
                         payload.update(
