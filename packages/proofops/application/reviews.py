@@ -49,6 +49,12 @@ from proofops.application.tagging.consensus import (
     ConsensusResult,
     form_consensus,
 )
+from proofops.application.tagging.numeric_link import POLICY as NUMERIC_POLICY
+from proofops.application.tagging.numeric_link import (
+    NumericLinkRejected,
+    derive_numeric_fact,
+    replay_numeric_receipt,
+)
 from proofops.application.tagging.report_level_link import replay_report_level_link, strict_fallback
 from proofops.application.tagging.service import TagRun
 from proofops.domain.audit import AuditConflict
@@ -733,6 +739,7 @@ class ReviewService:
         context_review: dict | None = None,
         assurance_review: dict | None = None,
         absence_review: dict | None = None,
+        numeric_review: dict | None = None,
         reopen: bool = False,
     ):
         """Trusted backend-only operation for explicit user-delegated AI review.
@@ -777,6 +784,7 @@ class ReviewService:
             context_review=context_review,
             assurance_review=assurance_review,
             absence_review=absence_review,
+            numeric_review=numeric_review,
             reopen=reopen,
         )
 
@@ -798,6 +806,7 @@ class ReviewService:
         context_review=None,
         assurance_review=None,
         absence_review=None,
+        numeric_review=None,
         reopen=False,
     ):
         if not isinstance(actor, AuthContext) or not actor.has_capability("reviewer"):
@@ -1002,6 +1011,8 @@ class ReviewService:
                 if context_review is not None
                 else (prior_context.get("request") if isinstance(prior_context, dict) else None)
             )
+            if numeric_review is not None and context_request is not None:
+                raise ReviewRejected("NUMERIC_CONFLICTS_CONTEXT_REVIEW", 409)
             context_receipt = None
             if context_request is not None:
                 from proofops.application.claim_context_review import review_facility_context
@@ -1096,6 +1107,50 @@ class ReviewService:
                 or body_p4.credited_from is not None
             ):
                 raise ReviewRejected("ASSURANCE_ELEMENT_MISMATCH")
+            # P6 (numeric-link-v1): only a replayed deterministic comparison over a
+            # verified table observation can supply the prior fact P6 requires.
+            # Undecided checks produce no fact; a carried receipt must replay exactly.
+            numeric_fact, numeric_receipt = None, None
+            body_p6 = next((e for e in elements if e.element_id == "P6"), None)
+            prior_numeric = initial.get("numeric_review")
+            if prior_numeric is not None and not reopen:
+                raise ReviewRejected("NUMERIC_REPLAY_MISMATCH", 409)
+            if numeric_review is not None:
+                if body["track"] != "performance":
+                    raise ReviewRejected("NUMERIC_TRACK_MISMATCH")
+                try:
+                    numeric_fact, numeric_receipt = derive_numeric_fact(inputs, numeric_review)
+                except NumericLinkRejected as exc:
+                    raise ReviewRejected(str(exc), 409) from exc
+                if numeric_fact is None:
+                    raise ReviewRejected("NUMERIC_NOT_DECIDED")
+            elif (
+                isinstance(prior_numeric, dict)
+                and body["track"] == "performance"
+                and body_p6 is not None
+                and body_p6.reason_code == NUMERIC_POLICY
+            ):
+                try:
+                    numeric_fact, numeric_receipt = replay_numeric_receipt(inputs, prior_numeric)
+                except NumericLinkRejected as exc:
+                    raise ReviewRejected("NUMERIC_REPLAY_MISMATCH", 409) from exc
+                numeric_receipt = {
+                    **numeric_receipt,
+                    "carried_from": prior_numeric.get("carried_from", prior_provenance),
+                }
+            if numeric_fact is not None and context_request is not None:
+                # A facility-context review forces P6 unknown (no bound table). A derived
+                # numeric fact on the same revision would publish a head whose receipt
+                # disagrees with P6, so the combination is refused before any write.
+                raise ReviewRejected("NUMERIC_CONFLICTS_CONTEXT_REVIEW", 409)
+            if numeric_fact is not None and (
+                body_p6 is None
+                or body_p6.state != numeric_fact.state
+                or body_p6.reason_code != NUMERIC_POLICY
+                or body_p6.credited_from is not None
+                or body_p6.normalized_value != numeric_fact.normalized_value
+            ):
+                raise ReviewRejected("NUMERIC_ELEMENT_MISMATCH")
             absence_facts: dict = {}
             absence_receipt = None
             prior_absence = initial.get("absence_review")
@@ -1156,6 +1211,14 @@ class ReviewService:
                     previous = [assurance_fact]
                 if element.element_id in absence_facts:
                     previous = list(absence_facts[element.element_id])
+                if element.element_id == "P6" and numeric_fact is not None:
+                    previous = [numeric_fact]
+                if element.reason_code == NUMERIC_POLICY and (
+                    element.element_id != "P6" or numeric_fact is None
+                ):
+                    # The policy marker is only valid on a derived P6 with its receipt;
+                    # otherwise every consumer would reject the head (NUMERIC_PROOF_MISSING).
+                    raise ReviewRejected("NUMERIC_PROOF_REQUIRED")
                 report_level = (
                     element.state == "present"
                     and element.reason_code is not None
@@ -1252,6 +1315,19 @@ class ReviewService:
                     ):
                         raise ReviewRejected("COVERAGE_OR_APPLICABILITY_REQUIRED")
                 scope = "local_claim"
+                if element.state == "conflict" and element.element_id == "P6":
+                    # A numeric conflict is a computed result, like present: only an
+                    # equal prior fact (numeric-link-v1 or an already-stored revision)
+                    # may carry it; a typed conflict is never accepted on its own.
+                    if not all(
+                        f
+                        and f.state == "conflict"
+                        and f.evidence_refs == refs
+                        and f.normalized_value == element.normalized_value
+                        for f in previous
+                    ):
+                        raise ReviewRejected("DETERMINISTIC_CHECK_REQUIRED")
+                    scope = previous[0].source_scope
                 if element.state == "present":
                     if element.element_id in ("P4", "P6"):
                         # Dedicated assurance/numeric results cannot be typed into existence.
@@ -1428,6 +1504,8 @@ class ReviewService:
                 tag["assurance_review"] = assurance_receipt
             if absence_receipt is not None:
                 tag["absence_review"] = absence_receipt
+            if numeric_receipt is not None:
+                tag["numeric_review"] = numeric_receipt
             if extra_tag:
                 tag.update(extra_tag)
             decision_record = dict(
@@ -1451,6 +1529,8 @@ class ReviewService:
                 trusted_options["assurance_review"] = assurance_review
             if absence_review is not None:
                 trusted_options["absence_review"] = absence_review
+            if numeric_review is not None:
+                trusted_options["numeric_review"] = numeric_review
             # Every supplied trusted option joins the retry identity on EVERY
             # callable surface, not only when an AI provenance label is present:
             # a same-key retry with a changed receipt must conflict, never replay.

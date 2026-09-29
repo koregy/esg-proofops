@@ -44,6 +44,13 @@ from proofops.application.tagging.assurance_link import (
     AssuranceLinkRejected,
     replay_assurance_receipt,
 )
+from proofops.application.tagging.numeric_link import FACT as NUMERIC_FACT
+from proofops.application.tagging.numeric_link import POLICY as NUMERIC_POLICY
+from proofops.application.tagging.numeric_link import POLICY_HASH as NUMERIC_POLICY_HASH
+from proofops.application.tagging.numeric_link import (
+    NumericLinkRejected,
+    replay_numeric_receipt,
+)
 from proofops.domain.provenance import canonical_hash
 
 _STATEMENT_KIND = "assurance_statement"
@@ -330,10 +337,104 @@ class AbsenceProofVerifier:
         return proofs
 
 
+def check_numeric_integrity(tag) -> bool:
+    """Receipt-internal pins of a ``numeric-link-v1`` head. Returns receipt presence.
+
+    The stored receipt, the P6 element and the ``numerical_check`` fact must agree;
+    a claimed state or boolean is never trusted without the full source replay that
+    ``NumericProofVerifier`` performs outside the consumer transaction.
+    """
+    receipt = tag.get("numeric_review") if isinstance(tag, dict) else None
+    if receipt is None:
+        if isinstance(tag, dict) and (
+            any(e.get("reason_code") == NUMERIC_POLICY for e in tag.get("elements") or ())
+            or any(
+                f.get("name") == NUMERIC_FACT and f.get("state") in ("present", "conflict")
+                for f in (tag.get("confirmed_tags") or {}).get("facts") or ()
+            )
+        ):
+            raise AssuranceHeadRejected("NUMERIC_PROOF_MISSING")
+        return False
+    try:
+        stored = {k: v for k, v in receipt.items() if k not in ("receipt_sha256", "carried_from")}
+        request = receipt["request"]
+        pinned_input = tag.get("input_snapshot_sha256") or (
+            canonical_hash(tag["inputs"]) if "inputs" in tag else None
+        )
+        confirmed = tag.get("confirmed_tags") or {}
+        facts = [f for f in confirmed.get("facts") or () if f.get("name") == NUMERIC_FACT]
+        element = next((e for e in tag.get("elements") or () if e.get("element_id") == "P6"), None)
+        state = receipt.get("fact_state")
+        ok = (
+            receipt.get("receipt_sha256") == canonical_hash(stored)
+            and (receipt.get("policy"), receipt.get("policy_hash"))
+            == (NUMERIC_POLICY, NUMERIC_POLICY_HASH)
+            and (request.get("policy"), request.get("policy_hash"))
+            == (NUMERIC_POLICY, NUMERIC_POLICY_HASH)
+            and receipt.get("request_sha256") == canonical_hash(request)
+            and request.get("input_snapshot_sha256") == pinned_input
+            and receipt["identity"]["claim_id"] == confirmed.get("claim_id")
+            and state in ("present", "conflict")
+            and element is not None
+            and element["state"] == state
+            and element["reason_code"] == NUMERIC_POLICY
+            and element["normalized_value"] == receipt["result"]["status"]
+            and element["evidence_refs"] == receipt["evidence_refs"]
+            and element.get("credited_from") is None
+            and len(facts) == 1
+            and facts[0]["state"] == state
+            and facts[0]["source_scope"] == "computed_check"
+            and facts[0]["normalized_value"] == receipt["result"]["status"]
+            and facts[0]["evidence_refs"] == receipt["evidence_refs"]
+        )
+    except (KeyError, TypeError, AttributeError, ValueError):
+        ok = False
+    if not ok:
+        raise AssuranceHeadRejected("NUMERIC_HEAD_REJECTED")
+    return True
+
+
+class NumericProofVerifier:
+    """Full, transaction-free replay of ``numeric-link-v1`` receipts on current heads.
+
+    Every replay recomputes the table observations and the pure numeric check from
+    the review inputs' original graph and pinned loader snapshot.
+    """
+
+    receipt_key = "numeric_review"
+
+    def __init__(self, jobs, *, load_inputs: Callable):
+        self.jobs, self.load_inputs = jobs, load_inputs
+
+    def prove(self, tenant_id, run_id, claim_ids: Iterable[str] | None = None) -> dict:
+        heads = _marked_heads(self.jobs, tenant_id, run_id, claim_ids, _NUMERIC_MARKER)
+        proofs: dict = {}
+        for claim_id, tag in heads.items():
+            try:
+                if not check_numeric_integrity(tag):
+                    continue
+                inputs = self.load_inputs(tenant_id, run_id, claim_id)
+                replay_numeric_receipt(inputs, tag["numeric_review"])
+                proofs[claim_id] = dict(
+                    tag_revision=tag["tag_revision"],
+                    tag_sha256=canonical_hash(tag),
+                    receipt_sha256=tag["numeric_review"]["receipt_sha256"],
+                )
+            except AssuranceHeadRejected as exc:
+                proofs[claim_id] = str(exc)
+            except NumericLinkRejected as exc:
+                proofs[claim_id] = f"NUMERIC_REDERIVATION_FAILED:{exc}"
+            except (ValueError, KeyError, TypeError, OSError) as exc:
+                proofs[claim_id] = f"NUMERIC_REDERIVATION_FAILED:{type(exc).__name__}"
+        return proofs
+
+
 _ABSENCE_MARKER = b'"absence_review":'
+_NUMERIC_MARKER = b'"numeric_review":'
 _VERIFIER_ATTRIBUTES = {
     "assurance_review": ("assurance_verifier", "ASSURANCE_LOADER_UNAVAILABLE"),
     "absence_review": ("absence_verifier", "ABSENCE_EVIDENCE_UNAVAILABLE"),
+    "numeric_review": ("numeric_verifier", "NUMERIC_VERIFIER_UNAVAILABLE"),
 }
 
 
@@ -377,6 +478,7 @@ def check_assurance_tag(db, jobs, tenant_id, run_id, tag) -> None:
     present = {
         "assurance_review": check_integrity(db, jobs, tenant_id, run_id, tag),
         "absence_review": check_absence_integrity(tag),
+        "numeric_review": check_numeric_integrity(tag),
     }
     if not any(present.values()):
         return

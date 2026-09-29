@@ -19,7 +19,11 @@ from pathlib import Path
 from typing import Any
 
 from proofops.adapters.local.analysis_store import LocalAnalysisStore
-from proofops.adapters.local.assurance_head import AbsenceProofVerifier, AssuranceProofVerifier
+from proofops.adapters.local.assurance_head import (
+    AbsenceProofVerifier,
+    AssuranceProofVerifier,
+    NumericProofVerifier,
+)
 from proofops.adapters.local.assurance_store import LocalAssuranceStore
 from proofops.adapters.local.claim_store import LocalClaimStore
 from proofops.adapters.local.classification_store import LocalSQLiteClassificationStore
@@ -160,6 +164,10 @@ def build_composition() -> ApiComposition:
     )
     runs.store.jobs.absence_verifier = AbsenceProofVerifier(
         runs.store.jobs, load_inputs=tags.load_inputs, evidence=search_coverage
+    )
+    # numeric-link-v1 P6 heads replay the table observation + numeric check from source.
+    runs.store.jobs.numeric_verifier = NumericProofVerifier(
+        runs.store.jobs, load_inputs=tags.load_inputs
     )
     return ApiComposition(
         proofops=proofops_composition,

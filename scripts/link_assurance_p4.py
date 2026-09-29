@@ -55,11 +55,16 @@ def compose(database_path: Path) -> dict:
     """Real local composition; tests replace this with the same shape."""
     from hashlib import sha256
 
-    from proofops.adapters.local.assurance_head import AssuranceProofVerifier
+    from proofops.adapters.local.assurance_head import (
+        AbsenceProofVerifier,
+        AssuranceProofVerifier,
+        NumericProofVerifier,
+    )
     from proofops.adapters.local.assurance_store import LocalAssuranceStore
     from proofops.adapters.local.review_store import LocalSQLiteReviewStore
     from proofops.adapters.local.rulepack_store import RulePackSqliteStore
     from proofops.adapters.local.run_store import LocalSQLiteRunStore
+    from proofops.adapters.local.search_coverage_store import LocalSearchCoverageStore, run_loader
     from proofops.adapters.local.tag_store import LocalTagStore
     from proofops.adapters.parsing.opendataloader import OpenDataLoaderParser
     from proofops.application.registry import Registry, RulePackChoice
@@ -89,11 +94,17 @@ def compose(database_path: Path) -> dict:
     parser = OpenDataLoaderParser(database_path.parent / "parser-prepared")
     tags = LocalTagStore(runs, uploads, parser)
     statements = LocalAssuranceStore(runs, uploads, parser)
+    coverage = LocalSearchCoverageStore(
+        database_path.parent / "search-coverage", run_loader(runs, uploads, parser)
+    )
+    # Re-reviewing a mixed head replays every carried receipt in build(), so the
+    # service needs the same trusted loaders the consumer verifiers use.
     service = ReviewService(
         LocalSQLiteReviewStore(runs.jobs),
         load_inputs=tags.load_inputs,
         verify_context_sources=tags.verify_context_sources,
         load_assurance_statement=statements.load,
+        search_coverage=coverage,
     )
 
     def source_digest(tenant, version):
@@ -105,6 +116,10 @@ def compose(database_path: Path) -> dict:
         load_statement=statements.load,
         source_digest=source_digest,
     )
+    runs.jobs.absence_verifier = AbsenceProofVerifier(
+        runs.jobs, load_inputs=tags.load_inputs, evidence=coverage
+    )
+    runs.jobs.numeric_verifier = NumericProofVerifier(runs.jobs, load_inputs=tags.load_inputs)
     return dict(
         service=service,
         load_inputs=tags.load_inputs,

@@ -31,6 +31,7 @@ import argparse
 import json
 import re
 import sys
+from hashlib import sha256
 from pathlib import Path
 from uuid import UUID
 
@@ -65,7 +66,12 @@ def _parse_args(argv):
 
 def compose(database_path: Path, store_root: Path | None) -> dict:
     """Real local composition; tests replace this with the same shape."""
-    from proofops.adapters.local.assurance_head import AbsenceProofVerifier
+    from proofops.adapters.local.assurance_head import (
+        AbsenceProofVerifier,
+        AssuranceProofVerifier,
+        NumericProofVerifier,
+    )
+    from proofops.adapters.local.assurance_store import LocalAssuranceStore
     from proofops.adapters.local.claim_store import LocalClaimStore
     from proofops.adapters.local.review_store import LocalSQLiteReviewStore
     from proofops.adapters.local.rulepack_store import RulePackSqliteStore
@@ -108,10 +114,23 @@ def compose(database_path: Path, store_root: Path | None) -> dict:
     runs.jobs.absence_verifier = AbsenceProofVerifier(
         runs.jobs, load_inputs=tags.load_inputs, evidence=coverage
     )
+    assurance = LocalAssuranceStore(runs, uploads, parser)
+    runs.jobs.assurance_verifier = AssuranceProofVerifier(
+        runs.jobs,
+        load_inputs=tags.load_inputs,
+        load_statement=assurance.load,
+        source_digest=lambda tenant, version: sha256(
+            uploads.read_original(tenant, version)
+        ).hexdigest(),
+    )
+    runs.jobs.numeric_verifier = NumericProofVerifier(runs.jobs, load_inputs=tags.load_inputs)
+    # Re-reviewing a mixed head replays every carried receipt in build(), so the
+    # service needs the same trusted loaders the consumer verifiers use.
     service = ReviewService(
         LocalSQLiteReviewStore(runs.jobs),
         load_inputs=tags.load_inputs,
         verify_context_sources=tags.verify_context_sources,
+        load_assurance_statement=assurance.load,
         search_coverage=coverage,
     )
     return dict(
