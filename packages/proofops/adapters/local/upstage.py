@@ -12,10 +12,14 @@ Separately, create_session_ledger() (scripts/authorize_upstage_session.py) can
 create a NEW ledger that carries one explicit additional-current-session grant
 (<= USD30) as its entire cap; prior cumulative usage stays "unknown" and legacy
 ledgers without that table keep the historical flow unchanged.
+amend_session_total() (scripts/amend_upstage_session.py) appends an audited,
+hash-chained increase of that session's total cap without touching the grant,
+the recorded costs/reservations or the original expiry.
 """
 
 from __future__ import annotations
 
+import hashlib
 import http.client
 import json
 import os
@@ -325,8 +329,262 @@ def read_session_grant(db) -> dict | None:
 
 
 def session_grant_limit(db) -> Decimal | None:
+    """Effective session cap: the original grant, or its latest valid amendment."""
     grant = read_session_grant(db)
-    return None if grant is None else Decimal(grant["authorized_usd"])
+    if grant is None:
+        if _has_table(db, "probe_session_amendments"):
+            raise ValueError("BUDGET_POLICY_MISMATCH")
+        return None
+    amendments = read_session_amendments(db, grant)
+    if amendments:
+        return Decimal(amendments[-1]["new_total_usd"])
+    return Decimal(grant["authorized_usd"])
+
+
+# Same-session total-cap amendments (opt-in; absent table == no amendment).
+# Each row is append-only, hash-chained to the original grant and the previous
+# amendment, and only raises the gross total within the USD30 hard ceiling. The
+# original grant row, every call cost/reservation and the original expiry stay
+# unchanged. A user-declared entitlement is recorded as unverified metadata: it
+# never lowers price estimates, never zeroes costs and never lifts the cap.
+SESSION_AMENDMENT_SCHEMA = "upstage-session-amendment-v1"
+SESSION_AMENDMENT_FIXED = {
+    "schema": SESSION_AMENDMENT_SCHEMA,
+    "kind": "total-cap-increase",
+    "scope": SESSION_GRANT_SCOPE,
+    "amount_basis": SESSION_GRANT_FIXED["amount_basis"],
+    "cost_estimate_basis": "standard-price-snapshot-gross",
+    "prior_cumulative_usage": "unknown",
+    "preserves_original_grant": True,
+    "preserves_costs_and_reservations": True,
+    "hard_ceiling_usd": str(GENERAL_CEILING_USD),
+}
+_SESSION_AMENDMENT_KEYS = frozenset(SESSION_AMENDMENT_FIXED) | {
+    "seq",
+    "grant_sha256",
+    "previous_sha256",
+    "previous_total_usd",
+    "new_total_usd",
+    "reason",
+    "authorized_by",
+    "authorized_at",
+    "recorded_at",
+    "expires_at",
+    "committed_or_reserved_at_amendment_usd",
+    "calls_at_amendment",
+    "unsettled_at_amendment",
+    "declared_entitlement",
+}
+ENTITLEMENT_SERVICES = frozenset({"solar-pro2", "solar-pro3", "document-parse"})
+ENTITLEMENT_FIXED = {
+    "declared_by": "user",
+    "verification": "user-declared-not-provider-verified",
+    "changes_cap": False,
+    "changes_cost_estimates": False,
+    "paid_fallback_when_cap_reached": False,
+}
+_ENTITLEMENT_KEYS = frozenset(ENTITLEMENT_FIXED) | {"statement", "services"}
+_AMENDMENT_DDL = (
+    "CREATE TABLE probe_session_amendments "
+    "(seq INTEGER PRIMARY KEY CHECK (seq >= 1), body TEXT NOT NULL)",
+    "CREATE TRIGGER probe_session_amendments_no_update BEFORE UPDATE "
+    "ON probe_session_amendments BEGIN SELECT RAISE(ABORT, 'append-only'); END",
+    "CREATE TRIGGER probe_session_amendments_no_delete BEFORE DELETE "
+    "ON probe_session_amendments BEGIN SELECT RAISE(ABORT, 'append-only'); END",
+)
+
+
+def _has_table(db, name: str) -> bool:
+    return bool(
+        db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone()
+    )
+
+
+def _text_sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _bounded_text(value, limit: int, code: str) -> str:
+    if not isinstance(value, str) or not value.strip() or len(value.strip()) > limit:
+        raise ValueError(code)
+    return value.strip()
+
+
+def _entitlement(statement, services) -> dict | None:
+    if statement is None and not services:
+        return None
+    statement = _bounded_text(statement, 512, "ENTITLEMENT_INVALID")
+    if (
+        not isinstance(services, list | tuple)
+        or not services
+        or len(set(services)) != len(services)
+        or not set(services) <= ENTITLEMENT_SERVICES
+    ):
+        raise ValueError("ENTITLEMENT_INVALID")
+    return {**ENTITLEMENT_FIXED, "statement": statement, "services": sorted(services)}
+
+
+def _grant_row_text(db) -> str:
+    return db.execute("SELECT body FROM probe_session_grant WHERE id=1").fetchone()[0]
+
+
+def read_session_amendments(db, grant: dict | None = None) -> list[dict]:
+    """Validate the amendment chain against its original grant; fail closed."""
+    if grant is None:
+        grant = read_session_grant(db)
+    if not _has_table(db, "probe_session_amendments"):
+        return []
+    if grant is None:
+        raise ValueError("BUDGET_POLICY_MISMATCH")
+    try:
+        grant_sha = _text_sha256(_grant_row_text(db))
+        previous_sha, previous_total = grant_sha, Decimal(grant["authorized_usd"])
+        previous_recorded = _aware_timestamp(grant["recorded_at"])
+        approved_floor = _aware_timestamp(grant["authorized_at"])
+        expires = _aware_timestamp(grant["expires_at"])
+        result = []
+        rows = db.execute("SELECT seq, body FROM probe_session_amendments ORDER BY seq").fetchall()
+        for index, (seq, text) in enumerate(rows, start=1):
+            if seq != index or not isinstance(text, str):
+                raise ValueError
+            body = json.loads(text)
+            if (
+                not isinstance(body, dict)
+                or set(body) != _SESSION_AMENDMENT_KEYS
+                or any(body[key] != value for key, value in SESSION_AMENDMENT_FIXED.items())
+                or text != _canonical_json(body)
+                or body["seq"] != seq
+                or body["grant_sha256"] != grant_sha
+                or body["previous_sha256"] != previous_sha
+                or body["previous_total_usd"] != str(previous_total)
+                or body["expires_at"] != grant["expires_at"]
+            ):
+                raise ValueError
+            new_total = _session_amount(body["new_total_usd"])
+            if body["new_total_usd"] != str(new_total) or new_total <= previous_total:
+                raise ValueError
+            _bounded_text(body["reason"], 512, "")
+            _bounded_text(body["authorized_by"], 128, "")
+            if body["reason"] != body["reason"].strip():
+                raise ValueError
+            approved = _aware_timestamp(body["authorized_at"])
+            recorded = _aware_timestamp(body["recorded_at"])
+            if not approved_floor <= approved < expires or not (
+                previous_recorded <= recorded < expires
+            ):
+                raise ValueError
+            snapshot = Decimal(body["committed_or_reserved_at_amendment_usd"])
+            if not snapshot.is_finite() or snapshot < 0:
+                raise ValueError
+            for key in ("calls_at_amendment", "unsettled_at_amendment"):
+                if type(body[key]) is not int or body[key] < 0:
+                    raise ValueError
+            entitlement = body["declared_entitlement"]
+            if entitlement is not None and (
+                not isinstance(entitlement, dict)
+                or set(entitlement) != _ENTITLEMENT_KEYS
+                or _entitlement(entitlement["statement"], entitlement["services"]) != entitlement
+            ):
+                raise ValueError
+            result.append(body)
+            previous_sha, previous_total = _text_sha256(text), new_total
+            previous_recorded = recorded
+    except (sqlite3.Error, InvalidOperation, TypeError, ValueError, KeyError):
+        raise ValueError("BUDGET_POLICY_MISMATCH") from None
+    return result
+
+
+def amend_session_total(
+    ledger: Path,
+    *,
+    expected_current_total_usd: str,
+    new_total_usd: str,
+    reason: str,
+    authorized_by: str,
+    authorized_at: str,
+    entitlement_statement: str | None = None,
+    entitlement_services: list[str] | tuple[str, ...] = (),
+    check: bool = False,
+) -> dict:
+    """Append one audited total-cap increase to an existing session-grant ledger.
+
+    Compare-and-swap on the current effective total under BEGIN IMMEDIATE; the
+    grant row, probe_calls and the original expiry are never modified. With
+    ``check`` the transaction is rolled back and nothing is written.
+    """
+    expected = _session_amount(expected_current_total_usd)
+    new_total = _session_amount(new_total_usd)
+    reason = _bounded_text(reason, 512, "AUTHORIZATION_REASON_REQUIRED")
+    authorized_by = _bounded_text(authorized_by, 128, "AUTHORIZATION_OPERATOR_REQUIRED")
+    approved = _aware_timestamp(authorized_at)
+    entitlement = _entitlement(entitlement_statement, list(entitlement_services))
+    ledger = Path(ledger)
+    if not ledger.is_file():
+        raise ValueError("LEDGER_NOT_FOUND")
+    db = sqlite3.connect(ledger, timeout=10, isolation_level=None)
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        try:
+            current = UpstageProbe._authorized_limit(db)
+            grant = read_session_grant(db)
+            if grant is None:
+                raise ValueError("SESSION_GRANT_REQUIRED")
+            if current != expected:
+                raise ValueError("AMENDMENT_CAS_MISMATCH")
+            if new_total <= current:
+                raise ValueError("AMENDMENT_MUST_INCREASE")
+            now = datetime.now(UTC)
+            expires = _aware_timestamp(grant["expires_at"])
+            if now >= expires:
+                raise ValueError("SESSION_GRANT_EXPIRED")
+            if (
+                approved < _aware_timestamp(grant["authorized_at"])
+                or approved >= expires
+                or (approved - now).total_seconds() > 300
+            ):
+                raise ValueError("AUTHORIZATION_TIME_INVALID")
+            amendments = read_session_amendments(db, grant)
+            last = amendments[-1] if amendments else grant
+            if now < _aware_timestamp(last["recorded_at"]):
+                raise ValueError("AUTHORIZATION_TIME_INVALID")
+            committed = UpstageProbe._call_total(db)
+            calls, unsettled = db.execute(
+                "SELECT COUNT(*), COALESCE(SUM(receipt IS NULL), 0) FROM probe_calls"
+            ).fetchone()
+            previous_text = _canonical_json(amendments[-1]) if amendments else _grant_row_text(db)
+            body = {
+                **SESSION_AMENDMENT_FIXED,
+                "seq": len(amendments) + 1,
+                "grant_sha256": _text_sha256(_grant_row_text(db)),
+                "previous_sha256": _text_sha256(previous_text),
+                "previous_total_usd": str(current),
+                "new_total_usd": str(new_total),
+                "reason": reason,
+                "authorized_by": authorized_by,
+                "authorized_at": approved.astimezone(UTC).isoformat(),
+                "recorded_at": now.isoformat(),
+                "expires_at": grant["expires_at"],
+                "committed_or_reserved_at_amendment_usd": str(committed),
+                "calls_at_amendment": calls,
+                "unsettled_at_amendment": unsettled,
+                "declared_entitlement": entitlement,
+            }
+            if not _has_table(db, "probe_session_amendments"):
+                for statement in _AMENDMENT_DDL:
+                    db.execute(statement)
+            db.execute(
+                "INSERT INTO probe_session_amendments VALUES (?, ?)",
+                (body["seq"], _canonical_json(body)),
+            )
+            if UpstageProbe._authorized_limit(db) != new_total:
+                raise ValueError("BUDGET_POLICY_MISMATCH")
+        except BaseException:
+            db.execute("ROLLBACK")
+            raise
+        db.execute("ROLLBACK" if check else "COMMIT")
+    finally:
+        db.close()
+    return body
 
 
 def session_grant_request(
@@ -715,6 +973,7 @@ class UpstageProbe:
             authorized_limit = self._authorized_limit(db)
             committed = self._call_total(db)
             grant = read_session_grant(db)
+        amendments = read_session_amendments(db, grant)
         result = {
             "limit_usd": POLICY["limit_usd"],
             "authorized_limit_usd": str(authorized_limit),
@@ -724,6 +983,8 @@ class UpstageProbe:
         }
         if grant is not None:
             result["session_grant"] = grant
+        if amendments:
+            result["session_amendments"] = amendments
         return result
 
     def _post(self, body):
