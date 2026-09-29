@@ -159,6 +159,29 @@ def validate_upstage_ocr_policy(policy):
     return _detach(policy)
 
 
+def validate_upstage_ocr_widget_policy(policy):
+    """Shape of the opt-in static pushbutton gate policy (live equality in adapters)."""
+    if (
+        not isinstance(policy, Mapping)
+        or set(policy)
+        != {
+            "schema",
+            "verifier_sha256",
+            "composition_sha256",
+            "base_native_policy_sha256",
+            "margin_pt",
+        }
+        or policy["schema"] != "native_static_pushbutton_visibility_v1"
+        or type(policy["margin_pt"]) is not float
+        or policy["margin_pt"] != 2.0
+    ):
+        raise ValueError("UPSTAGE_OCR_WIDGET_POLICY_INVALID")
+    _require_sha256("verifier_sha256", policy["verifier_sha256"])
+    _require_sha256("composition_sha256", policy["composition_sha256"])
+    _require_sha256("base_native_policy_sha256", policy["base_native_policy_sha256"])
+    return _detach(policy)
+
+
 def validate_upstage_ocr_snapshot(snapshot):
     fields = {
         "native_upstage_ocr_policy",
@@ -166,11 +189,21 @@ def validate_upstage_ocr_snapshot(snapshot):
         "native_upstage_ocr_runtime",
         "native_upstage_ocr_runtime_artifact_hash",
     }
+    # Optional NEW-run opt-in; absent keeps the original four-key shape.
+    widget = {"native_upstage_ocr_widget_visibility", "native_upstage_ocr_widget_visibility_hash"}
     present = {k for k in snapshot if k.startswith("native_upstage_ocr_")}
     if not present:
         return
+    if present & widget and (
+        present & widget != widget
+        or canonical_hash(
+            validate_upstage_ocr_widget_policy(snapshot["native_upstage_ocr_widget_visibility"])
+        )
+        != snapshot["native_upstage_ocr_widget_visibility_hash"]
+    ):
+        raise ValueError("UPSTAGE_OCR_SNAPSHOT_INVALID")
     if (
-        present != fields
+        present - widget != fields
         or any(k.startswith("raster_ocr_") for k in snapshot)
         or snapshot.get("extraction_mode") != "upstage_probe"
         or snapshot.get("mode") != "disclosure"
@@ -218,6 +251,7 @@ class RunService:
         raster_policy=None,
         upstage_ocr_runtime_binding_id: str | None = None,
         upstage_ocr_policy=None,
+        upstage_ocr_widget_visibility=None,
         input_reservation_policy=None,
         position_context_order=None,
         budget_limits=None,
@@ -328,6 +362,13 @@ class RunService:
             upstage_ocr_runtime_binding_id,
             upstage_ocr_policy,
         )
+        if upstage_ocr_widget_visibility is not None:
+            if upstage_ocr_policy is None:
+                raise ValueError("upstage widget visibility requires upstage OCR configuration")
+            upstage_ocr_widget_visibility = validate_upstage_ocr_widget_policy(
+                upstage_ocr_widget_visibility
+            )
+        self.upstage_ocr_widget_visibility = upstage_ocr_widget_visibility
         self.input_reservation_policy = (
             _detach(dict(input_reservation_policy))
             if input_reservation_policy is not None
@@ -489,6 +530,13 @@ class RunService:
                     native_upstage_ocr_runtime=upstage_runtime,
                     native_upstage_ocr_runtime_artifact_hash=artifact_sha256(upstage_runtime),
                 )
+                if self.upstage_ocr_widget_visibility is not None:
+                    upstage_ocr_snapshot.update(
+                        native_upstage_ocr_widget_visibility=self.upstage_ocr_widget_visibility,
+                        native_upstage_ocr_widget_visibility_hash=canonical_hash(
+                            self.upstage_ocr_widget_visibility
+                        ),
+                    )
                 validate_upstage_ocr_snapshot(
                     dict(
                         upstage_ocr_snapshot,

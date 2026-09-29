@@ -443,14 +443,23 @@ def raster_settings(*, max_pages: int, max_calls: int) -> dict:
     )
 
 
-def upstage_ocr_settings(*, max_pages: int, max_calls: int) -> dict:
+def upstage_ocr_settings(
+    *, max_pages: int, max_calls: int, widget_visibility: bool = False
+) -> dict:
     """Pin a NEW-run native Upstage OCR policy; exclusive with raster settings."""
     from proofops.adapters.local.native_upstage_ocr import native_upstage_ocr_policy
 
-    return dict(
+    if type(widget_visibility) is not bool:
+        raise ValueError("native widget visibility must be boolean")
+    settings = dict(
         upstage_ocr_runtime_binding_id=str(uuid4()),
         upstage_ocr_policy=native_upstage_ocr_policy(max_pages=max_pages, max_calls=max_calls),
     )
+    if widget_visibility:
+        from proofops.adapters.local.native_widget_visibility import native_widget_visibility_policy
+
+        settings["upstage_ocr_widget_visibility"] = native_widget_visibility_policy()
+    return settings
 
 
 def parser_output_limit(value):
@@ -579,6 +588,11 @@ def apply_resume_metadata(args, saved: dict) -> None:
     args.claim_span_typography = bool(saved.get("claim_span_typography", False))
     args.raster_ocr = bool(saved.get("raster_ocr", False))
     args.native_upstage_ocr = bool(saved.get("native_upstage_ocr", False))
+    if getattr(args, "native_widget_visibility", False) and not saved.get(
+        "native_widget_visibility", False
+    ):
+        raise ValueError("--resume cannot add native widget visibility; create a new run")
+    args.native_widget_visibility = bool(saved.get("native_widget_visibility", False))
     args.live_tagging = bool(saved.get("live_tagging", False))
     args.live_relations = bool(saved.get("live_relations", False))
     args.preliminary_context = bool(saved.get("preliminary_context", False))
@@ -852,6 +866,12 @@ def main():
         "(UnsupportedPlatform) with Upstage Document Parse crops on the shared ledger; "
         "requires --verify-paragraphs, excludes --raster-ocr, --native-quote-typography "
         "and --native-windows-ocr",
+    )
+    parser.add_argument(
+        "--native-widget-visibility",
+        action="store_true",
+        help="NEW runs: opt into conservative per-paragraph static navigation widget "
+        "visibility checks; requires --native-upstage-ocr and preserves old receipts.",
     )
     parser.add_argument("--upstage-ocr-max-pages", type=int, default=10)
     parser.add_argument("--upstage-ocr-max-calls", type=int, default=1)
@@ -1168,6 +1188,8 @@ def main():
             "--native-upstage-ocr requires --verify-paragraphs without --raster-ocr, "
             "--native-quote-typography or --native-windows-ocr"
         )
+    if args.native_widget_visibility and not args.native_upstage_ocr:
+        parser.error("--native-widget-visibility requires --native-upstage-ocr")
     raster = (
         raster_settings(max_pages=args.raster_max_pages, max_calls=args.raster_max_calls)
         if args.raster_ocr
@@ -1175,7 +1197,9 @@ def main():
     )
     upstage_ocr = (
         upstage_ocr_settings(
-            max_pages=args.upstage_ocr_max_pages, max_calls=args.upstage_ocr_max_calls
+            max_pages=args.upstage_ocr_max_pages,
+            max_calls=args.upstage_ocr_max_calls,
+            widget_visibility=args.native_widget_visibility,
         )
         if getattr(args, "native_upstage_ocr", False)
         else {}
@@ -1650,6 +1674,11 @@ def main():
             manifest.update(
                 native_upstage_ocr=True, upstage_ocr_policy=upstage_ocr["upstage_ocr_policy"]
             )
+        if args.native_widget_visibility:
+            manifest.update(
+                native_widget_visibility=True,
+                upstage_ocr_widget_visibility=upstage_ocr["upstage_ocr_widget_visibility"],
+            )
         if args.live_relations:
             manifest["live_relations"] = True
         if args.preliminary_context:
@@ -1727,6 +1756,10 @@ def main():
             upstage_ocr and manifest.get("upstage_ocr_policy") != upstage_ocr["upstage_ocr_policy"]
         ):
             raise ValueError("pilot Upstage OCR policy changed; create a new state directory")
+        if manifest.get("upstage_ocr_widget_visibility") != upstage_ocr.get(
+            "upstage_ocr_widget_visibility"
+        ):
+            raise ValueError("pilot widget visibility policy changed; create a new state directory")
         if manifest.get("live_relations", False) != args.live_relations:
             raise ValueError("pilot relation policy changed; create a new state directory")
         if manifest.get("preliminary_context", False) != args.preliminary_context:

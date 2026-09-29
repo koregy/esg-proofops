@@ -16,9 +16,9 @@ from pathlib import Path
 from proofops.adapters.local import native_upstage_ocr_store as store_records
 from proofops.adapters.local.native_upstage_ocr import (
     REQUEST_SCHEMA,
-    eligible_upstage_sources,
     live_policy_for,
 )
+from proofops.adapters.local.native_upstage_ocr_widget import eligible_words
 from proofops.adapters.local.raster_ocr import prepare_raster_ocr
 from proofops.adapters.local.run_artifacts import load_run_inputs
 from proofops.adapters.local.upstage_parse import PARSE_MODEL_PINNED
@@ -107,7 +107,9 @@ def prepare_authorized_upstage_ocr(runner, lease, graph, native, source_ids):
     replay_cached(native, graph, source.content, tenant_id=message.tenant_id)
     eligible = {
         sid
-        for sid in eligible_upstage_sources(native)
+        for sid in eligible_words(
+            snapshot, native, graph, source.content, tenant_id=message.tenant_id
+        )
         if blocks[sid].page_num in snapshot["selected_pages"]
     }
     if not set(source_ids) <= eligible:

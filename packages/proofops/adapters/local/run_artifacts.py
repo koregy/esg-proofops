@@ -589,8 +589,8 @@ def load_run_evidence(store, uploads, parser, *, tenant_id: str, run_id: str):
     upstage_coverage = envelope.get("native_paragraph_upstage_ocr_coverage")
     if upstage_coverage is not None:
         # Offline: stored request/receipt records only, re-rendered from the original bytes.
-        from proofops.adapters.local.native_upstage_ocr import compose_checkpoint
         from proofops.adapters.local.native_upstage_ocr_store import stored_entries
+        from proofops.adapters.local.native_upstage_ocr_widget import compose_checkpoint
 
         try:
             entries, refs = stored_entries(store.jobs, message)

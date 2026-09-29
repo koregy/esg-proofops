@@ -9,6 +9,7 @@ import { ExportWorkspace } from "./features/reports/ExportWorkspace";
 import { RunQuality } from "./features/runs/RunQuality";
 import { RunForm } from "./features/runs/RunForm";
 import { RunProgress, type RunSnapshot } from "./features/runs/RunProgress";
+import { RecentRuns, RunResultCallout } from "./features/runs/RecentRuns";
 import { ApiError, errorMessage, isSessionError, requestJson, type Session } from "./features/session/api";
 import { CompanySelector, type RuntimeOptions, type UploadSelection } from "./features/upload/CompanySelector";
 import { UploadForm, type ReadyDocumentVersion } from "./features/upload/UploadForm";
@@ -266,6 +267,8 @@ export function DocumentFlow(props: DocumentFlowProps) {
     ) : (
       <p>공시 PDF를 등록하고 서버 검증이 끝난 실제 문서 버전으로 분석을 시작합니다.</p>
     )}
+    <RecentRuns key={props.session.tenant_id!} apiBase={API_BASE} tenantKey={props.session.tenant_id!} onSessionInvalid={props.onSessionInvalid} />
+    <h2>새 분석 시작</h2>
     {!props.canEdit ? <p role="alert">현재 {props.session.role ?? "미지정"} 권한으로는 기업 또는 문서를 등록할 수 없습니다.</p> : null}
     <CompanySelector apiBase={API_BASE} csrfToken={props.session.csrf_token} tenantKey={props.session.tenant_id!} value={props.selection} canCreate={props.canEdit}
       onChange={props.setSelection} onOptionsChange={props.setOptions} onSessionInvalid={props.onSessionInvalid} />
@@ -319,7 +322,11 @@ function RunHome({ session, tenantKey, initialRun, onSessionInvalid, isSavedDemo
   const [summary, setSummary] = useState<Summary | null>(null);
   const [summaryState, setSummaryState] = useState<"loading" | "ready" | "pending" | "error">("loading");
   const [summaryEpoch, setSummaryEpoch] = useState(0);
-  const refreshSummary = useCallback(() => setSummaryEpoch(current => current + 1), []);
+  const [latest, setLatest] = useState<RunSnapshot | null>(null);
+  const refreshSummary = useCallback((next?: RunSnapshot) => {
+    if (next) setLatest(next);
+    setSummaryEpoch(current => current + 1);
+  }, []);
   useEffect(() => {
     const controller = new AbortController();
     setRun(initialRun?.run_id === runId ? initialRun : null);
@@ -353,6 +360,7 @@ function RunHome({ session, tenantKey, initialRun, onSessionInvalid, isSavedDemo
     {state === "loading" ? <p role="status">실행 상태를 불러오는 중입니다.</p> : null}
     {state === "pending" ? <p role="status">실행 산출물이 아직 준비되지 않았습니다.</p> : null}
     {state === "error" ? <p role="alert">{message}</p> : null}
+    {run ? <RunResultCallout run={latest?.run_id === run.run_id ? latest : run} /> : null}
     {run ? <RunProgress apiBase={API_BASE} csrfToken={session.csrf_token} tenantKey={tenantKey} initialRun={run} onSessionInvalid={onSessionInvalid} onRunChanged={refreshSummary} /> : null}
     {summaryState === "loading" ? <p role="status">실행 요약을 불러오는 중입니다.</p> : null}
     {summaryState === "pending" ? <p role="status">실행 요약은 현재 태깅 스냅샷 뒤에 게시됩니다.</p> : null}

@@ -14,7 +14,11 @@ from proofops.application.budget import BudgetLimits, RoleLimit
 from proofops.application.claims import ExtractionProfile
 from proofops.application.ingest.graph_fusion import ParserProfile
 from proofops.application.ports.models import ModelBinding
-from proofops.application.runs import validate_raster_policy, validate_upstage_ocr_policy
+from proofops.application.runs import (
+    validate_raster_policy,
+    validate_upstage_ocr_policy,
+    validate_upstage_ocr_widget_policy,
+)
 from proofops.application.supply_chain import verify_supply_chain
 from proofops.application.tagging.service import TaggingSettings
 
@@ -43,6 +47,7 @@ _SETTINGS_FIELDS = frozenset(
         "raster_policy",
         "upstage_ocr_runtime_binding_id",
         "upstage_ocr_policy",
+        "upstage_ocr_widget_visibility",
         "report_level_link",
     }
 )
@@ -245,6 +250,8 @@ def _upstage_ocr(settings: Mapping[str, Any], extraction_mode: str) -> dict[str,
     """NEW-run native Upstage OCR settings; exclusive with v1 raster settings."""
     present = _UPSTAGE_OCR_FIELDS & set(settings)
     if not present:
+        if "upstage_ocr_widget_visibility" in settings:
+            raise _invalid()
         return {}
     if (
         present != _UPSTAGE_OCR_FIELDS
@@ -261,9 +268,18 @@ def _upstage_ocr(settings: Mapping[str, Any], extraction_mode: str) -> dict[str,
         ):
             raise ValueError
         policy = validate_upstage_ocr_policy(settings["upstage_ocr_policy"])
+        widget = (
+            {}
+            if "upstage_ocr_widget_visibility" not in settings
+            else {
+                "upstage_ocr_widget_visibility": validate_upstage_ocr_widget_policy(
+                    settings["upstage_ocr_widget_visibility"]
+                )
+            }
+        )
     except (TypeError, ValueError):
         raise _invalid() from None
-    return {"upstage_ocr_runtime_binding_id": binding_id, "upstage_ocr_policy": policy}
+    return {"upstage_ocr_runtime_binding_id": binding_id, "upstage_ocr_policy": policy, **widget}
 
 
 def load_local_runtime(env: Mapping[str, str]) -> dict[str, Any]:

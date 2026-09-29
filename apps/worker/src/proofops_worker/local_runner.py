@@ -379,9 +379,9 @@ class LocalParserRunner:
                     upstage_result = None
                     if upstage_enabled:
                         from proofops.adapters.local import native_upstage_ocr_store as records
-                        from proofops.adapters.local.native_upstage_ocr import (
+                        from proofops.adapters.local.native_upstage_ocr_widget import (
                             compose_checkpoint,
-                            eligible_upstage_sources,
+                            eligible_words,
                         )
 
                         from proofops_worker.native_upstage_ocr_runtime import (
@@ -394,7 +394,13 @@ class LocalParserRunner:
                             sorted(
                                 (
                                     source_id
-                                    for source_id in eligible_upstage_sources(native_receipt)
+                                    for source_id in eligible_words(
+                                        snapshot,
+                                        native_receipt,
+                                        pre_native_graph,
+                                        source.content,
+                                        tenant_id=tenant_id,
+                                    )
                                     if blocks[source_id].page_num in pages
                                 ),
                                 key=lambda source_id: paragraph_priority(blocks[source_id]),
