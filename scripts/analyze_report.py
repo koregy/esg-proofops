@@ -11,6 +11,16 @@ Guards enforced before any paid side effect:
 * A new run refuses ANY non-empty state directory (never overwrites stored data).
 * ``--invoke`` requires the shared budget ledger to already exist; we never mint
   or reset it. The dry plan needs no secrets and runs no subprocess.
+* ``--invoke`` also requires the ledger to validate (legacy history or one
+  explicit session grant from ``scripts/authorize_upstage_session.py``) with at
+  least one USD1 reservation of headroom, and ``--key-file`` to exist (its
+  content is never read here). The plan reports the ledger state read-only.
+* ``--budget-ledger`` names an explicit session-grant ledger; it is forwarded to
+  the pilot, which freezes it in pilot.json and exports it to every paid stage
+  (parse/OCR, extract, tag, serve-worker) with no fallback pool. Omitted, the
+  legacy checkout ledger is used exactly as before. ``--java-path`` pins a NEW
+  run's parser Java; ``--company-name``/``--company-registration`` forward an
+  explicit company identity (both or neither).
 
 Delegation reuses the reviewed pilot flags: verify-paragraphs, verify-claim-spans,
 one of verify-merged-tables (legacy default) / --verify-selected-cells,
@@ -22,8 +32,8 @@ with optional ``--native-quote-typography``, ``--live-relations`` (aliased as
 ``--serve`` is a separate explicit opt-in (never auto-enabled) to avoid hanging
 an integration run. New-run caps reuse the pilot's own validators
 (``extraction_budget_settings`` for the batch 1..20 / total ..2000 bound,
-6..2000 for tagging); no budget framework is duplicated here and the shared
-USD20 ledger ceiling is unchanged.
+6..2000 for tagging); no budget framework is duplicated here and the run's
+ledger ceiling (legacy USD20 or an explicit session grant) is unchanged.
 
 Optional ``--auto-scope`` (opt-in, off by default): instead of a manual
 ``--pages``, discover E-narrative / environmental-Data / Appendix candidate
@@ -312,7 +322,7 @@ def _validate_extraction_total(batch_calls: int, total: int | None) -> None:
 
     This reuses ``evaluation.local_upstage_pilot.extraction_budget_settings``
     (batch 1..20, total batch..2000) instead of duplicating the bound here; the
-    shared USD20 money ceiling still fences every provider dispatch.
+    run's ledger money ceiling still fences every provider dispatch.
     """
     if total is None:
         return
@@ -330,6 +340,53 @@ def _validate_tagging_max_calls(value: int) -> None:
     """Validate the tagging call cap against the pilot's finite 6..2000 bound."""
     if type(value) is not int or not 6 <= value <= 2000:
         raise PlanError(f"--tagging-max-calls must be an integer in 6..2000; got {value!r}")
+
+
+def describe_ledger(ledger: Path) -> dict:
+    """Read-only ledger state for the plan; never creates or modifies the file."""
+    if not ledger.is_file():
+        return {"state": "absent"}
+    import sqlite3
+    from decimal import Decimal
+
+    from proofops.adapters.local.upstage import (
+        POLICY,
+        UpstageProbe,
+        read_session_grant,
+        session_grant_expired,
+    )
+
+    try:
+        with sqlite3.connect(ledger.resolve().as_uri() + "?mode=ro", uri=True) as db:
+            limit = UpstageProbe._authorized_limit(db)
+            committed = UpstageProbe._call_total(db)
+            grant = read_session_grant(db)
+            unsettled = db.execute(
+                "SELECT COUNT(*) FROM probe_calls WHERE receipt IS NULL"
+            ).fetchone()[0]
+    except (sqlite3.Error, ValueError) as exc:
+        code = str(exc) if isinstance(exc, ValueError) else "BUDGET_LEDGER_UNREADABLE"
+        return {"state": "invalid", "error": code}
+    result = {
+        "state": "legacy" if grant is None else "session_grant",
+        "authorized_limit_usd": str(limit),
+        "committed_or_reserved_usd": str(committed),
+        "unsettled_reservations": unsettled,
+        "headroom_usd": str(limit - committed),
+        "can_reserve": limit - committed >= Decimal(POLICY["reservation_usd"]),
+    }
+    if grant is not None:
+        expired = session_grant_expired(grant)
+        result.update(
+            scope=grant["scope"],
+            amount_basis=grant["amount_basis"],
+            authorized_at=grant["authorized_at"],
+            expires_at=grant["expires_at"],
+            expired=expired,
+            prior_cumulative_usage=grant["prior_cumulative_usage"],
+        )
+        result["can_reserve"] = result["can_reserve"] and not expired
+    return result
 
 
 def build_pilot_argv(
@@ -351,6 +408,7 @@ def build_pilot_argv(
     native_quote_typography: bool = False,
     claim_span_typography: bool = False,
     live_relations: bool = False,
+    capacity_refresh: bool = False,
     preliminary_context: bool = False,
     preliminary_actor_role: bool = False,
     ai_project_review: bool = False,
@@ -361,6 +419,12 @@ def build_pilot_argv(
     extraction_complete_selection: bool = False,
     extraction_content_bounds: bool = False,
     parser_max_output_bytes: int | None = None,
+    parser_timeout_seconds: int | None = None,
+    parser_memory_bytes: int | None = None,
+    java_path: Path | None = None,
+    budget_ledger: Path | None = None,
+    company_name: str | None = None,
+    company_registration: str | None = None,
 ) -> list[str]:
     """Assemble the exact argv driving ``evaluation.local_upstage_pilot``."""
     table_flag = "--verify-selected-cells" if verify_selected_cells else "--verify-merged-tables"
@@ -396,6 +460,18 @@ def build_pilot_argv(
     ]
     if parser_max_output_bytes is not None:
         argv += ["--parser-max-output-bytes", str(parser_max_output_bytes)]
+    if parser_timeout_seconds is not None:
+        argv += ["--parser-timeout-seconds", str(parser_timeout_seconds)]
+    if parser_memory_bytes is not None:
+        argv += ["--parser-memory-bytes", str(parser_memory_bytes)]
+    if java_path is not None:
+        argv += ["--java-path", str(java_path)]
+    if budget_ledger is not None:
+        argv += ["--budget-ledger", str(budget_ledger)]
+    if company_name is not None:
+        if company_registration is None:
+            raise PlanError("company name and registration must be supplied together")
+        argv += ["--company-name", company_name, "--company-registration", company_registration]
     if extraction_total_calls is not None:
         argv += ["--extraction-total-calls", str(extraction_total_calls)]
     if native_quote_typography:
@@ -406,6 +482,8 @@ def build_pilot_argv(
             "--claim-span-bullet-spacing",
             "--claim-span-typography",
         ]
+    if capacity_refresh:
+        argv.append("--capacity-policy-refresh")
     if live_relations:
         argv.append("--live-relations")
     if preliminary_context or preliminary_actor_role:
@@ -499,16 +577,50 @@ def plan_run(args: argparse.Namespace) -> dict:
             f"--period-end {args.period_end}"
         )
     state = resolve_state(args.state)
-    if args.invoke and not BUDGET_LEDGER.is_file():
+    requested_ledger = getattr(args, "budget_ledger", None)
+    ledger = BUDGET_LEDGER if requested_ledger is None else requested_ledger.expanduser().resolve()
+    company_name = getattr(args, "company_name", None)
+    company_registration = getattr(args, "company_registration", None)
+    if (company_name is None) != (company_registration is None) or any(
+        value is not None and not value.strip() for value in (company_name, company_registration)
+    ):
+        raise PlanError("--company-name and --company-registration are required together")
+    java_path = getattr(args, "java_path", None)
+    if java_path is not None:
+        java_path = java_path.expanduser().resolve()
+        if not java_path.is_file():
+            raise PlanError(f"--java-path not found: {java_path}")
+    if (args.invoke or requested_ledger is not None) and not ledger.is_file():
         raise PlanError(
-            f"shared budget ledger not found: {BUDGET_LEDGER}. It must already exist; "
+            f"shared budget ledger not found: {ledger}. It must already exist; "
             "we never create or reset an independent budget."
         )
+    ledger_status = describe_ledger(ledger)
+    if requested_ledger is not None and ledger_status["state"] != "session_grant":
+        raise PlanError(
+            "--budget-ledger must be an explicit session-grant ledger; got "
+            f"{ledger_status['state']} ({ledger_status.get('error', 'no grant')})"
+        )
+    if args.invoke:
+        if ledger_status["state"] == "invalid":
+            raise PlanError(f"budget ledger invalid: {ledger_status['error']}")
+        if ledger_status.get("expired"):
+            raise PlanError(f"budget ledger session grant expired at {ledger_status['expires_at']}")
+        if not ledger_status["can_reserve"]:
+            raise PlanError(
+                "budget ledger has no USD1 reservation headroom "
+                f"({ledger_status['headroom_usd']} left); a new grant needs user approval"
+            )
+        if not args.key_file.expanduser().resolve().is_file():
+            raise PlanError(f"--key-file not found: {args.key_file}")
     parser_max_output_bytes = getattr(args, "parser_max_output_bytes", None)
-    from evaluation.local_upstage_pilot import parser_output_limit
+    parser_timeout_seconds = getattr(args, "parser_timeout_seconds", None)
+    parser_memory_bytes = getattr(args, "parser_memory_bytes", None)
+    from evaluation.local_upstage_pilot import parser_output_limit, parser_resource_limits
 
     try:
         parser_output_limit(parser_max_output_bytes)
+        parser_resource_limits(parser_timeout_seconds, parser_memory_bytes)
     except ValueError as exc:
         raise PlanError(str(exc)) from exc
     tagging_max_calls = getattr(args, "tagging_max_calls", TAGGING_MAX_CALLS)
@@ -548,6 +660,7 @@ def plan_run(args: argparse.Namespace) -> dict:
         native_quote_typography=native_quote_typography,
         claim_span_typography=claim_span_typography,
         live_relations=live_relations,
+        capacity_refresh=bool(getattr(args, "capacity_refresh", False)),
         preliminary_context=preliminary_context,
         preliminary_actor_role=preliminary_actor_role,
         ai_project_review=ai_project_review,
@@ -558,6 +671,14 @@ def plan_run(args: argparse.Namespace) -> dict:
         extraction_complete_selection=extraction_complete_selection,
         extraction_content_bounds=extraction_content_bounds,
         parser_max_output_bytes=parser_max_output_bytes,
+        parser_timeout_seconds=parser_timeout_seconds,
+        parser_memory_bytes=parser_memory_bytes,
+        java_path=java_path,
+        budget_ledger=None if requested_ledger is None else ledger,
+        company_name=None if company_name is None else company_name.strip(),
+        company_registration=(
+            None if company_registration is None else company_registration.strip()
+        ),
     )
     return {
         "argv": argv,
@@ -571,12 +692,18 @@ def plan_run(args: argparse.Namespace) -> dict:
         "serve": bool(args.serve),
         "port": args.port,
         "parser_max_output_bytes": parser_max_output_bytes,
+        "parser_timeout_seconds": parser_timeout_seconds,
+        "parser_memory_bytes": parser_memory_bytes,
+        "java_path": java_path,
+        "budget_ledger": ledger,
+        "ledger_status": ledger_status,
         "extraction_total_calls": extraction_total_calls,
         "tagging_max_calls": tagging_max_calls,
         "verify_selected_cells": verify_selected_cells,
         "native_quote_typography": native_quote_typography,
         "claim_span_typography": claim_span_typography,
         "live_relations": live_relations,
+        "capacity_refresh": bool(getattr(args, "capacity_refresh", False)),
         "preliminary_context": preliminary_context,
         "preliminary_actor_role": preliminary_actor_role,
         "ai_project_review": ai_project_review,
@@ -642,6 +769,13 @@ def print_plan(plan: dict) -> None:
             pilot_opts.append(flag.replace("_", "-"))
     print(f"  pilot options: {', '.join(pilot_opts)} (extraction batch={EXTRACTION_MAX_CALLS})")
     print(f"  invoke:    {plan['invoke']}   serve: {plan['serve']}   port: {plan['port']}")
+    print(f"  budget ledger: {plan['budget_ledger']}")
+    print("  ledger state:  " + json.dumps(plan["ledger_status"], sort_keys=True))
+    if plan["ledger_status"]["state"] == "absent":
+        print(
+            "    --invoke is refused until an operator records an explicit grant with "
+            "scripts/authorize_upstage_session.py (prior usage stays unknown)."
+        )
     print("  exact argv:")
     print("    " + shlex.join(plan["argv"]))
     if not plan["invoke"]:
@@ -666,6 +800,18 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="NEW run parser artifact cap (default 20000000; max 128 MiB).",
+    )
+    parser.add_argument(
+        "--parser-timeout-seconds",
+        type=int,
+        default=None,
+        help="NEW run only: 1..900 seconds; default remains 120.",
+    )
+    parser.add_argument(
+        "--parser-memory-bytes",
+        type=int,
+        default=None,
+        help="NEW run only: 128MiB..4GiB; default remains 768MiB.",
     )
     parser.add_argument(
         "--pages",
@@ -723,13 +869,34 @@ def build_parser() -> argparse.ArgumentParser:
         help="Pilot API key file (default: <root>/.env.upstage.local)",
     )
     parser.add_argument(
+        "--java-path",
+        type=Path,
+        default=None,
+        help="NEW run parser Java 21 executable, forwarded as the pilot's --java-path "
+        "(omit to keep the pilot default).",
+    )
+    parser.add_argument(
+        "--budget-ledger",
+        type=Path,
+        default=None,
+        help="Explicit session-grant ledger (scripts/authorize_upstage_session.py), "
+        "forwarded to the pilot and every paid stage. Omit for the legacy ledger "
+        "<checkout>/.local/upstage/budget.sqlite3.",
+    )
+    parser.add_argument("--company-name", default=None, help="Explicit legal name (NEW run)")
+    parser.add_argument(
+        "--company-registration",
+        default=None,
+        help="Verified company identifier, e.g. DART:<code>; required with --company-name",
+    )
+    parser.add_argument(
         "--extraction-total-calls",
         type=int,
         default=None,
         help="Optional total-run extraction allowance across continuation batches "
         f"(at least the legacy batch {EXTRACTION_MAX_CALLS}, at most 2000; omit to keep "
         "the one-batch allowance). Validated by the pilot's own "
-        "extraction_budget_settings; the shared USD20 ceiling still applies.",
+        "extraction_budget_settings; the run's ledger ceiling still applies.",
     )
     parser.add_argument(
         "--tagging-max-calls",
@@ -756,6 +923,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Opt a new run into rendered quote/middle-dot comparison, including "
         "the required render-resolution and bullet-spacing wrappers.",
+    )
+    parser.add_argument(
+        "--capacity-policy-refresh",
+        dest="capacity_refresh",
+        action="store_true",
+        help="NEW run: opt into the existing 2026-09-25 capacity policy (expires 2026-10-02).",
     )
     parser.add_argument(
         "--live-relations",
@@ -832,7 +1005,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--invoke",
         action="store_true",
-        help="Delegate to the pilot (paid; shared budget ledger must exist)",
+        help="Delegate to the pilot (paid; the budget ledger must exist and be valid)",
     )
     parser.add_argument(
         "--serve",

@@ -7,6 +7,11 @@ counts against the new limit.  Before each request, reserve USD 1 (deliberately
 much larger than these tiny requests at the pinned rates).  Unknown/failed calls
 keep that reservation.  No retries, tools, redirects, document uploads or
 credential logging are enabled.
+
+Separately, create_session_ledger() (scripts/authorize_upstage_session.py) can
+create a NEW ledger that carries one explicit additional-current-session grant
+(<= USD30) as its entire cap; prior cumulative usage stays "unknown" and legacy
+ledgers without that table keep the historical flow unchanged.
 """
 
 from __future__ import annotations
@@ -14,6 +19,7 @@ from __future__ import annotations
 import http.client
 import json
 import os
+import re
 import sqlite3
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
@@ -202,6 +208,225 @@ def request_usage(ledger, request_ids) -> dict:
     return result
 
 
+# Explicit NEW session ledger (opt-in; legacy ledgers never carry this table).
+# A session grant is a fixed ADDITIONAL allowance authorized for the current
+# session only.  It says nothing about prior cumulative usage (recorded as
+# "unknown"), never revises historical limits, and is the whole cap of the ledger
+# it lives in: it replaces, rather than adds to, the legacy POLICY base.
+SESSION_GRANT_SCHEMA = "upstage-session-grant-v1"
+SESSION_GRANT_SCOPE = "additional-current-session"
+SESSION_GRANT_FIXED = {
+    "schema": SESSION_GRANT_SCHEMA,
+    "scope": SESSION_GRANT_SCOPE,
+    "prior_cumulative_usage": "unknown",
+    "historical_ledger": "not-present-in-this-checkout",
+    "revises_prior_limits": False,
+    "hard_ceiling_usd": str(GENERAL_CEILING_USD),
+    # Every reservation (USD1) and settlement already carries the 1.10 VAT
+    # multiplier, so the grant is a gross cap; never reinterpreted as net.
+    "amount_basis": "gross-including-10pct-vat",
+}
+# A grant is valid for one bounded session; new reservations stop at expires_at.
+SESSION_GRANT_MAX_HOURS = 24
+_SESSION_GRANT_KEYS = frozenset(SESSION_GRANT_FIXED) | {
+    "authorized_usd",
+    "reason",
+    "authorized_by",
+    "authorized_at",
+    "recorded_at",
+    "expires_at",
+}
+_LEDGER_DDL = (
+    "CREATE TABLE IF NOT EXISTS probe_policy (id INTEGER PRIMARY KEY, body TEXT)",
+    "CREATE TABLE IF NOT EXISTS probe_calls (request_id TEXT PRIMARY KEY, "
+    "signature TEXT NOT NULL, committed TEXT NOT NULL, receipt TEXT)",
+    "CREATE TABLE IF NOT EXISTS probe_extensions "
+    "(id INTEGER PRIMARY KEY AUTOINCREMENT, "
+    "additional_usd TEXT NOT NULL, reason TEXT NOT NULL, authorized_at TEXT NOT NULL)",
+)
+
+
+def _canonical_json(value) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def _session_amount(raw) -> Decimal:
+    """Parse a grant amount: plain decimal, at most 2 places, 0 < amount <= ceiling."""
+    if not isinstance(raw, str) or not re.fullmatch(r"[0-9]{1,4}(\.[0-9]{1,2})?", raw):
+        raise ValueError("AUTHORIZATION_AMOUNT_INVALID")
+    amount = Decimal(raw).quantize(Decimal("0.01"))
+    if amount <= 0:
+        raise ValueError("AUTHORIZATION_AMOUNT_INVALID")
+    if amount > GENERAL_CEILING_USD:
+        raise ValueError("AUTHORIZATION_EXCEEDS_CEILING")
+    return amount
+
+
+def _aware_timestamp(raw) -> datetime:
+    if not isinstance(raw, str) or len(raw) > 64:
+        raise ValueError("AUTHORIZATION_TIME_INVALID")
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        raise ValueError("AUTHORIZATION_TIME_INVALID") from None
+    if parsed.tzinfo is None:
+        raise ValueError("AUTHORIZATION_TIME_INVALID")
+    return parsed
+
+
+def _session_expiry(approved: datetime, raw) -> datetime:
+    expires = _aware_timestamp(raw)
+    seconds = (expires - approved).total_seconds()
+    if not 0 < seconds <= SESSION_GRANT_MAX_HOURS * 3600:
+        raise ValueError("AUTHORIZATION_EXPIRY_INVALID")
+    return expires
+
+
+def session_grant_expired(grant: dict) -> bool:
+    return datetime.now(UTC) >= _aware_timestamp(grant["expires_at"])
+
+
+def read_session_grant(db) -> dict | None:
+    """Return the validated session grant, None for a legacy ledger; fail closed."""
+    if not db.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='probe_session_grant'"
+    ).fetchone():
+        return None
+    try:
+        rows = db.execute("SELECT id, body FROM probe_session_grant").fetchall()
+        if len(rows) != 1 or rows[0][0] != 1 or not isinstance(rows[0][1], str):
+            raise ValueError
+        grant = json.loads(rows[0][1])
+        if (
+            not isinstance(grant, dict)
+            or set(grant) != _SESSION_GRANT_KEYS
+            or any(grant[key] != value for key, value in SESSION_GRANT_FIXED.items())
+            or rows[0][1] != _canonical_json(grant)
+        ):
+            raise ValueError
+        amount = _session_amount(grant["authorized_usd"])
+        if grant["authorized_usd"] != str(amount):
+            raise ValueError
+        for key, limit in (("reason", 512), ("authorized_by", 128)):
+            text = grant[key]
+            if not isinstance(text, str) or not text.strip() or text != text.strip():
+                raise ValueError
+            if len(text) > limit:
+                raise ValueError
+        approved = _aware_timestamp(grant["authorized_at"])
+        _aware_timestamp(grant["recorded_at"])
+        _session_expiry(approved, grant["expires_at"])
+        # The grant is the whole allowance; it can never be topped up in place.
+        if db.execute("SELECT COUNT(*) FROM probe_extensions").fetchone()[0]:
+            raise ValueError
+    except (sqlite3.Error, InvalidOperation, TypeError, ValueError, KeyError):
+        raise ValueError("BUDGET_POLICY_MISMATCH") from None
+    return grant
+
+
+def session_grant_limit(db) -> Decimal | None:
+    grant = read_session_grant(db)
+    return None if grant is None else Decimal(grant["authorized_usd"])
+
+
+def session_grant_request(
+    ledger: Path,
+    *,
+    amount_usd: str,
+    reason: str,
+    authorized_by: str,
+    authorized_at: str,
+    expires_at: str,
+) -> dict:
+    """Validate an operator receipt and return the grant body; writes nothing."""
+    amount = _session_amount(amount_usd)
+    if not isinstance(reason, str) or not reason.strip() or len(reason.strip()) > 512:
+        raise ValueError("AUTHORIZATION_REASON_REQUIRED")
+    if (
+        not isinstance(authorized_by, str)
+        or not authorized_by.strip()
+        or len(authorized_by.strip()) > 128
+    ):
+        raise ValueError("AUTHORIZATION_OPERATOR_REQUIRED")
+    approved = _aware_timestamp(authorized_at)
+    now = datetime.now(UTC)
+    if (approved - now).total_seconds() > 300:
+        raise ValueError("AUTHORIZATION_TIME_INVALID")
+    expires = _session_expiry(approved, expires_at)
+    if expires <= now:
+        raise ValueError("AUTHORIZATION_EXPIRY_INVALID")
+    if ledger.exists() or ledger.with_name(ledger.name + ".responses").exists():
+        raise ValueError("LEDGER_ALREADY_EXISTS")
+    return {
+        **SESSION_GRANT_FIXED,
+        "authorized_usd": str(amount),
+        "reason": reason.strip(),
+        "authorized_by": authorized_by.strip(),
+        "authorized_at": approved.astimezone(UTC).isoformat(),
+        "recorded_at": now.isoformat(),
+        "expires_at": expires.astimezone(UTC).isoformat(),
+    }
+
+
+def create_session_ledger(
+    ledger: Path,
+    *,
+    amount_usd: str,
+    reason: str,
+    authorized_by: str,
+    authorized_at: str,
+    expires_at: str,
+) -> dict:
+    """Atomically create a NEW ledger holding one explicit session grant.
+
+    Refuses any existing ledger (never rewrites history or old approved limits).
+    The file is fully built under a temporary name and then hard-linked into
+    place, so no observer ever sees a legacy USD10 ledger without the grant.
+    No network access and no credential is involved.
+    """
+    ledger = Path(ledger)
+    grant = session_grant_request(
+        ledger,
+        amount_usd=amount_usd,
+        reason=reason,
+        authorized_by=authorized_by,
+        authorized_at=authorized_at,
+        expires_at=expires_at,
+    )
+    amount = Decimal(grant["authorized_usd"])
+    now = datetime.fromisoformat(grant["recorded_at"])
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    staging = ledger.with_name(f".{ledger.name}.{os.getpid()}.{now.timestamp():.6f}.staging")
+    try:
+        db = sqlite3.connect(staging)
+        try:
+            with db:
+                for statement in _LEDGER_DDL:
+                    db.execute(statement)
+                db.execute(
+                    "CREATE TABLE probe_session_grant "
+                    "(id INTEGER PRIMARY KEY CHECK (id = 1), body TEXT NOT NULL)"
+                )
+                db.execute(
+                    "INSERT INTO probe_policy VALUES (1, ?)", (json.dumps(POLICY, sort_keys=True),)
+                )
+                db.execute(
+                    "INSERT INTO probe_session_grant VALUES (1, ?)", (_canonical_json(grant),)
+                )
+            if UpstageProbe._authorized_limit(db) != amount:
+                raise ValueError("BUDGET_POLICY_MISMATCH")
+        finally:
+            db.close()
+        try:
+            os.link(staging, ledger)
+        except FileExistsError:
+            raise ValueError("LEDGER_ALREADY_EXISTS") from None
+    finally:
+        staging.unlink(missing_ok=True)
+    ledger.chmod(0o600)
+    return grant
+
+
 class UpstageProbe:
     """Local development transport; not a production source-quality attestation."""
 
@@ -216,20 +441,10 @@ class UpstageProbe:
         self.ledger = ledger
         ledger.parent.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(ledger) as db:
-            db.execute(
-                "CREATE TABLE IF NOT EXISTS probe_policy (id INTEGER PRIMARY KEY, body TEXT)"
-            )
-            db.execute(
-                "CREATE TABLE IF NOT EXISTS probe_calls (request_id TEXT PRIMARY KEY, "
-                "signature TEXT NOT NULL, committed TEXT NOT NULL, receipt TEXT)"
-            )
-            # Each row records one explicit budget extension with audit reason and timestamp.
-            # The extension is additive to POLICY["limit_usd"]; rows are append-only.
-            db.execute(
-                "CREATE TABLE IF NOT EXISTS probe_extensions "
-                "(id INTEGER PRIMARY KEY AUTOINCREMENT, "
-                "additional_usd TEXT NOT NULL, reason TEXT NOT NULL, authorized_at TEXT NOT NULL)"
-            )
+            # probe_extensions rows record one explicit budget extension with audit reason
+            # and timestamp; additive to POLICY["limit_usd"]; rows are append-only.
+            for statement in _LEDGER_DDL:
+                db.execute(statement)
             body = json.dumps(POLICY, sort_keys=True)
             db.execute("INSERT OR IGNORE INTO probe_policy VALUES (1, ?)", (body,))
             if db.execute("SELECT body FROM probe_policy WHERE id=1").fetchone()[0] != body:
@@ -245,6 +460,9 @@ class UpstageProbe:
         stored = db.execute("SELECT body FROM probe_policy WHERE id=1").fetchone()
         if stored is None or stored[0] != json.dumps(POLICY, sort_keys=True):
             raise ValueError("BUDGET_POLICY_MISMATCH")
+        session_limit = session_grant_limit(db)
+        if session_limit is not None:
+            return session_limit
         general = Decimal(POLICY["limit_usd"])
         scoped_count = 0
         for extension_id, raw, reason, authorized_at in db.execute(
@@ -358,6 +576,10 @@ class UpstageProbe:
         with sqlite3.connect(self.ledger, timeout=10) as db:
             db.execute("BEGIN IMMEDIATE")
             authorized_limit = self._authorized_limit(db)
+            grant = read_session_grant(db)
+            if grant is not None and session_grant_expired(grant):
+                # No new spend after the grant window; settlement stays allowed.
+                raise ValueError("BUDGET_EXHAUSTED")
             if db.execute("SELECT 1 FROM probe_calls WHERE request_id=?", (request_id,)).fetchone():
                 raise ValueError("DUPLICATE_PROBE_REQUEST")
             total = self._call_total(db)
@@ -468,6 +690,9 @@ class UpstageProbe:
         with sqlite3.connect(self.ledger, timeout=10) as db:
             db.execute("BEGIN IMMEDIATE")
             current_limit = self._authorized_limit(db)
+            if session_grant_limit(db) is not None:
+                # A session grant is a fixed, separately authorized allowance.
+                raise ValueError("SESSION_GRANT_NOT_EXTENSIBLE")
             if current_limit + amount > GENERAL_CEILING_USD:
                 raise ValueError("AUTHORIZATION_EXCEEDS_CEILING")
             authorized_at = datetime.now(UTC).isoformat()
@@ -489,13 +714,17 @@ class UpstageProbe:
             rows = db.execute("SELECT committed, receipt FROM probe_calls").fetchall()
             authorized_limit = self._authorized_limit(db)
             committed = self._call_total(db)
-        return {
+            grant = read_session_grant(db)
+        result = {
             "limit_usd": POLICY["limit_usd"],
             "authorized_limit_usd": str(authorized_limit),
             "calls": len(rows),
             "unsettled_calls": sum(receipt is None for _, receipt in rows),
             "committed_usd": str(committed),
         }
+        if grant is not None:
+            result["session_grant"] = grant
+        return result
 
     def _post(self, body):
         connection = http.client.HTTPSConnection("api.upstage.ai", timeout=60)

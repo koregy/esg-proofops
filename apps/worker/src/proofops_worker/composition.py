@@ -23,6 +23,21 @@ from proofops_worker.local_runner import LocalParserRunner
 from proofops_worker.tag_runner import LocalTagRunner
 
 
+def budget_ledger_path() -> Path:
+    """The one ledger fencing every paid stage of this process.
+
+    ``LOCAL_UPSTAGE_LEDGER_PATH`` (set by the local pilot for an explicit session
+    grant) selects an exact absolute ledger with no fallback; unset keeps the
+    legacy checkout ledger. Existence is still checked by each paid path.
+    """
+    explicit = os.environ.get("LOCAL_UPSTAGE_LEDGER_PATH")
+    if explicit is None:
+        return Path(__file__).resolve().parents[4] / ".local/upstage/budget.sqlite3"
+    if not explicit or not Path(explicit).is_absolute():
+        raise ValueError("SHARED_BUDGET_LEDGER_REQUIRED")
+    return Path(explicit)
+
+
 def build_composition(
     *,
     stage: str = "parse",
@@ -58,7 +73,7 @@ def build_composition(
         "upstage_probe",
     }:
         raise ValueError("EXPLICIT_LOCAL_SYNTHETIC_EXTRACTION_REQUIRED")
-    note_ledger = Path(__file__).resolve().parents[4] / ".local/upstage/budget.sqlite3"
+    note_ledger = budget_ledger_path()
     if raster_ocr and not note_ledger.is_file():
         raise ValueError("SHARED_BUDGET_LEDGER_REQUIRED")
     build_proofops_composition(
@@ -154,7 +169,7 @@ def build_composition(
             )
 
             # The existing user-authorized ledger must exist; never mint another allowance.
-            ledger = Path(__file__).resolve().parents[4] / ".local/upstage/budget.sqlite3"
+            ledger = note_ledger
             if not ledger.is_file():
                 raise ValueError("SHARED_BUDGET_LEDGER_REQUIRED")
             settings_path = os.environ.get("LOCAL_RUN_SETTINGS_PATH")

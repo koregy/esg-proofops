@@ -1,7 +1,8 @@
 """Authorized local PDF→real extraction→review pilot; no production or grading approval.
 
 Use --invoke explicitly for model calls; reuse a state directory to view stored results.
-All model calls share the existing ledger, extended explicitly to USD20 on 2026-09-18.
+All model calls share one ledger: the existing one (extended explicitly to USD20 on
+2026-09-18) or, with --budget-ledger, an explicit session-grant ledger frozen per run.
 No automatic retries.
 """
 
@@ -25,6 +26,7 @@ import yaml  # type: ignore[import-untyped]
 from fastapi import Request
 
 ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_JAVA = "/opt/homebrew/opt/openjdk@21/bin/java"
 
 
 def local_login_response(sessions, user: str, tenant: str, run_id: str):
@@ -60,11 +62,44 @@ def pilot_company_body(legal_name, registration_identifier, *, existing: bool) -
     )
 
 
+def session_ledger_authorization(ledger: Path) -> dict:
+    """Audit record of an explicit session-grant ledger; read-only, fail closed.
+
+    Only a ledger created by scripts/authorize_upstage_session.py qualifies, so a
+    new run never records the historical USD20 authorization for a new grant.
+    """
+    import sqlite3
+
+    from proofops.adapters.local.upstage import (
+        UpstageProbe,
+        read_session_grant,
+        session_grant_expired,
+    )
+
+    ledger = ledger.resolve()
+    if not ledger.is_file():
+        raise ValueError(f"--budget-ledger not found: {ledger}")
+    try:
+        with sqlite3.connect(ledger.as_uri() + "?mode=ro", uri=True) as db:
+            UpstageProbe._authorized_limit(db)
+            grant = read_session_grant(db)
+    except (sqlite3.Error, ValueError) as exc:
+        raise ValueError(f"--budget-ledger invalid: {exc}") from None
+    if grant is None:
+        raise ValueError("--budget-ledger must hold an explicit session grant")
+    return dict(
+        kind="upstage_session_grant",
+        ledger=str(ledger),
+        expired_now=session_grant_expired(grant),
+        **{key: grant[key] for key in sorted(grant)},
+    )
+
+
 def extraction_budget_settings(batch_calls: int, total_calls: int | None = None) -> dict:
     """Freeze a finite run allowance independently of each 1..20-source batch.
 
     Omitting total_calls preserves the legacy one-batch allowance. This grants
-    no money: the shared USD20 ledger still fences every provider dispatch.
+    no money: the run's shared ledger still fences every provider dispatch.
     """
     if type(batch_calls) is not int or not 1 <= batch_calls <= 20:
         raise ValueError("invalid extraction batch call limit")
@@ -325,6 +360,17 @@ def parser_output_limit(value):
     return value
 
 
+def parser_resource_limits(timeout_seconds=None, memory_bytes=None) -> dict:
+    """Explicit new-run resource bounds; historical defaults stay unchanged."""
+    timeout = 120 if timeout_seconds is None else timeout_seconds
+    memory = 768 * 1024 * 1024 if memory_bytes is None else memory_bytes
+    if type(timeout) is not int or not 1 <= timeout <= 900:
+        raise ValueError("--parser-timeout-seconds must be an integer in 1..900")
+    if type(memory) is not int or not 128 * 1024 * 1024 <= memory <= 4 * 1024**3:
+        raise ValueError("--parser-memory-bytes must be an integer in 128MiB..4GiB")
+    return dict(timeout_seconds=timeout, memory_bytes=memory)
+
+
 def claim_source_policy_for(args):
     """Policy pinned for a NEW run's claim-span verification.
 
@@ -392,6 +438,12 @@ def apply_resume_metadata(args, saved: dict) -> None:
     if requested_output_limit is not None and requested_output_limit != saved_output_limit:
         raise ValueError("--resume cannot change parser-max-output-bytes; create a new run")
     args.parser_max_output_bytes = parser_output_limit(saved_output_limit)
+    for name in ("parser_timeout_seconds", "parser_memory_bytes"):
+        requested_resource = getattr(args, name, None)
+        saved_value = saved.get(name)
+        if requested_resource is not None and requested_resource != saved_value:
+            raise ValueError(f"--resume cannot change {name}; create a new run")
+        setattr(args, name, saved_value)
     args.model = saved.get("model", args.model)
     args.verify_paragraphs = bool(saved.get("verify_paragraphs", False))
     args.verify_tables = bool(saved.get("verify_tables", False))
@@ -542,13 +594,29 @@ def main():
         default=None,
         help="NEW run parser artifact cap (default 20000000; max 128 MiB).",
     )
+    parser.add_argument(
+        "--budget-ledger",
+        type=Path,
+        default=None,
+        help="Exact session-grant ledger (scripts/authorize_upstage_session.py) fencing "
+        "every paid stage of this run, including serve-worker. Frozen into pilot.json "
+        "for a NEW run; omit to keep the legacy checkout ledger.",
+    )
+    parser.add_argument(
+        "--java-path",
+        default=None,
+        help="NEW run parser Java 21 executable (default: the macOS Homebrew openjdk@21 "
+        "path). Frozen into parser.json; rejected when the state already exists.",
+    )
+    parser.add_argument("--parser-timeout-seconds", type=int, default=None)
+    parser.add_argument("--parser-memory-bytes", type=int, default=None)
     parser.add_argument("--max-calls", type=int, default=8)
     parser.add_argument(
         "--extraction-total-calls",
         type=int,
         default=None,
         help="NEW run's total extraction allowance across batches (max 2000); "
-        "defaults to --max-calls. The shared USD20 ceiling still applies.",
+        "defaults to --max-calls. The run's ledger ceiling still applies.",
     )
     parser.add_argument(
         "--claim-pages",
@@ -753,7 +821,7 @@ def main():
         "--serve-worker",
         action="store_true",
         help="Explicit paid consent to drive NEW web-queued runs in the same process "
-        "(parse/extract/tag via the shared USD20 ledger). Distinct from read-only "
+        "(parse/extract/tag via the run's shared ledger). Distinct from read-only "
         "--resume; requires --serve. Re-serving stored results alone never needs it.",
     )
     parser.add_argument("--port", type=int, default=8766)
@@ -770,6 +838,7 @@ def main():
                 parser.error("Port is in use; use the existing review URL or another --port")
     try:
         parser_output_limit(args.parser_max_output_bytes)
+        parser_resource_limits(args.parser_timeout_seconds, args.parser_memory_bytes)
     except ValueError as exc:
         parser.error(str(exc))
     resume_state = args.state.resolve()
@@ -923,6 +992,28 @@ def main():
         parser.error(f"Cannot read --pdf: {exc}")
     if source_size > limit:
         parser.error(f"--pdf exceeds the supported upload limit of {limit} bytes (100 MiB)")
+    # Resolve the one ledger for this process before any state is created.
+    budget_ledger: Path | None = None
+    session_authorization: dict | None = None
+    if resume_manifest.exists():
+        saved_ledger = json.loads(resume_manifest.read_text()).get("budget_ledger")
+        if args.budget_ledger is not None and (
+            saved_ledger is None or Path(saved_ledger) != args.budget_ledger.resolve()
+        ):
+            parser.error("--budget-ledger differs from the ledger frozen in this run")
+        budget_ledger = None if saved_ledger is None else Path(saved_ledger)
+    elif args.budget_ledger is not None:
+        try:
+            session_authorization = session_ledger_authorization(args.budget_ledger)
+        except ValueError as exc:
+            parser.error(str(exc))
+        if args.invoke and session_authorization["expired_now"]:
+            parser.error("--budget-ledger session grant has expired; no new paid run")
+        budget_ledger = Path(session_authorization["ledger"])
+    if budget_ledger is None:
+        os.environ.pop("LOCAL_UPSTAGE_LEDGER_PATH", None)
+    else:
+        os.environ["LOCAL_UPSTAGE_LEDGER_PATH"] = str(budget_ledger)
     state = args.state.resolve()
     state.mkdir(parents=True, exist_ok=True, mode=0o700)
     manifest_path = state / "pilot.json"
@@ -946,8 +1037,8 @@ def main():
 
         config = ParserProfile(
             str(uuid4()),
-            java_executable="/opt/homebrew/opt/openjdk@21/bin/java",
-            timeout_seconds=120,
+            java_executable=args.java_path or DEFAULT_JAVA,
+            **parser_resource_limits(args.parser_timeout_seconds, args.parser_memory_bytes),
             max_output_bytes=parser_output_limit(args.parser_max_output_bytes),
             table_source_policy_sha256=(
                 table_policy()
@@ -1298,7 +1389,11 @@ def main():
             extraction_batch_calls=args.max_calls,
             extraction_total_calls=args.extraction_total_calls,
             rulepack_approval="ai_delegated_review" if args.ai_project_review else None,
-            authorization="user request 2026-09-18: actual model integration; cumulative USD20",
+            authorization=(
+                "user request 2026-09-18: actual model integration; cumulative USD20"
+                if session_authorization is None
+                else {k: v for k, v in session_authorization.items() if k != "expired_now"}
+            ),
             production_ready=False,
             verify_paragraphs=args.verify_paragraphs,
             verify_tables=args.verify_tables,
@@ -1309,6 +1404,8 @@ def main():
             live_tagging=args.live_tagging,
             tagging_max_calls=args.tagging_max_calls if args.live_tagging else None,
         )
+        if budget_ledger is not None:
+            manifest["budget_ledger"] = str(budget_ledger)
         if args.raster_ocr:
             manifest.update(raster_ocr=True, raster_policy=raster["raster_policy"])
         if args.live_relations:
@@ -1357,10 +1454,18 @@ def main():
             manifest["extraction_content_bounds"] = True
         if args.capacity_refresh:
             manifest["capacity_refresh"] = True
+        for name in ("parser_timeout_seconds", "parser_memory_bytes"):
+            if getattr(args, name) is not None:
+                manifest[name] = getattr(args, name)
         with manifest_path.open("x") as stream:
             json.dump(manifest, stream, ensure_ascii=False, indent=2)
     else:
         manifest = json.loads(manifest_path.read_text())
+        if args.java_path is not None:
+            parser.error("--java-path applies to a NEW run only; the parser profile is frozen")
+        for name in ("parser_timeout_seconds", "parser_memory_bytes"):
+            if getattr(args, name) is not None and getattr(args, name) != manifest.get(name):
+                parser.error(f"{name} differs from the frozen parser profile")
         if manifest.get("capacity_refresh", False) != getattr(args, "capacity_refresh", False):
             raise ValueError("pilot capacity refresh policy changed; create a new state directory")
         if args.extraction_total_calls is not None and (
@@ -1565,7 +1670,7 @@ def main():
 
         worker_thread = worker_stop = None
         if args.serve_worker:
-            # Paid consent: reuse the same Upstage key + shared USD20 ledger the
+            # Paid consent: reuse the same Upstage key + the run's ledger the
             # one-shot --invoke path uses; the loop mints no new allowance.
             key_lines = args.key_file.read_text().splitlines()
             os.environ["UPSTAGE_API_KEY"] = next(
