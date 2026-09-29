@@ -913,6 +913,49 @@
           "items": {
             "type": "string"
           }
+        },
+        "grade_range": {
+          "description": "Reachable ladder grades while ladder evidence is unresolved (engine v3+). Not a grade or label; null when decided or when a separate path/rule gap blocks. Absent on decisions stored before engine v3.",
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "floor": {
+                  "type": "string",
+                  "enum": [
+                    "E0",
+                    "E1",
+                    "E2",
+                    "E3"
+                  ]
+                },
+                "ceiling": {
+                  "type": "string",
+                  "enum": [
+                    "E0",
+                    "E1",
+                    "E2",
+                    "E3"
+                  ]
+                },
+                "open_elements": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "floor",
+                "ceiling",
+                "open_elements"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -1033,6 +1076,22 @@
             "properties": {
               "label": {
                 "const": "SUBSTANTIATED"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "decision_status": {
+                "const": "decided"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "grade_range": {
+                "type": "null"
               }
             }
           }
@@ -1304,6 +1363,22 @@
               "type": "null"
             }
           ]
+        },
+        "reviewed_context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReviewedContext"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "submitted_reviews": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SubmittedReview"
+          }
         }
       },
       "required": [
@@ -4010,6 +4085,229 @@
         "reasons"
       ],
       "title": "ObservationSourceHolds",
+      "type": "object"
+    },
+    "ReviewedContext": {
+      "additionalProperties": false,
+      "properties": {
+        "origin": {
+          "const": "ai_delegated",
+          "title": "Origin",
+          "type": "string"
+        },
+        "dimensions": {
+          "$ref": "#/$defs/ReviewedDimensions"
+        },
+        "numeric_check": {
+          "$ref": "#/$defs/NumericContextCheck"
+        }
+      },
+      "required": [
+        "origin",
+        "dimensions",
+        "numeric_check"
+      ],
+      "title": "ReviewedContext",
+      "type": "object"
+    },
+    "ReviewedDimensions": {
+      "additionalProperties": false,
+      "properties": {
+        "facility": {
+          "$ref": "#/$defs/SourceRef"
+        },
+        "reporting_period": {
+          "$ref": "#/$defs/SourceRef"
+        },
+        "metric": {
+          "$ref": "#/$defs/SourceRef"
+        },
+        "value": {
+          "$ref": "#/$defs/SourceRef"
+        },
+        "unit": {
+          "$ref": "#/$defs/SourceRef"
+        }
+      },
+      "required": [
+        "facility",
+        "reporting_period",
+        "metric",
+        "value",
+        "unit"
+      ],
+      "title": "ReviewedDimensions",
+      "type": "object"
+    },
+    "NumericContextCheck": {
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "const": "needs_review",
+          "title": "Status",
+          "type": "string"
+        },
+        "reason": {
+          "const": "no_comparable_table_observation",
+          "title": "Reason",
+          "type": "string"
+        },
+        "considered": {
+          "items": {
+            "$ref": "#/$defs/NumericCandidateReview"
+          },
+          "title": "Considered",
+          "type": "array"
+        }
+      },
+      "required": [
+        "status",
+        "reason",
+        "considered"
+      ],
+      "title": "NumericContextCheck",
+      "type": "object"
+    },
+    "NumericCandidateReview": {
+      "additionalProperties": false,
+      "properties": {
+        "source_ref": {
+          "$ref": "#/$defs/SourceRef"
+        },
+        "status": {
+          "enum": [
+            "claim_source",
+            "outside_reviewed_section",
+            "unresolved"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_ref",
+        "status"
+      ],
+      "title": "NumericCandidateReview",
+      "type": "object"
+    },
+    "SubmittedReview": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "status": {
+          "const": "reference_only",
+          "title": "Status",
+          "type": "string"
+        },
+        "origin": {
+          "enum": [
+            "data_manager_submission",
+            "ai_corrected_submission"
+          ],
+          "title": "Origin",
+          "type": "string"
+        },
+        "tenant_id": {
+          "format": "uuid",
+          "title": "Tenant Id",
+          "type": "string"
+        },
+        "run_id": {
+          "format": "uuid",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "document_version_id": {
+          "format": "uuid",
+          "title": "Document Version Id",
+          "type": "string"
+        },
+        "claim_id": {
+          "format": "uuid",
+          "title": "Claim Id",
+          "type": "string"
+        },
+        "external_claim_id": {
+          "title": "External Claim Id",
+          "type": "string"
+        },
+        "reference_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Reference Sha256",
+          "type": "string"
+        },
+        "source_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Sha256",
+          "type": "string"
+        },
+        "run_input_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Run Input Sha256",
+          "type": "string"
+        },
+        "claim_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Claim Snapshot Sha256",
+          "type": "string"
+        },
+        "claim_source_quality": {
+          "title": "Claim Source Quality",
+          "type": "string"
+        },
+        "files_sha256": {
+          "additionalProperties": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "title": "Files Sha256",
+          "type": "object"
+        },
+        "tables": {
+          "additionalProperties": {
+            "items": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "propertyNames": {
+            "enum": [
+              "claims",
+              "elements",
+              "numeric",
+              "assurance"
+            ]
+          },
+          "title": "Tables",
+          "type": "object"
+        }
+      },
+      "required": [
+        "schema_version",
+        "status",
+        "origin",
+        "tenant_id",
+        "run_id",
+        "document_version_id",
+        "claim_id",
+        "external_claim_id",
+        "reference_sha256",
+        "source_sha256",
+        "run_input_sha256",
+        "claim_snapshot_sha256",
+        "claim_source_quality",
+        "files_sha256",
+        "tables"
+      ],
+      "title": "SubmittedReview",
       "type": "object"
     }
   }

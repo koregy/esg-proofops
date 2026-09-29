@@ -1,5 +1,6 @@
 """A stopped paid pipeline must not run later stages or report success."""
 
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -160,3 +161,55 @@ def test_single_batch_resume_requires_a_published_extract(monkeypatch, outcome):
     result = run_live_stages(args, tenant_id="tenant", run_id="run")
     assert visited == ["parse", "extract"]
     assert result == {"stage": "extract", "status": "no_revision", "exit_code": 1}
+
+
+def test_run_batches_streams_safe_progress_before_next_call(monkeypatch):
+    import json
+
+    import proofops_worker.extract_batch as module
+
+    events = []
+    summaries = [
+        {
+            "status": "committed",
+            "model_processed_after": 3,
+            "pending_after": ["private-source"],
+            "raw_error": "private-error",
+        },
+        {"status": "blocked", "stop_code": "BUDGET_EXHAUSTED"},
+    ]
+
+    def run_batch(**_):
+        index = sum(event == "call" for event in events)
+        events.append("call")
+        return summaries[index]
+
+    def capture(line, *, file, flush):
+        assert file is sys.stderr and flush is True
+        events.append(json.loads(line))
+
+    monkeypatch.setattr(module, "print", capture, raising=False)
+    results = module.run_batches(
+        SimpleNamespace(run_batch=run_batch), tenant_id="tenant", run_id="run", batches=100
+    )
+    assert results == [dict(summary, batch=i + 1) for i, summary in enumerate(summaries)]
+    assert events == [
+        "call",
+        {
+            "event": "extract_batch_progress",
+            "batch": 1,
+            "status": "committed",
+            "model_processed_count": 3,
+            "pending_count": 1,
+            "stop_code": None,
+        },
+        "call",
+        {
+            "event": "extract_batch_progress",
+            "batch": 2,
+            "status": "blocked",
+            "model_processed_count": None,
+            "pending_count": None,
+            "stop_code": "BUDGET_EXHAUSTED",
+        },
+    ]

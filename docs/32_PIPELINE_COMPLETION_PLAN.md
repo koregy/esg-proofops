@@ -11,8 +11,44 @@
 
 **문서의 역할:** 이 파일은 현재 개발 순서·산출물·완료 기준의 단일 계획이다. `service-readiness-plan.md`와 `autonomous-completion-plan.md`의 날짜별 내용은 실행 이력이다. 이 계획은 기존 도메인 계약이나 미확정 규칙을 덮어쓰지 않는다. 날짜별 일정 대신 의존성과 완료 결과로 관리한다.
 
-**최신 통합 상태 · 2026-09-21:** 개발자 B의 PR #7을 수령해 A 파이프라인과 통합한
-[PR #8](https://github.com/tskwak111/esg-proofops/pull/8)이 현재 코드 기준이다.
+**현재 실행 지시 · 2026-09-22 R24:** 사용자 요청에 따라 실제 검토자의 전체 흐름을 다섯 단계로 진행한다. Kiro → Antigravity → OpenCode(Muse Spark 1.3 Free)의 실제 한도 소진을 확인한 뒤에만 Codex sol/terra/luna worker를 사용한다. 지연·로그인 장애를 크레딧 소진으로 간주하지 않는다. Codex 사용률 **80%** 도달 시 신규 작업을 시작하지 않고 진행 중 작업을 마무리한다(아래 과거 50%/60% 등 기준보다 우선). 시작 확인 사용률61%. 공용 Upstage 누적 USD20 한도와 과거 미정산 예약은 그대로 유지한다.
+
+## R24 현재 결과와 남은 조건 · 2026-09-22
+
+이 표가 아래 시간순 이력보다 최신 상태다. 실제 검토 가능한 결과를 늘리는 것이 목표이며, 모든 보고서의 완주·독립 정확도·서비스 배포 완료를 뜻하지 않는다.
+
+| 요청한 작업 | 현재 확보한 결과 | 아직 충족하지 못한 조건 |
+|---|---|---|
+| 1. 검토자의 입력→출력 흐름 | 원문·현재 검토 revision·AI/사람 출처·미해결 사유·후속 조치가 실제 API와 JSON/CSV/HTML ZIP으로 이어짐. 재검토는 새 revision이며 이전 보고서 보존 | 전체 보고서의 모든 주장 검토 완료는 아님 |
+| 2. 목표·성과·관리체계 실제 사례 | 관리체계는 NAVER/HMM/KB 실제 검토·Python 판정·부분 출력. NAVER 게시29건 전체 AI 원문 검토 적용, 목표연도2040·태양광21.3MWh 확인. 혼합 문장2건의 트랙 정정, 발전량의 잘못된 추정치 분류 제거, 상충 근거4개 복원까지 최종 적용 | 최초 지정 목표2·성과2는 게시 검토 입력이 없어 보류. 대체2건은 Python 등급 null/미정 규칙 보류이며 전부 성공으로 세지 않음 |
+| 3. 보류 원인과 다음 행동 | 미처리·원문검증·분류충돌·요소미확정·보증/세이프하버 미실행을 구분. KB23건 중 검토 게시4건, 나머지는 원문검증15·사전분류3·packet1 | 원문 가드/미정 계약을 완화하지 않아 등급은 계속 보류될 수 있음 |
+| 4. 개발자 B 통합과 실제 재무 입력 | 최신 검토 head를 CLI/대사 저장소에서 일관되게 읽음. 공식 NAVER FY2025 연결감사보고서139쪽을 실제 회사와 문서 버전으로 등록,6개 인용 검증. A의 잘못된 typed packet 방출을 기존 B 공통 검증기로 차단(`6bf0f6c`) | 기존 run의 시험용 회사와 실제 NAVER 회사 불일치. C1은3개 M2트리거가 있지만 typed entity_set 미정규화, C2 implementation_scope 생산 경로 없음. package_id는 caller manifest이며 제품 등록이 아님. C3/C4는 각 항목의 미정 정책이 별도 필요. 독립 사람 gold 부재를 모든 packet 생성의 필수 장벽으로 보지 않음 |
+| 5. 여러 보고서·누락·오류·시간·비용 | NAVER/KB/HMM/롯데의 부분 실제 실행과 원문 기반 AI 검토. 반복 NAVER261주장 API5.497→2.729초; 후속 bbox 개선의 fusion1.141→0.631초(별도 warm graph1.613→1.123초). 새 opt-in 검증으로 NAVER/KB8선정 인용 중5복구 | 이전261주장 첫 원문 재생 약171초·확장327주장 약202초, 표 행/열·문맥 귀속·분류 보류, 전체 누락률 분모·독립 gold가 남음. 선정 표본의 성공을 전체 정확도로 일반화하지 않음 |
+
+NAVER 확장 추출은 1200/1212 대상 처리 후 동결 호출 상한에서 끝났다(327주장, 저장 원문검증234/보류93, 추출대기12). 이는 공용 USD20 소진과 다르며, 선택29주장 페이지/56근거 페이지가 보고서244쪽 전수 완료를 뜻하지 않는다. 원본을 보존한 별도 사본에서 실제 태깅을 1회 실행해 29건(관리체계22·목표5·성과2)의 태깅 revision/검토 입력을 게시했다. 717개 추가 실제 호출은 전부 정산됐고, 2769.219초·USD0.9135489가 들었다. 공용 장부는 사용·예약 합계USD19.0005870872, 과거 미정산13건(USD13) 그대로이며 다음 USD1 예약에 필요한 금액이 부족해 추가 호출이 차단됐다. 추출 호출 상한1200과 이 태깅의 공용 달러 예약 제한은 별개다. 게시29건 전부 AI 원문 검토를 마쳤다. 최종327행 결과는 blocked_evidence27·blocked_rule_gap2·not_run298이며 등급은 모두 null이다. 태양광 항목의 첫 AI 검토가 기존 P6 conflict를 unknown으로 바꾼 오류, 후속 검토가 상충 근거4개 중1개만 남긴 오류를 부모 검토에서 발견해 tag revision4에서 원래 conflict와4개 근거를 모두 복원했다. 잘못된 emissions_estimate 분류는 `22c0985`의 원문 고정 정정 receipt로 제거했고 원래3개 모델 응답은 그대로다. 다른 혼합 문장3e79f3ee는 revision3에서 트랙은 유지하고 판단 사유의 잘못된 필수 조건 설명만 정정했다.
+
+KB 최신 부분 산출물은 ROOT `outputs/agent-results/R24/kb-available-reviews/kb-system-export-latest.zip`(23행 JSON/CSV/HTML)이다. M1 교정과 M4 근거 문구 교정을 모두 반영해 ca035ea2/e783c272의 tag revision3을 읽었으며, 이전 두 ZIP과 과거 revision·원본은 그대로다. 태양광 P1의 실제 UI에서도 검토 출처와 present를 확인했다. 출처 ID가 있다는 이유만으로 근거 범위를 “문서 전역”이라 표시하던 UI 오류는 `d236675`에서 제거했다.
+
+내보내기 용량 오류는 `c4ac491`에서 수정했다. 동일한 원본 입력의 중복 직렬화를 버전이 있는 참조 방식으로 제거하고 표준 ZIP 압축을 사용하며 32MiB 한도는 그대로다. 실제327행 JSON/CSV/HTML 다운로드는 12,978,553바이트였고29개 원본 revision의 무손실 복원을 확인했다. 이는 검토 전 TAG 사본 검증이다. 최종 검토 후 ZIP은 ROOT `outputs/agent-results/R24/naver-expanded-review-pass/final/naver-final-review-export.zip`, 13,046,886바이트, SHA256 `2428f069fc03b0c2670dd07810363600f37ee0bdd4c232c39830d081e6188eb7`, export `427bb68a-e6a5-4edf-a198-d67a0ca3fb44`, epoch158이다. JSON/CSV327행과 최종 tag revision3/4, 이전 revision·이전ZIP·원본 TAG DB·공용 장부의 불변을 실제 확인했다. 상세 근거는 같은 디렉터리의 `result.json`과 실행 스크립트에 있다.
+
+최종 HTML 직접 검토에서 미실행 항목의 빈 목록을 “결손 없음·미해결 없음”으로 표시하는 오해를 발견해 `0074ac7`에서 “미평가”로 정정했다. JSON/CSV·판정 모델은 동일하고 중복 JSON은 기존 감사 상세에만 남긴다. 기존 ZIP을 보존하고 새 실제 export를 완료했다. 최신 산출물은 ROOT `outputs/agent-results/R24/reader-exports/naver-review-export.zip`(327행, 13,041,884바이트, SHA256 `e7c1b5fde2074bfec0264904c3e7a5b1f406d55670582971ee4257f3eacbc72c`)와 `kb-review-export.zip`(23행, 88,922바이트, SHA256 `9a3953557f6df9fa93f964cf77b6051ec20de61d071a7192ac651bd3d82a9986`)이다. NAVER298·KB19 미실행 행의 HTML “미평가”, JSON/CSV 행수, 모든 등급 null, 기존 revision·원본·이전 ZIP·공용 장부 불변을 실제 확인했다. 신규 모델 호출0건, 출력 시간은 첫 원문 재생을 포함해 NAVER203.870초·KB21.209초다. 같은 디렉터리의 `naver-result.json`·`kb-result.json`과 실행 스크립트에 재현·검증 기록이 있다.
+
+실제 UI 검증도 완료했다. `dcd1829`로 무반응이던 후보 원문 버튼을 기존 인증 티켓 경로에 연결했고 모델별 응답 JSON은 접힌 상세로 옮겼다. NAVER 태양광 상세에서 후보225쪽 원본 이미지와 기존88쪽 원본 이미지가 각각 로드됨(1999×1135), 후보가 근거로 승격되지 않음, 하이라이트 가드·키보드 포커스·현재 P6상충4개·GAP-003만 남음을 확인했다. 근거: ROOT `outputs/agent-results/R24/candidate-source-ui/`의 실제 화면과 DOM 기록.
+
+세이프하버 실제 후속 검토는 NAVER 목표2건(e541b8cf·5fb6023a)의 고정 규칙팩까지 재생해 확인했다. `proofops-domain-v2.0-impl1`의 `reasonable_basis_boolean_mapping`과 `grade_mapping`이 모두 null이므로 기존 trusted review 경로가 입력을 거부한다. 두 항목은 tag revision2·unknown/not_run을 유지했고 DB 쓰기는0건이다. 체크리스트 실행 완료나 등급 산출로 세지 않는다. 근거: ROOT `outputs/agent-results/R24/safe-harbor-followup/BLOCKER_REPORT.md`.
+
+반복 상세 조회는 `a1bc395`에서 같은 요청의 태깅 입력/원문 재생을 재사용하도록 수정했다. 실제327주장 사본에서 원문 재생 호출6→3, 태깅 입력 로드2→1, 비프로파일링 반복 상세16.218→7.560초(다음 요청7.433초)를 관찰했다. 서로 다른 시점·공유 장비 측정이며 보장 성능은 아니다. 체크포인트 변조 거절과 미게시 태깅 HTTP200 등 관련 검사를 통과했다. 같은 수정본의 반복 응답 안정성은 확인했지만, 수정 전후 전체 DTO 바이트 비교는 실험 하네스 오류로 미확인이다. 근거: ROOT `outputs/agent-results/R24/current-read-fix/RESULT.md`.
+
+첫 원문 읽기의 페이지 glyph 재사용도 별도 진단했다. 현재 wrapper 파일 자체의 해시가 과거 실행 정책에 고정되어 있어 단순한 코드 수정만으로 기존 실행 재생이 깨짐을 확인했고 변경을 원복했다. NAVER5쪽의 페이지 glyph 반복값 일치는 확인했지만 전체 receipt 동일성·전체 첫 읽기 단축은 입증하지 못했다. 따라서 새 정책 버전/구 실행 호환 경로를 추가하지 않았고 약202초 병목은 남아 있다. 근거: ROOT `outputs/agent-results/R24/cold-read-fix/RESULT.md`.
+
+완료 후 다음 실행의 순서는 실제 원문 실패/분류 보류 사례 해결 → 같은 입력의 검토 가능 건수 변화 확인 → 현재 결과의 실제 화면 검증 → 전체 범위 재실행이다. 새 유료 실행은 기존 공용 USD20 안에서 예약 가능할 때만 하며 과거 미정산13건은 유지한다. 보증·세이프하버·도메인 GAP는 미실행/미정 그대로 기록한다.
+
+최종 로컬 통합 검사: `pytest tests/unit tests/contracts tests/acceptance tests/integration tests/security tests/e2e/test_staging_gate.py -q` → **3566 passed,45 skipped,367.69초**. 45개 skip은 미실행이며 모델 정확도가 아니다. `ruff check .`·`ruff format --check .`(534파일), CI 범위 `mypy`(269파일), `scripts/verify_architecture.py` 통과. 필수 포맷 수정6파일은 AST 동일성을 확인했다(`fe1e0b9`). 앞서 최신 UI build·후보 원문 E2E·접근성 검사를 통과했고 실제 원문 화면도 확인했다. `scripts/validate_package.py`의971통과는 문서/계약 검사이며 앱 시험과 구분한다. 최종 모델 장부도6705행·미정산13건·사용/예약USD19.0005870872 그대로다. 로그는 ROOT `outputs/agent-results/R24/reader-exports/`에 있다. 원격 GitHub CI·신규 유료 모델/AWS·독립 전문가 정확도 시험은 not_run이다.
+
+공급자/자원 정리: 이번 R24는 Kiro 실제 실행으로 진행했으며, 연결 타임아웃·일시 응답 오류를 크레딧 소진으로 바꾸어 기록하지 않았다. Kiro 소진이 확인되지 않아 Antigravity/OpenCode로 순서를 건너뛰거나 Codex sol/terra/luna worker를 시작하지 않았다. 마지막 Orca 사용량 갱신(2026-09-22 00:24:10 UTC)에서 Codex 주간78%를 확인했다. 관리 대상 작업은 모두 종료했고 해당 Kiro 터미널과 부모가 띄운 검증용 서버/브라우저만 정리했다. 원본 작업 폴더와 결과 파일은 유지한다.
+
+**통합 기준선 · 2026-09-21 (후속 R24는 PR #9):** 개발자 B의 PR #7을 수령해 A 파이프라인과 통합한
+[PR #8](https://github.com/tskwak111/esg-proofops/pull/8)이 A+B 통합 기준선이다. 그 이후 R24 코드는 `feature/naver-preliminary-review-20260921` 브랜치로 push하고 [Draft PR #9](https://github.com/tskwak111/esg-proofops/pull/9)에 보존했다. main 병합·운영 배포 완료는 아니며 검토용 PR 상태다.
 아래 날짜별 기록의 “B 미수령”은 당시 상태이며, 최종 도메인 기준·크로스워크와 C3 정책,
 실보고서의 트랙/근거 보류·전체 완주·독립 gold 평가는 여전히 남아 있다.
 사용자는 로컬 검증 후 병합·push를 승인했다. GitHub Actions 무료 2,000분은 소진돼
@@ -65,8 +101,8 @@ Orca run `run_da368bec0794`의 Kiro Opus5/Sonnet5 작업을 사용했다. 신규
 
 ### 1.1 작업 위치
 
-- ROOT: `/Users/ss020/Dev/ESG_ProofOps` — 원문, 기업보고서, 인계 패키지, 실행 래퍼, 일부 평가 산출물.
-- APP: 이 문서를 포함한 최신 앱 checkout. 현재 통합 작업 위치는 `/Users/ss020/Dev/ESG_ProofOps/.local/ab-integration-20260921`이다. 코드·테스트 경로는 별도 표시가 없으면 APP 기준이다. 아래 과거 실행 기록의 APP은 기존 `/Users/ss020/Dev/ESG_ProofOps/.local/team-publication-20260918`을 가리키며, 그 작업본·산출물은 이동하거나 덮어쓰지 않는다.
+- ROOT: `<local-project-root>` — 원문, 기업보고서, 인계 패키지, 실행 래퍼, 일부 평가 산출물.
+- APP: 이 문서를 포함한 최신 앱 checkout. 현재 통합 작업 위치는 `<local-project-root>/.local/ab-integration-20260921`이다. 코드·테스트 경로는 별도 표시가 없으면 APP 기준이다. 아래 과거 실행 기록의 APP은 기존 `<local-project-root>/.local/team-publication-20260918`을 가리키며, 그 작업본·산출물은 이동하거나 덮어쓰지 않는다.
 - Python 명령은 APP의 `.venv/bin/python`을 사용한다. 현재 작업 트리에 미커밋 변경이 있으므로 시작 시 diff와 담당 파일을 확인하고 다른 작업을 덮어쓰지 않는다. 전체 `git add .`, 자동 push, 작업 트리 초기화를 하지 않는다.
 - 원격 main과 로컬 구현이 같다고 가정하지 않는다. 통합/납품 시 실제 commit과 미커밋 patch의 식별값을 기록한다.
 
@@ -661,3 +697,125 @@ R00의 충돌·호환성 경계를 필요한 범위만 정리한 뒤 R01 비교�
 - R19 실제 실행 종료: 네이버 새 run `d379689e-b597-4920-a84e-6fbe72d55baf`은 이전과 동일한10인용을 추출했고36추출+27선행분류 실제호출, 대기0, 목록·상세HTTP200을 확인했다. worker→claim-store의 새 영수증 verified9/unresolved1로 원문 보류8→1. 최종 상태는 원문검증1/선행분류미확정9 보류·등급0이다. 체계구축1건의 세 응답 management/null/management는 conflict로 유지했고, 나머지8건은 track null; 요소태깅 호출은0. 원문 검증 개선을 트랙·등급 성공으로 해석하지 않는다. 비용USD0.052915500, 공유 사용·예약USD17.232129957200000000059/20, 과거 미정산13건 그대로. 실제 결과 `outputs/agent-results/R19-live-runtime.json`, 신규 실행 로그 `R19-live-naver.log`. 다음 병목은 명사형·위험평가 주장에 대한 문맥/트랙 적합성 및 원문 근거 연결이며, 같은 입력 반복호출이나 합의 기준 완화로 해결하지 않는다. 전체 보고서·독립gold·B/최종 기준 통합은 아직 미완료다.
 
 - 2026-09-21 A+B 통합: 개발자 B의 실제 반환은 GitHub PR #7(`55e3e06`)으로 확인했다. A 미커밋 작업 스냅샷을 별도 `integration/developer-ab-20260921`에서 합쳤으며 원래 A 작업 폴더와 B 브랜치는 보존했다. 합성 브라우저에서 C1/C2/C4 검토·평가·내보내기와 C3 미승인 보류를 확인했고, 네이버 2건/KB 1건의 기존 실행 총43주장 인용문과 검증 상태를 그대로 재조회했다. 이는 기능 통합·재생 호환성 결과이며 실제 기업 정확도 개선이나 독립gold 확보가 아니다. 최종 기준/크로스워크와 C3 정책은 여전히 미확정이다. 검증 결과와 재현 방법: [A+B 통합 기록](AB_INTEGRATION_20260921.md).
+
+### R20 · 네이버 보류 진단과 제목 오추출 보완 (2026-09-21)
+
+- 통합 main `ca75df5`에서 `feature/naver-preliminary-review-20260921`로 진행한다. B는 별도 실기업 대조 후속 업무를 맡으며 이번 작업은 A의 추출·검토 경로다.
+- R19 저장 응답 27건을 다시 확인했다. 8주장은 세 번 모두 track=null, 체계 구축 1주장은 management/null/management였다. 원문 미검증 1주장은 선행분류에 진입하지 않았다. 따라서 9건 모두를 “합의 실패, 재시도”로 안내한 API 문구는 부정확하다. 같은 값으로 일치했다는 사실이 올바른 분류라는 뜻은 아니며, 불명·응답 충돌·응답 미완료를 구분해야 한다.
+- 조정자가 PDF90쪽을 렌더해 원문 구성을 확인했다. “극한호우로 인한 사옥 및 데이터센터의 물리적 손상(K-water 협업)”은 하위 제목인데 독립 주장으로 추출됐다. 나머지 모델링 결과는 원문의 시나리오·방법·사업장 귀속을 검토해야 하며, 위험평가라는 주제만으로 성과 트랙 또는 도메인 밖으로 일괄 확정하지 않는다. 명사형 구축/구현의 시제·존재 여부 역시 아직 의미 검토 대상이다.
+- 원래 입력을 그대로 둔 source-ID 추출 프롬프트 보완 4회 실험에서 제목 1건은 제외하고 체계 구축·시뮬레이션 구현·모델링 결과 3건은 유지했다. 비교 기준은 R19 저장 응답이며 새로운 동시 A/B 실험은 아니다. 이미 본 한 페이지의 AI 원문 검토 사례이므로 독립 gold·전체 정확도·등급 성공으로 표시하지 않는다.
+- 새 추출기에 실제 저장 응답 4건을 주입한 오프라인 검증에서 실험 프롬프트·입력 문맥의 동일성, 제목0/나머지 각1개 span, 원문 offset 일치 및 두 번째 실행의 영수증 재생을 확인했다. 기존 설정24조합의 profile hash와 저장74블록 graph도 일치했다. 이 검증의 추가 네트워크 호출은0이며 새 API run 또는 등급 산출을 실행한 것은 아니다. 결과 `outputs/agent-results/R20-naver/offline-replay/summary.json`.
+- 추출 보완은 새 실행에서 `--extraction-source-ids --extraction-assertion-prompt`로 선택한다. 기존 기본값은 유지하고 새 prompt/rule hash를 고정하며, `--resume`으로 과거 실행에 추가할 수 없다. 분류 프롬프트나 Python 등급 규칙을 바꾸는 옵션이 아니다.
+- 구현·검토 완료(2026-09-22): API는 분류 불명/필드·차원 충돌/응답 미완료를 구분하며, 응답 개수가 없는 과거 기록은 중립 안내를 사용한다. 실제 R19 checkpoint를 읽기 전용으로 대조해 불명8/충돌1을 확인했다(`R20-naver/review-projection.json`). Kiro 관련210검사·lint·type(221파일)·architecture 통과 후, 조정자의 마지막 안내 수정에 대해 `.venv/bin/python -m pytest tests/integration/test_claim_api.py -q` 9통과, 변경 Python 파일 `ruff check`, `mypy apps/api/src/proofops_api/routers/claims.py`, `git diff --check` 통과. 전체4천여검사·새 유료 end-to-end run·AWS 검증은 not_run이다. 관리 worker 완료 수신 후 release 및 이번에 생성한 터미널 종료, reclaimable0을 확인했다.
+- 실제 추가 호출4건 전부 정산 USD0.002433090. 공용 사용·예약 USD17.234563047200000000059/20, 과거 미정산13건 유지. 원래 run·PDF·claim/태깅/판정 revision은 변경하지 않았다. 실험은 새 결과를 서비스에 게시하지 않았다.
+- 로컬 증거는 ROOT `outputs/agent-results/R20-naver/extraction-probe/`의 manifest·요청·응답·summary, `R20-naver/page90.png`, `R20-naver-diagnosis.md`다. 예비 태깅의 의미 분류, 전체 보고서 완주, 독립 평가와 최종 정책은 이번 소표본 추출 실험으로 해결되지 않았다.
+
+### R21 · 분류 실험과 검토 큐 누락 보완 (2026-09-22)
+
+- Kiro 원문·실제 요청 대조에서 체계 구축/시뮬레이션 구현 두 주장 모두 S&P 분석 수행 문맥을 이미 받았음을 확인했다. 기존 프롬프트도 문맥을 통한 트랙 해석을 허용한다. 따라서 단순한 문맥 부재·문맥 사용 금지를 원인으로 확정했던 초기 가설은 철회했다. 모델링 결과 주장에는 가정/분석 결과 표제의 일부 문맥이 빠져 있지만, 이것만으로 원인이나 정답 트랙을 확정하지 않는다.
+- 동일한 실제 입력4건에 기존/명확화 프롬프트 각1회, 총8회 호출했다. 기존은4건 모두 track=null, 명확화는 체계 구축1건만 management/0.6, 나머지3건은 null이었다. 기존의 과거 세 응답에도 management가2회 있었으므로 개선·합의·정확도 입증이 아니다. 새 분류 프롬프트는 제품에 편입하지 않았다. 결과는 ROOT `outputs/agent-results/R21-track-probe/summary.json`과 같은 폴더의 요청·응답·manifest에 보존한다.
+- 8회 모두 정산, 추가 USD0.010065660. 공용 사용·예약 USD17.244628707200000000059/20, 과거 미정산13건 그대로다. 기존 PDF/run/태깅/판정 revision과 서비스 게시 결과는 변경하지 않았다.
+- 실제 R19 데이터베이스를 읽기 전용으로 확인했다: 주장10건, 선행분류 보류9건, 원문 보류1건, `review_inputs` 보유0건, `review_head`0건(`outputs/agent-results/R21-review-gap.json`). worker는 선행분류 보류 시 검토 입력 게시 이전에 종료하고, UI는 reviews가 없으면 빈 큐만 표시했다. 기존 주장 상세의 보류 안내는 편집 가능한 수동 분류 경로가 아니다.
+- UI 보완 완료: 기존 claims/reviews 응답으로 검토 미등록·미판정 주장을 구해 개수·페이지·인용문과 기존 상세 링크를 표시한다. 이미 검토에 등록됐거나 판정된 주장은 제외하고, 기존 검토 편집기와 함께 표시한다. 원문 검증 통과나 특정 보류 원인을 단정하지 않으며 아직 편집할 수 없음을 안내한다. API/DB/권한·태깅 게시 가드는 변경하지 않았다.
+- 검증: 새 `tests/e2e/review_queue_gap_check.mjs`를 작업용 Vite/Orca 브라우저에서 실행하여 수정 전 미표시 실패, 수정 후 미등록 목록·혼합 상태의 기존 편집기·중복/판정 완료 제외·실제 빈 큐·중립 안내를 확인했다. 혼합 상태는 새 React key로 다시 마운트하고 목록 내부에 한정해 검증한다. `pnpm build`(tsc --noEmit + Vite), `git diff --check` 통과. 이는 mock API를 사용한 실제 브라우저 회귀이며 실제 원본10건의 UI end-to-end 판정 검증은 아니다. 전체 Python 검사는 UI 수정 범위에 필요하지 않아 반복하지 않았다. Kiro의 조사·보완·구현3개 Task 완료, 마지막 worker release→생성 터미널 종료→delivery ack, reclaimable0 확인.
+- 수동 선행분류 확정은 여전히 미구현이다. `ReviewService`는 트랙별 매핑과 유효한 검토 입력을 필요로 하고 live 검토 게시에는 실제 태깅 영수증 가드가 있다. 빈 합의나 가짜 태깅으로 검토를 게시하지 않는다. 후속 구현에는 사람/AI 위임 출처, 불변 분류 revision, If-Match 경합, 재처리 연결의 계약을 먼저 정해야 한다. 전체 보고서 완주·독립 gold·최종 정책 검증도 이번 범위에서 not_run이다.
+
+
+### R22 · 수동 선행분류 → 한정 재처리 → 기존 요소 검토 연결 (2026-09-22)
+
+- 구현: 원문 검증된 `PRELIMINARY_TAGS_UNRESOLVED` 주장만 검토자가 분류할 수 있다. 상세 화면에서 유형·범주를 직접 선택하고 원문 인용 또는 명시적 미상을 입력한다. GET/POST `/v1/runs/{run_id}/claims/{claim_id}/classification`, 권한·CSRF·인용 검증·정확한 If-Match·멱등성, 별도 AI 위임 CLI를 연결했다. 태깅 후에도 사람/AI 분류 이력을 구분해 표시한다. 계약은 `preliminary-classification-review-contract.md`다.
+- 저장·비용 보호: 분류 기록·한정 작업·멱등 응답을 단일 트랜잭션으로 저장한다. 1주장/새 요청 최대6회이며 최초 허가 시 요청 목록을 불변으로 고정한다. 재시작해도 한도가 갱신되지 않고, 게시 트랜잭션 안에서 원래 실행·기존 태깅을 재확인한다. 기존 선행분류 응답/불일치, 다른 주장, 이전 checkpoint·receipt는 보존한다. 처음 태깅되는 주장의 revision은1이다.
+- 조정자 검증에서 에이전트 초안의 근거 digest/pin 검증, 저장 중 부분 커밋, 실제 SourceRef 인용문 누락, 게시 직전 실행 변경 문제가 발견됐다. 실패를 재현하고 수정했다. Kiro의 기본 검사 통과를 그대로 기능 완료로 처리하지 않았다. 후속 mailbox delivery 미승인으로 일부 수정 메시지를 읽지 못한 것도 확인했으며, worker 회수 후 조정자가 최종 통합했다. 관리한 Kiro2개 Task 종료·release 및 해당 생성 터미널 종료 확인; 이 실행의 크레딧 소진은 관찰되지 않았다.
+- 실제 격리본 `.local/r22-preliminary-review`: 네이버 run `d379689e-b597-4920-a84e-6fbe72d55baf`의 K-water 평가 체계 구축 주장 `724c1911-471a-5a4d-9169-9a0341466323`을 `management`로 AI 위임 분류했다. 범주·entity/metric/reporting_period는 미상 유지. 실제 요소 호출3회 모두 정산, 태깅38.70초, 검토 등록0→1건·tag_revision1. 분류/상세/검토 큐 API 각각200과 원래 replica ID3개를 확인했다. 요소 합의는 `CONSENSUS_UNRESOLVED`, 결정·등급은null이다. 독립 사람 gold나 정확도 개선의 증거가 아니다.
+- 추가 비용 `$0.005182980`, 공유 사용·예약 `$17.249811687200000000059 / $20`, 기존 미정산13건 유지. 원본 DB 해시·기존 receipt 바이트·다른9개 주장·대상 과거 선행분류 기록 불변 비교 통과. 선행분류 보류8건과 원문 보류1건은 남아 있다. 결과는 ROOT `outputs/agent-results/R22-review/{isolation,before,accepted,acceptance,http-readback}.json`에 기록했다. 유료 재실행 없이 이 격리본에서 후속 요소 검토를 이어갈 수 있다.
+- 검증: 관련 unit/integration/recovery/runner 검사81개 통과; 별도 API composition2개 통과. 변경 Python lint, mypy6개 모듈, architecture 검사 통과. 작업용 실제 브라우저에서 `preliminary_classification_check`, `claim_workspace_check`, `review_queue_gap_check` 통과(mock API); `pnpm build`(tsc/Vite) 통과. OpenAPI와 실제 mounted route 일치; `validate_package.py`968항목은 문서·계약 검사만 의미한다. 전체 보고서 완주·독립 gold·AWS 배포는 not_run, GitHub push도 하지 않았다.
+- 다음 실제 사용자 결과: 생성된 요소 검토1건에서 검증된 원문으로 요소를 확정하고 기존 Python 규칙→부분 보고서 경로를 확인한다. 남은8건 분류는 대표1건의 결과를 검토한 뒤 진행하며, 원문 보류1건을 분류 보류로 바꾸지 않는다. B 실제 반환/최종 기준·crosswalk 미수령도 계속 별도 제약이다.
+
+
+### R24 · 실제 검토 전 과정에서 확인한 후속 작업 (2026-09-22, 진행 중)
+
+- 기존 네이버·롯데·기아·KB 원문 10사례를 단계별 입력/산출물로 대조했다. 실제 원문·저장 모델 결과·위임 AI 검토·Python 판정·HTTP 내보내기를 구분했으며 독립 human gold가 아니다. 근거: ROOT `outputs/reviewer-walkthrough-20260922/REPORT.md`, `workpapers.json`, `stage-io.json`, `validation.json`.
+- 보고서 `review_action`을 JSON/CSV/HTML 및 선택적 React preview에 추가했다. 확정 결손에만 쓰는 `suggestion`은 유지한다. 조정자가 에이전트 초안의 기준 조항/원문 혼동과 gap 존재만으로 판정 보류를 단정하는 문구를 수정했다. `test_report.py`21통과·변경 lint/type 통과. 기존 ZIP을 고치지 않고 새 멱등 키로 실제 세 run의 새 ZIP 생성·다운로드200: 네이버10/롯데12/KB23주장 전부 후속 안내 포함, 등급0·기존 revision 불변. 실행 증거 ROOT `outputs/agent-results/R24/exports/validation.json`; 재내보내기 시간7.501/4.824/21.308초는 모델 처리 시간이 아니다.
+- 기존 `local_claim_applicability_v1` 경로로 네이버 N1·KB B1 원자 주장 전체를 검토하여 M5/M6 트리거 false를 명시 기록한 별도 격리본을 만들었다. M1 present, M2/M3/M4 unknown, M5/M6 excluded, 등급null; 새 모델0·원본/과거 revision 불변. 근거 ROOT `outputs/agent-results/R24/{naver,kb}-applicability-result.json`. 원문 전역 부재나 자동 적용성 판단으로 주장하지 않는다.
+- 이미 resolved 처리된 보류 주장의 보완 경로를 추가했다. 명시적 재검토 API/UI/AI 위임 CLI는 현재 tag head와 If-Match를 확인하고 새 revision만 기록한다. 이전 적용성·safe-harbor 입력을 재검증하며 AI 출처를 후속 사람 검토로 세탁하지 않는다. 실제 네이버 격리본에서 CLI tag revision3·M5/M6 제외 유지·등급null·새 모델0 확인. 브라우저 실제 App/React에서 재검토→412 초안 보존→새 head 기준 재제출→반복 재검토 통과(mock HTTP); 실제 HTTP와 저장 검사는 별도 통과했다.
+- 로컬 demo가 이번 실행의 결과만 요약하고, 부분 페이지를 전체 건수로 표시하지 않으며, 진행 로그를 즉시 전달하도록 수정했다. 실제 네이버 읽기 경로는 10건 중 등급0·보류10과 pipeline not_run을 표시한다.
+- 현재 source-ID/assertion 프롬프트를 실제 기아·KB 원문 4선정 입력에 실행했다: 각주·단독 제목은 주장0, 기아 2045 목표1, KB 시스템 투자 문단3문장 복원. 4호출 `$0.002296470`, 원래 source ID 및 인용 일치; 선정 AI 사례이며 전체 정확도 또는 독립 gold가 아니다. ROOT `outputs/agent-results/R24/live-claim-check/evaluation.json`.
+- 문맥 실험은 제품 반영하지 않았다. 일반적인 인접 문장 확장으로 네이버 사업장3/4는 도달했지만 모델0/4·시나리오0/2, 메뉴·중복·KB의 다른 투자 항목이 섞였다. 회사명/모델명 하드코딩 초안도 철회했다. 계보 조사 결과 `Env.` 관련 list 부모는 실제 parser 원문에 존재하며 HEC-HMS 제목도 원문부터 최상위였다. 빈 부모만으로 adapter 오류를 단정하거나 가장 가까운 제목에 임의 연결하지 않는다. ROOT `outputs/agent-results/R24/lineage-investigation/ROOT_CAUSE.md`.
+- HMM의 원문 보고기간2025를 확인한 새 실제 실행에서 선택3페이지·120추출 호출 후 주장14, 대기255가 남았다. 추출 호출 제한에 도달한 부분 결과이며 공용 USD20 소진과 다르다. 격리본의 정상 태깅 worker 1회는95.533초 후 needs_review; 원본 DB 불변. 추가 격리본에서 실제 상세 조회14건·AI 위임 요소 검토1건·Python 판정·JSON/CSV/HTML ZIP 내보내기를 완료했다(114.2초, 새 모델0). M1 present·M2–M6 unknown·등급null, 부분 결과14건 모두 미완료; 원본/태깅 전 DB 해시 불변. ROOT `outputs/agent-results/R24/hmm-review/walkthrough-result.json`. 네이버도 주장 후보29페이지·근거56페이지로 넓힌 실행을 시작했으며 전체244페이지 완료로 표시하지 않는다.
+- 통합 검증: 관련 review/report/applicability/safe-harbor/AI CLI/demo/contract 검사123개 통과, 변경 Python lint/mypy6개 모듈·웹 typecheck/build 통과. 테스트 수는 모델 정확도가 아니다. B 실제 입력 준비·독립 사람 gold·전체 보고서 완주·AWS는 아직 완료로 표시하지 않는다. 공용 사용/예약 `$17.370393027200000000059 / $20`(네이버 확장 시작 직전), 기존 미정산13건 유지. Codex 주간 사용률63% 관측; Kiro 한도 소진은 관찰되지 않아 타 제공자로 전환하지 않았다.
+- 재검토 API는 추가 경로이며 기존 resolve 멱등 해시는 그대로다. 두 HTTP 경로는 같은 인증/CSRF/속도/본문 크기 가드를 공유한다. DB migration 없이 기존 불변 revision 구조를 쓰며, 롤백은 새 경로와 `reopen` 쓰기만 비활성화하고 생성 이력은 보존한다. AI→사람→사람 재검토의 적용성 및 safe-harbor 출처 유지 회귀 검사도 통과했다.
+- 별도 세션·내보내기·프롬프트 주입·예산 보호 검사42개와 architecture 검사 통과. 문서/계약 검사는971항목 통과(앱 또는 모델 정확도 아님). 독립 Kiro 코드 검토는 중요/치명 결함 없이 승인했다. ROOT `outputs/agent-results/R24/integration-review.md`. GitHub push/AWS 변경은 하지 않았다.
+- B 재무 입력은 원문 p2·219–223의 FY2025/보고기간/연결 범위/재무표 인용을 준비하고, 미연결 상태와 외부 식별자·승인 기준 부재를 구분했다. 현재 AI 검토 tag revision3의 M1 present는 C1–C4 트리거가 아니므로 실제 builder는 `missing_financial_context`를 반환한다. 합성 context를 쓴 별도 음성 검사는 `no_verified_trigger`이며 실제 재무 대사 완료로 주장하지 않는다. ROOT `outputs/agent-results/R24/financial-readiness/source-pinned-readiness.json`.
+
+- NAVER 공식 FY2025 연결감사보고서(139쪽, SHA256 `1cd29568d9c14c17c60c1fdd51ee716382151e97aa6a9c757e5dc93b7c364951`)를 확보하고 5개 인용의 실제 바이트·페이지·문자열 검증 및 p1/3/11/13 시각 대조를 완료했다. DART 공식 기존 공시로 회사코드 `00266961`을 확인했다. 이전 공시 접수번호를 FY2025 접수번호로 재사용하지 않았다. `rcept_no`/발행일은 이 계약에서 nullable이며, 감사일과 평가 기준일도 별개다. 남은 실제 연동 조건은 신뢰된 로컬 회사/패키지/재무 문서 등록과 정규화된 C트리거 근거, 해당 C3/C4 승인 기준이다. 사람 gold 부재는 독립 정확도 검증의 제약이며 모든 packet 생성의 기술적 필수 조건은 아니다. placeholder context는 형식 실험일 뿐 제출하지 않았다. ROOT `outputs/agent-results/R24/financial-readiness/official/official-financial-source-candidate.json` 및 `parent-source-verification.json`.
+- 긴 추출 실행은 각 배치 정산 후 다음 배치 전에 건수/상태만 stderr로 즉시 출력한다. 원문·source ID·배열·오류 본문을 출력하지 않으며 값이 없는 건수는 null이다. 기존 stdout JSON과 중단/예산 동작은 유지했다. 진행 순서·flush·비공개 필드 제외·누락 건수·중단 회귀 포함 관련 검사21개, 변경 lint/type 통과. 현재 이미 실행 중인 프로세스에는 소급 적용되지 않는다.
+- 목표형2/성과형2 원문 검토 조서를 추가했다. p94 2030년60% 목표, p86 2040 Carbon Negative, p196 누적 종이 대체의 탄소 저감 기여 추정, p93 38,416tCO2eq 감축량을 분리했다. 숫자6,678의 tCO2eq/MWh 혼동, 누적/연간/전망/실현 성과 혼동을 기록했다. p93 해당 문단과 p94 수치 문단은 실제 checkpoint에서 beyond_extraction_limit이며 아직 모델 누락으로 단정하지 않는다. 조정자가 AI 등급 상한과 임의 present_partial 상태를 제거하고 G7/G8 unknown을 명시했다. 이 네 조서의 앱 태깅/판정/내보내기는 not_run이다. ROOT `outputs/agent-results/R24/goal-performance-review/REVIEW.md`.
+- `Env. Operation` 원문이 v1 문장 경계에서0–17/18–78로 분리되는 오류를 재현했다. 짧은 모든 영문 토큰 뒤 마침표를 이어붙이는 후보는 일반 문장 `It is good. We reduced water use.` 등3반례를 합쳐 제품 반영을 거부했다. 기존 source-ID/receipt/policy는 변경하지 않았다. ROOT `outputs/agent-results/R24/sentence-boundary/results.json`.
+
+- 실제 NAVER162주장/1,967추출기록의 오프라인 동일 입력 비교에서, 새 검증 기록 게시 직후의 반복 원문 재생이 117.376초→5.505초로 감소했다. 전체 receipt 바이트·discovery·검증 graph·원본 DB가 동일하며 동결 reader5개 파일도 불변이다. 같은 프로세스에서 원본으로 재계산한 전체 기록과 tenant/source/graph/정책/순서 있는 ref/toolchain이 모두 같을 때만 재사용한다. 읽기 오류·불가 기록은 두 캐시 모두 저장하지 않고 재시도한다. 관련119검사·변경 lint/type 및 구조 검사 통과. 최초 검증 비용·모델 정확도 개선을 뜻하지 않는다. ROOT `outputs/agent-results/R24/replay-profile/before_after.json`.
+
+- 속도 수정을 로컬 커밋10bd47b로 저장한 뒤, 활성 job lease0·신규 미정산 호출0(과거13건만 존재)을 확인해 이전 NAVER 프로세스를 정산 경계에서 중단하고 동일 argv/실행/정책으로 이어 돌렸다. 저장된 revision은 유지했다. 직전4개 배치 간격 중앙값305.2초에서 재시작 후 초기 cold 구간을 제외한 두 배치 간격179.6/187.0초를 관측했다. 주장 수가 늘어나는 실제 실행의 관측치이며 동일 입력 벤치마크와 구분한다. ROOT `outputs/agent-results/R24/replay-profile/live-restart-observation.json`.
+- 원문 검증66건에 대한 유한 문자 비교 실험은 rendered 쪽 따옴표/중점만 비교할 때 후보일치27건(기존 따옴표만8건), 실제 OCR 오독15건 거절, 경계 미평가16건 유지다. native 쪽까지 치환하면 원문과 다른 인용25건이 통과하는 반례를 확인했다. 따라서 현 제품/활성 실행에는 이 실험을 반영하지 않았고, 원문 바이트에서 새로 읽은 NAVER·KB의8ref 중5후보 일치·실제 OCR오류2거절·경계1미평가를 추가 확인했다. 새 실행 전용 wrapper는 후속 구현 중이며 기존 run에는 소급하지 않는다. ROOT `outputs/agent-results/R24/typography-experiment/results.json`.
+
+- B 입력 CLI가 최초 모델 합의 대신 현재 불변 `claim_head`의 검토 태그를 읽도록 수정했다. 같은 거래 안에서 head revision·tenant/문서/주장 identity·입력 snapshot 해시를 검증하고, 과거 present가 철회되면 최신 unknown을 유지한다. 실제 NAVER 격리본은 tag3/M1 present를 읽고 합성 재무 context에서 C1–C4 모두 `no_verified_trigger`로 보류했다. 실제 금융 대사는 미실행이다. 관련24검사·변경 lint/type 통과. ROOT `outputs/agent-results/R24/linkage-reviewed-head/reviewed-head-consumer-fix.json`.
+
+- 새 실행 전용 `--claim-span-typography`를 pilot와 일반 analyze 명령에 연결했다. 원문 native 비교는 유지하고 rendered 비교에만 기존 따옴표 및 중점/불릿 유한 등가를 적용한다. NAVER·KB 원문8ref에서5건 검증 복구·실제 OCR오류2거절·경계1미평가, 위조 인용5/5거절, receipt 변조10종 거절을 확인했다. wrapper 해시58086038·새 정책5ad0c807, 기존 reader9개/활성 bullet 정책aa147570 불변. 관련 wrapper20+기존535검사 및 변경 lint/type/구조 검증, 일반 launcher27검사 통과. ROOT `outputs/agent-results/R24/typography-wrapper/results.json`. 기존 run의 결과를 소급 변경하지 않으며 새 정책 선택을 끄는 것으로 이후 실행을 롤백한다.
+
+- 금융 대사 저장소도 최신 검토 head와 같은 거래에서 분류·revision·mutation epoch를 읽도록 고쳤다. 검토 후 분류 변경은 새 입력에 반영되고 이전 분류 입력은 거절된다. 조직경계의 실제 생성 이름 `org_boundary`를 계약 이름 `organizational_boundary`에 연결했다. 일반 Scope를 사업장 집합으로 바꾸거나 C3/C4 사실을 만들지 않았다. 실제 ReviewService의 performance→management/M2 present 전환으로 재현·검증했으며, malformed/missing identity·빈/누락 검토값·잘못된 hash·이전 revision을 차단한다. 관련 저장/CLI 검사563통과·12skip, Python E2E29통과·변경 lint/type/구조 검사 통과. ROOT `outputs/agent-results/R24/linkage-reviewed-integration/results.json`. 실제 재무 대사·AWS는 미실행이며 기존 case/revision은 불변이다.
+- 검토 입력4건(G2, G1/G2, P1, P1)을 원문과 대조해 준비했다. 현재 API의 `normalized_value`는 전체 근거 인용과 같아야 하므로 읽기용 수치 요약을 별도로 유지한다. 검증된 전체 span 안의 더 짧은 인용은 기존 `span_citations` 경로가 지원하며 실제 실행 시 검증 후 파생할 수 있다. 이 조서는 아직 앱 태깅 결과가 아니다. ROOT `outputs/agent-results/R24/naver-goal-performance-inputs/review-inputs.json`.
+
+- 대량 NAVER 검토 속도의 근본 원인인 graph fusion의 전체 그룹 반복 탐색을 페이지·종류별 탐색으로 줄였다. 동일한 NAVER/KB 입력에서 모든 지원 버전의 전체 graph·ID·근거·오류 결과가 기존과 같았다(legacy가 거절한 입력은 그대로 거절). NAVER fusion 중앙값3.599→1.141초, 실제 동일261주장 snapshot의 반복 claims API5.497→2.729초. 최초 원문 검증은170.932초로 여전히 병목이며 UI 지연·모델 정확도 개선으로 확대 해석하지 않는다. 기존 manifest/정책은 보존하고 관련180검사·변경 lint/type을 확인했다. ROOT `outputs/agent-results/R24/graph-fusion-performance/results.json`.
+
+- 같은 비교 안에서 재계산하던 bbox를 지역 변수로 한 번만 읽도록 추가 개선했다. 별도 캐시/필드 없이 기존 단락 조건과 None 거절 순서를 유지했다. 독립적으로 로드한 직전 commit6d8e213 전체 모듈과 NAVER/KB 모든 지원 버전의 graph가 동일했다. 동일 NAVER fusion 중앙값1.123→0.631초, warm graph 읽기1.613→1.123초(각2회 중 최솟값); HTTP/최초 원문 검증 시간은 다시 측정하지 않았다. 관련202검사·변경 lint/type 통과, 조정자11검사 추가 확인. ROOT `outputs/agent-results/R24/graph-fusion-performance/pairwise-bbox/results.json`.
+
+- KB 가용23주장을 실제 조회하고 공개 검토4건 중 미완료3건을 AI 위임 검토했다. 이후 ca035ea2의 M1 판단에서 원문 §4.4의 “명명된 수단 또는 구체적 시행 상태” 중 후자를 누락한 것을 재검토해 revision3/M1 present로 교정했다. 기존 revision2·원본 DB·옛 ZIP은 불변이며 새 ZIP은23행·부분 결과·등급null이다. 나머지19건은 원문검증15·사전분류3·packet1로 구분한다. ROOT `outputs/agent-results/R24/kb-available-reviews/RESULT.md`, `results-m1-correction.json`.
+- 실제 KB React 화면에서 M1 present·AI 위임 출처·GAP-003·원문 PDF30쪽 미리보기를 확인했다. 미검증 좌표 앵커는 하이라이트하지 않는다. blocked_evidence를 항상 “원문 근거 미확인”으로 설명하던 주장/검토 화면2곳을 “입증 요소 확인 필요”로 수정했다. 원문 검증 성공과 미해결 요소가 공존하는 실제 사례로 재확인, 웹 typecheck/build 통과. ROOT `outputs/agent-results/R24/kb-available-reviews/browser-qa.json`; 로컬 commit e273d0e.
+
+- NAVER 실제 preliminary 응답과 기존 AI 조서218건을 읽기 전용 비교했다: 실제3응답이 있는128건 중 같은 비null트랙40·복제 불일치27·전부null48·다른 비null트랙13, 나머지90건은3응답 미확보다. 이는 원문/예산에 따른 선택 표본이며 정확도나 모델오류율이 아니다. “앞으로 … 노력하겠습니다”를 기존 AI 조서가 management로 적은 반례도 확인해 해당 조서를 정답으로 취급하지 않는다. 과거 조서·실제 태깅은 불변. ROOT `outputs/agent-results/R24/naver-expanded-review-pass/actual-track-comparison.json`.
+
+- 기존 오프라인 `evidence/audit-live-tagging-blockers.py`로 실제 NAVER 태깅 checkpoint/packet 해시를 검증했다. 검토 입력 없는 주장298건, raw present 요소 응답241표 중130표 유지·111표 unknown 전환, 이 중과 겹치는 literal normalized_value 불일치80표를 관측했다(주장 수/정확도/단일 원인 비율 아님). 실제 성과2건의 P1은 모델이 모두 수치를 찾았지만 선택한 전체 인용과 값이 달라 가드에서 보류됐다. 기존 prompt에 이미 정확한 인용 일치 지시가 있어 중복 지시 추가·검증 완화를 하지 않고 실제 AI 검토에서 계약에 맞는 근거로 제출한다. ROOT `outputs/agent-results/R24/naver-expanded-review-pass/tagging-blockers.json`.
+
+### R25 · 실제 회사 ID 연결과 B 대사 초안 통합 (2026-09-22)
+
+- 기존 NAVER 시험 run의 회사/tenant/문서 버전을 재작성하지 않았다. pilot에 새 실행 전용 `--company-name`/`--company-registration`을 추가하고 기존 실행에서 변경을 거절한다. 실제 NAVER 회사 `DART:00266961`로 새 run `9aaf0254-340a-47ac-a431-c6ecb7ac7a91`을 정상 등록·파싱·추출·태깅했다. SR와 FY2025 연결감사보고서가 같은 company에 연결된다.
+- 범위는 PDF2/185쪽 파싱·185쪽 주장 추출이다. 13후보 중 출처 검증9/미검증4, 태깅 head3. 대표 `405ea5ec-0185-5973-a15b-33cd681baede`는 현재 원문을 AI 위임 검토하여 tag revision2/M1·M2 present, 나머지 unknown. revision1 불변. 출처 검증은 주장 적합성·정확도 증거가 아니며, 제목 후보와 인접 제목이 섞인 후보도 있어 전체 자동 품질을 주장하지 않는다.
+- B의 literal PDF reader가 canonical 인용의 공백/줄바꿈 차이를 거절하는 문제를 확인했다. 새 명시적 `page:N:whitespace-v1` locator만 연속 공백 정규화·페이지 내 유일 일치를 허용한다. 기존 locator, 원본 hash, 숫자/문장부호, 회사·테넌트·claim 재생 검증은 유지했다. 실제 출처 검증9건이 새 reader에서도 통과했다. 호환/롤백 계약은 27장 참조.
+- 기존 operator draft/import 경로로 C1/C2 case를 실제 등록·실행했다. C1 `e12c4d0b-b7db-4cfc-9dfe-68b3710c07d5`, C2 `bf7d961e-f37c-4295-b398-ef37c1e84276`, 둘 다 revision2/pending/blocked(policy_unapproved). C1 전체 법인 집합은 미확정(null). C2는 시설 범위가 아니라 기간 비교이며 활동 월을 달력 구간으로 기록한 AI 초안이다. 활동 월과 재무 보고기간의 comparability=unknown, 자동 trigger 없음. FY2025 DART 접수번호·공시일, 승인 정책과 검색 전수성은 여전히 미확정이다. 이 실행은 자동 build_packet 생산 완료/실서비스 준비 완료가 아니다.
+- 실제 새 모델56호출의 보수적 장부 비용 USD0.0472117800. 앞선 응답 중 원본 request signature·공급자 usage·model·응답 hash를 검증한 truncation1건만 USD1 예약→USD0.0009291150으로 오프라인 정산했다. 잘린 출력은 거부 유지, 나머지 미정산12건과 USD20 한도는 그대로다. 새 실행 후 장부 합계 USD18.048727982200000000059(실제 비용과 미정산 예약의 합)이며 콘솔 잔액을 뜻하지 않는다.
+- 검증: reconciliation 전체와 pilot config/stage-failure 검사575통과·12skip, 변경 lint/type 및 diff check 통과. 실제 claim API200과 제품 대사 등록/평가를 확인했다. UI/AWS 검증은 이번 범위에서 not_run. ROOT `outputs/agent-results/R25-real-company/`에 실행/원문/정산/검사 기록, `developer-b/`에 실제 ID·claim3건·두 import 초안·관측 결과·미정 항목을 둔다. IDs만으로 B DB에 레코드가 생기지 않으며 A의 통합 DB에서 재현한다. local_synthetic=true를 유지한다.
+
+
+### R30 · 2026-09-22 데이터관리자 첫 제출 수정 및 수치 경로 보완
+
+- 기아 원문 기반 5개 주장/34개 요소의 수정본과 변경 이력을 `outputs/agent-results/R30`(프로젝트 루트)에 작성. 실제 PDF 위치 56곳 재검증, 유료 모델 호출 0.
+- CSV 입력 검사에 상태/수치/참조/검토 조건 추가. 미확정 데이터를 정답이나 승인 정책으로 자동 승격하지 않음.
+- 수치 엔진 growth/product_reduction 및 명시적으로 검토한 동일 계산조건 각주 연결 지원. 두 실제 사례가 수치상 consistent; 기존 합계 해시 호환성과 원문 변조 거절 검증.
+- 관련 검사 321 passed / 11 skipped; lint/format/mypy/architecture 통과.
+- C01 범위·반올림/보증, 비율형 목표 등 도메인 미정, 정답 확정·권리, 재무 대조 및 다른 기업 평가 범위는 유지. 생산 DB 등록·전체 보고서 자동 실행·최종 등급 완료를 뜻하지 않음.
+
+### R31 · 제출 검토안과 기존 주장 연결 (2026-09-23)
+
+- `scripts/attach_submitted_review.py`로 `claims/elements/numeric/assurance.csv`를 기존 실행의 주장에 연결한다. 같은 PDF 해시·문서와 물리 쪽·원문 인용이 맞고 후보가 하나일 때만 연결한다. 다른 테넌트, 다른 문서, 누락·중복 주장, 모호한 연결은 거절한다.
+- 저장 계약 v1: 기존 `job_records`에 불변 `submission_reference`를 추가한다. CSV별 SHA256, 원본 PDF·run 입력·추출 스냅샷 해시, 외부/앱 주장 ID를 보존한다. 동일 입력 재등록은 중복 저장하지 않으며 새 파일은 별도 검토안으로 남긴다. 최초 추가는 mutation epoch와 감사 기록을 함께 갱신한다.
+- API `ClaimDetail.submitted_reviews`는 이전 실행에서 빈 배열이다. 화면에는 **제출자료 검토안 · 판정 미반영**으로 표시한다. `reviewed`, `present` 등 CSV의 표시는 제출자의 기록이며 앱 승인이나 사람 정답이 아니다. R30 자료의 출처는 `ai_corrected_submission`이다.
+- 새 ZIP은 `submitted-reviews.json`에 당시 검토안을 동결한다. 기존 태깅·판정·과거 ZIP은 변경하지 않는다. 롤백은 새 import를 중단하고 추가 필드/record kind를 읽지 않는 방식이며, 이미 저장된 자료와 출력은 보존한다.
+- 실행 위치: ROOT `.local/kia-submitted-review-20260923/`는 기존 기아 실행의 별도 DB·원본 파일 사본이다. 원 실행은 수정하지 않는다. 실제 PDF를 사용하지만 원 문서 등록의 `local_synthetic=true`를 유지하며, 실기업 정식 등록으로 승격하지 않는다. 실제 검증 산출물은 ROOT `outputs/agent-results/R31-submitted-review/`에 기록한다.
+- 관련 API/출력 회귀 검사 30개, lint/format/type, 웹 build, 계약·아키텍처 검사 통과. 실제 5건 연결·API 조회·ZIP 다운로드 및 해시 대조 통과. 원문 인용은 정식 로더 재생 결과 4건 verified/C01 1건 unverified이며, 이는 제출 요소의 승인이나 최종 등급이 아니다. 5건의 실제 API 응답을 재생하는 브라우저 표시 검사 통과(실제 API와 연결한 화면 전수 재시험을 뜻하지 않음). 전체 보고서 자동 완주, 정식 태깅·등급 생성, 미정 정책 확정, AWS 시험을 뜻하지 않는다.
+
+- 실제 브라우저 병렬 요청에서 API가 SIGSEGV로 종료됨을 발견했다. macOS 충돌 기록은 `libpdfium.dylib/FPDF_LoadPage`를 가리켰다. [PDFium 공식 스레드 제약](https://pypdfium2-team.github.io/pypdfium2/python_api.html#incompatibility-with-threading)에 맞춰 로컬 API의 HTTP 요청을 프로세스 단위로 직렬화했다. 요청 취소 후에도 내부 PDF 작업이 끝날 때까지 보호하며, 고정된 verifier 파일·정책 해시는 바꾸지 않았다. 처리량이 필요하면 PDF 작업을 별도 프로세스로 분리해야 한다.
+- 수정 후 동시 요청·실행 중 취소·오류 후 재요청 회귀 검사와 API 구성/인증/세션 검사 43개 통과. 실제 기아 PDF에 20개 동시 HTTP 요청을 보내 native 진입 최대 1개 및 모두 성공을 확인했다. 이 시험은 전체 재생이 아니라 PDF 페이지 로딩의 충돌 경로를 직접 검증한다.
+- 남은 성능 문제: 최초 원문 재생은 3,152개 렌더링 영역을 대조하며 오래 걸리고, 캐시가 준비된 뒤에도 실제 주장 상세 API 5건은 각각 약 16.4초였다. 직렬화는 동시 호출 충돌 방지이며 속도 개선 완료가 아니다. 수정 후 전체 기아 원문 재생+실 API 연결 브라우저 전수 재시험은 not_run. 최종 태깅·판정도 모두 미실행이다.
+
+재실행 예시(APP에서 실행, `--operator`에는 실제 실행자 식별자를 기록):
+
+```sh
+PROOFOPS_ROOT=/path/to/project
+.venv/bin/python scripts/attach_submitted_review.py \
+  --state-db "$PROOFOPS_ROOT/.local/kia-submitted-review-20260923/state.sqlite3" \
+  --directory "$PROOFOPS_ROOT/outputs/agent-results/R30/수정본" \
+  --tenant-id 195fb7fa-c3b3-4cba-a2e5-265da642d174 \
+  --run-id 9af38bf5-0d3d-47ae-94c4-fe39b04d59f2 \
+  --document-id DOC-034 \
+  --source-sha256 d0d814d98c4aeedbbdb2bf8631b8981ae5cde94dec32aa32c57510420274da1f \
+  --origin ai_corrected_submission --operator local-reviewer
+```

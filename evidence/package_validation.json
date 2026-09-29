@@ -1,15 +1,15 @@
 {
-  "checked_at": "2026-09-22T00:48:52.963045+00:00",
+  "checked_at": "2026-09-29T00:42:29.082553+00:00",
   "scope": "documentation, structured contracts and synthetic schema examples only",
   "status": "passed",
-  "checks_total": 961,
-  "passed": 961,
+  "checks_total": 974,
+  "passed": 974,
   "failed": 0,
   "counts": {
     "numbered_documents": 35,
     "requirements": 43,
     "tasks": 46,
-    "api_operations": 57,
+    "api_operations": 60,
     "rule_vectors": 28,
     "edge_vectors": 24
   },
@@ -69,12 +69,27 @@
       "detail": ""
     },
     {
+      "name": "json:vercel.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:api/rulepack.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
       "name": "json:apps/web/package.json",
       "passed": true,
       "detail": ""
     },
     {
       "name": "json:apps/web/tsconfig.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:apps/web/public/demo/naver-2025.json",
       "passed": true,
       "detail": ""
     },
@@ -1734,6 +1749,16 @@
       "detail": ""
     },
     {
+      "name": "openapi_ref:#/components/schemas/ClassificationView",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "openapi_ref:#/components/schemas/ClassificationAccepted",
+      "passed": true,
+      "detail": ""
+    },
+    {
       "name": "openapi_ref:#/components/schemas/Coverage",
       "passed": true,
       "detail": ""
@@ -1745,6 +1770,31 @@
     },
     {
       "name": "openapi_ref:#/components/schemas/Decision",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "openapi_ref:#/components/schemas/ReviewedDimensions",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "openapi_ref:#/components/schemas/NumericContextCheck",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "openapi_ref:#/components/schemas/NumericCandidateReview",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "openapi_ref:#/components/schemas/SubmittedReview",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "openapi_ref:#/components/schemas/ReviewedContext",
       "passed": true,
       "detail": ""
     },
@@ -1865,6 +1915,11 @@
     },
     {
       "name": "openapi_ref:#/components/schemas/ReconciliationReconciliationResult",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "openapi_ref:#/components/schemas/ClassificationSource",
       "passed": true,
       "detail": ""
     },
@@ -2110,6 +2165,21 @@
     },
     {
       "name": "idempotency:review_resolve",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "path_params:review_re_review",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "csrf:review_re_review",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "idempotency:review_re_review",
       "passed": true,
       "detail": ""
     },
@@ -2360,6 +2430,26 @@
     },
     {
       "name": "path_params:reconciliation_source_content",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "path_params:claim_classification_get",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "path_params:claim_classification_create",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "csrf:claim_classification_create",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "idempotency:claim_classification_create",
       "passed": true,
       "detail": ""
     },
@@ -4739,27 +4829,7 @@
       "detail": ""
     },
     {
-      "name": "md_link:README.md:docs/IMPLEMENTATION_STATUS.md",
-      "passed": true,
-      "detail": ""
-    },
-    {
       "name": "md_link:README.md:docs/00_MASTER_SPEC.md",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "md_link:README.md:docs/26_LEGACY_REUSE_AUDIT.md",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "md_link:README.md:docs/27_PARSING_AND_PROVENANCE.md",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "md_link:README.md:docs/28_RULE_ENGINE_CONTRACT.md",
       "passed": true,
       "detail": ""
     },
@@ -4769,27 +4839,22 @@
       "detail": ""
     },
     {
-      "name": "md_link:README.md:docs/19_IMPLEMENTATION_PLAN.md",
+      "name": "md_link:README.md:evidence/developer-a-validation-20260918.md",
       "passed": true,
       "detail": ""
     },
     {
-      "name": "md_link:README.md:docs/20_TASK_BREAKDOWN.md",
+      "name": "md_link:README.md:evidence/source-linked-demo-verification.md",
       "passed": true,
       "detail": ""
     },
     {
-      "name": "md_link:README.md:contracts/openapi.yaml",
+      "name": "md_link:README.md:docs/SUBMISSION_DEMO.md",
       "passed": true,
       "detail": ""
     },
     {
-      "name": "md_link:README.md:docs/32_REQUIREMENT_TRACEABILITY.md",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "md_link:README.md:docs/17_ENV_CONFIG.md",
+      "name": "md_link:README.md:docs/IMPLEMENTATION_STATUS.md",
       "passed": true,
       "detail": ""
     },

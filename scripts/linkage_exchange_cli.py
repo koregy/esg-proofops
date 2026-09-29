@@ -3,10 +3,11 @@
 Two subcommands:
 
   build-packet   Build one strict1.1 input packet from a trusted local run's
-                 claim + confirmed tags, plus a caller-supplied JSON
-                 FinancialContext file. Writes the packet JSON, or a
-                 blocked/not_run report, to stdout. Never calls developer
-                 B's engine and never invents identity/financial fields.
+                 claim + the confirmed tags of its LATEST ACCEPTED immutable
+                 tag head, plus a caller-supplied JSON FinancialContext file.
+                 Writes the packet JSON, or a blocked/not_run report, to
+                 stdout. Never calls developer B's engine and never invents
+                 identity/financial fields.
 
   verify-return  Structurally validate a real (or synthetic) developer-B
                  return triple (packet, policy, result) using the EXISTING
@@ -97,12 +98,130 @@ def _validate_packet_shape(packet: dict, *, contract_dir: Path | str) -> list[di
     return problems
 
 
+class ReviewedHeadRejected(Exception):
+    """The stored tag head is malformed, foreign, or not the atomic head.
+
+    Raised instead of silently falling back to an older revision or to the
+    original model consensus: a head this CLI cannot fully account for is a
+    block, never an accept.
+    """
+
+
+def reviewed_head_tags(claims, claim, *, tenant_id: str, run_id: str, claim_id: str):
+    """Confirmed tags of the LATEST ACCEPTED immutable tag head for one claim.
+
+    The previous implementation read `LocalTagStore.load_inputs(...)
+    .consensus.confirmed_tags`, which is the ORIGINAL model-agreement snapshot
+    frozen when the tag stage published (tag_revision 1). Every later accepted
+    human/AI-delegated review writes a new immutable `tag_revision` row and
+    moves the atomic `claim_head`; the tag-stage snapshot is never rewritten.
+    A consumer reading the snapshot therefore keeps serving pre-review tags
+    forever -- including a `present` trigger a later review removed.
+
+    This reuses the same canonical head reader the API and the export path
+    use (`LocalClaimStore.current_tag`, one atomic `claim_head` read; never
+    `history()[-1]` and never a raw global SQL scan of `tag_revision`), and
+    the same integrity pins `export_store` enforces:
+
+    * the head payload's tenant/document version/claim/revision must equal the
+      atomic `claim_head`'s own `tag_revision` (read in the same transaction,
+      never the row's self-reported `tag_revision`) and this claim's trusted
+      identity, so a malformed, cross-tenant or stale-revision row is blocked;
+    * when the head names an `input_snapshot_sha256` (every reviewed revision
+      does), it must still hash the immutable revision-1 inputs, so the live
+      immutable input replay stays pinned;
+    * facts are rebuilt through the existing `_source_ref_from_dict` +
+      `ConfirmedFact`/`ConfirmedTags` validation (the same helper
+      `analysis_store` uses), so the stored ref shape, the required page/offset/
+      hash/quote fields and the engine's own present-requires-verified-citation
+      invariant are re-checked instead of being trusted as raw JSON. That is a
+      shape and invariant check only: it does NOT re-open the original document
+      bytes, so it is not a citation replay and is not reported as one.
+
+    Returns `(ConfirmedTags | None, tag_revision | None)`. `None` tags mean the
+    head itself carries no confirmed tags (unconfirmed/unknown consensus, or no
+    published head at all); that is reported as missing tags by `build_packet`
+    and is never backfilled from the stale snapshot. With no review at all the
+    head is revision 1, whose stored `confirmed_tags` is exactly the model
+    consensus, so the no-review behaviour is unchanged.
+    """
+    from proofops.domain.errors import DomainValidationError
+    from proofops.domain.provenance import canonical_hash
+    from proofops.domain.rules.engine import ConfirmedFact, ConfirmedTags
+    from proofops.domain.values import _source_ref_from_dict
+
+    jobs = claims.store.jobs
+    with jobs._transaction() as db:
+        current = claims.current_tag(tenant_id, run_id, claim_id, connection=db)
+        if current is None:
+            return None, None
+        tag = current["tag"]
+        # `current_tag` returns only tag/decision/epoch, so the row's own
+        # `tag_revision` is self-reported. The authority is the atomic
+        # `claim_head`, read here in the same transaction; a row that agrees
+        # with itself but not with the head is blocked, exactly as
+        # `export_store` blocks it.
+        head_revision = jobs._get(db, tenant_id, run_id, "claim_head", claim_id)["tag_revision"]
+        if tag.get("tag_revision") != head_revision:
+            raise ReviewedHeadRejected(
+                f"head row tag_revision ({tag.get('tag_revision')}) does not match the atomic "
+                f"claim_head tag_revision ({head_revision})"
+            )
+        raw = tag.get("confirmed_tags")
+        if raw is None:
+            return None, head_revision
+        if not isinstance(raw, dict):
+            raise ReviewedHeadRejected("head confirmed_tags is not an object")
+        if (
+            raw.get("tenant_id"),
+            raw.get("document_version_id"),
+            raw.get("claim_id"),
+            raw.get("tag_revision"),
+        ) != (tenant_id, claim.document_version_id, claim_id, head_revision):
+            raise ReviewedHeadRejected(
+                "head confirmed_tags identity/revision does not match the atomic claim head "
+                f"(tenant/version/claim/revision expected {tenant_id}/"
+                f"{claim.document_version_id}/{claim_id}/{head_revision})"
+            )
+        snapshot_sha256 = tag.get("input_snapshot_sha256")
+        if snapshot_sha256 is not None:
+            initial = jobs._get(db, tenant_id, run_id, "tag_revision", f"{claim_id}:0000000001")
+            inputs = tag.get("inputs", (initial or {}).get("inputs"))
+            if inputs is None or snapshot_sha256 != canonical_hash(inputs):
+                raise ReviewedHeadRejected(
+                    "head input_snapshot_sha256 does not match the immutable revision-1 inputs"
+                )
+    try:
+        confirmed = ConfirmedTags(
+            **(
+                raw
+                | {
+                    "facts": tuple(
+                        ConfirmedFact(
+                            **(
+                                fact
+                                | {
+                                    "evidence_refs": tuple(
+                                        _source_ref_from_dict(ref) for ref in fact["evidence_refs"]
+                                    )
+                                }
+                            )
+                        )
+                        for fact in raw["facts"]
+                    )
+                }
+            )
+        )
+    except (DomainValidationError, TypeError, KeyError, AttributeError) as exc:
+        raise ReviewedHeadRejected(f"malformed head confirmed_tags: {exc}") from exc
+    return confirmed, head_revision
+
+
 def _cmd_build_packet(args: argparse.Namespace) -> int:
     from proofops.adapters.local.claim_store import LocalClaimStore
     from proofops.adapters.local.run_store import LocalSQLiteRunStore
-    from proofops.adapters.local.tag_store import LocalTagStore
     from proofops.adapters.parsing.opendataloader import OpenDataLoaderParser
-    from proofops.application.linkage_exchange import BlockedPacket, build_packet
+    from proofops.application.linkage_exchange import BlockedPacket, C2PeriodContext, build_packet
     from proofops.application.registry import Registry
     from proofops.application.uploads import UploadService
 
@@ -132,7 +251,6 @@ def _cmd_build_packet(args: argparse.Namespace) -> int:
 
     parser = OpenDataLoaderParser(parser_dir)
     claims = LocalClaimStore(run_store, uploads, parser)
-    tags_store = LocalTagStore(run_store, uploads, parser)
 
     try:
         claim = claims.get(args.tenant_id, args.run_id, args.claim_id)
@@ -260,19 +378,60 @@ def _cmd_build_packet(args: argparse.Namespace) -> int:
 
     confirmed_tags = None
     try:
-        # Reuses the app's own trusted tag-replay path (same one the review
-        # API uses) rather than hand-parsing a raw stored dict: this
-        # guarantees `confirmed_tags` really is the same accepted-tags
-        # object the rest of the app trusts, including its own
-        # present-requires-verified-citation invariant.
-        review_inputs = tags_store.load_inputs(args.tenant_id, args.run_id, args.claim_id)
-        confirmed_tags = review_inputs.consensus.confirmed_tags
-    except (KeyError, ValueError):
-        confirmed_tags = None
+        # Latest ACCEPTED immutable tag head, read through the app's own atomic
+        # claim_head reader -- not the tag-stage model-consensus snapshot, which
+        # keeps serving pre-review tags after every accepted re-review.
+        confirmed_tags, _head_revision = reviewed_head_tags(
+            claims, claim, tenant_id=args.tenant_id, run_id=args.run_id, claim_id=args.claim_id
+        )
+    except ReviewedHeadRejected as exc:
+        print(
+            json.dumps(
+                {
+                    "execution_state": "blocked",
+                    "reason": "unaccountable_review_head",
+                    "detail": str(exc),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 1
+    except (KeyError, ValueError) as exc:
+        print(
+            json.dumps(
+                {
+                    "execution_state": "blocked",
+                    "reason": "review_head_unreadable",
+                    "detail": str(exc),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 1
 
     financial_context = None
     if args.financial_context:
         financial_context = _load_financial_context(Path(args.financial_context))
+
+    period_context = None
+    if getattr(args, "c2_period_context", None):
+        try:
+            period_context = C2PeriodContext(**json.loads(Path(args.c2_period_context).read_text()))
+            if args.item != "C2":
+                raise ValueError("period context is only supported for C2")
+        except (OSError, ValueError, TypeError) as exc:
+            print(
+                json.dumps(
+                    {
+                        "execution_state": "blocked",
+                        "reason": "invalid_c2_period_context",
+                        "detail": str(exc),
+                    }
+                )
+            )
+            return 1
 
     result = build_packet(
         claim=claim,
@@ -284,6 +443,7 @@ def _cmd_build_packet(args: argparse.Namespace) -> int:
         period_end=frozen_period_end,
         sr_published_at=sr_published_at,
         trusted_company_id=trusted_company_id,
+        c2_period_context=period_context,
     )
     if isinstance(result, BlockedPacket):
         print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
@@ -411,6 +571,10 @@ def main(argv: list[str] | None = None) -> int:
     build.add_argument("--run-id", required=True)
     build.add_argument("--claim-id", required=True)
     build.add_argument("--item", required=True, choices=("C1", "C2", "C3", "C4"))
+    build.add_argument(
+        "--c2-period-context",
+        help="JSON normalized/source_id/quote; must match confirmed fact evidence",
+    )
     build.add_argument("--database-path", required=True)
     build.add_argument(
         "--financial-context",

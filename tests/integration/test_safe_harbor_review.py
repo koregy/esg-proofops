@@ -137,6 +137,21 @@ def test_checklist_review_records_true_false_or_unknown(tmp_path, monkeypatch, s
     assert after["tags"][-1]["safe_harbor_review"]["request"] == review
     assert safe_record(ws).reasonable_basis_documented is expected
 
+    for revision in (2, 3):
+        ws[1].resolve_review(
+            _actor(),
+            ws[3]["review_id"],
+            ws[4] | {"base_tag_revision": revision},
+            f'"{revision}"',
+            str(uuid4()),
+            reopen=True,
+        )
+        current = ws[1].store.history(TENANT, RUN, ws[3]["claim_id"])["tags"][-1]
+        assert current["origin"] == "human"
+        assert current["safe_harbor_review"]["request"] == review
+        assert current["safe_harbor_review"]["carried_from"]["origin"] == "ai_delegated"
+        assert safe_record(ws).reasonable_basis_documented is expected
+
 
 @pytest.mark.parametrize("mutation", ["injected_ref", "unattested_absence"])
 def test_unverified_or_unattested_checklist_fact_never_writes(tmp_path, monkeypatch, mutation):

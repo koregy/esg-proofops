@@ -83,7 +83,12 @@ export async function check() {
     root.render(React.createElement(ExportWorkspace, props('tenant-a')));
     await flush();
     const partial = host.querySelector('input[name="allow-partial"]');
-    assert(partial && !partial.checked, 'Partial export must default to false');
+    assert(partial && partial.checked, 'Review drafts default to partial export');
+    assert(['json','csv','html'].every(format => host.querySelector(`input[value="${format}"]`)?.checked),
+      'Review drafts default to all native formats');
+    partial.click();
+    await flush();
+    assert(!partial.checked, 'Users can explicitly require complete results');
     assert(host.querySelector('input[value="json"]')?.checked, 'JSON must be the safe default format');
     assert(!button('다운로드'), 'No download control may exist before a ready export');
 
@@ -94,9 +99,9 @@ export async function check() {
     assert(createHeaders[0].get('Idempotency-Key') === createHeaders[1].get('Idempotency-Key'),
       'The same failed body must retain its idempotency key');
     assert(createHeaders[0].get('X-CSRF-Token') === 'csrf-test', 'Create must send CSRF');
-    assert(createBodies[0].allow_partial === false, 'Partial must remain false unless explicitly checked');
+    assert(createBodies[0].allow_partial === false, 'Unchecking partial must explicitly request complete results');
 
-    host.querySelector('input[value="csv"]').click();
+    host.querySelector('input[value="html"]').click();
     await flush();
     button('다시 시도').click();
     await waitFor('준비됨');
@@ -164,7 +169,7 @@ export async function check() {
     assert(sessionInvalid === 1, 'Session failures must notify the parent once');
     assert(!host.textContent.includes(queryExportId), 'Session failures must clear known export state');
     assert(new URL(location.href).searchParams.get('export_id') === null, 'Session failures must clear the private export query');
-    return { partial_default_false: true, idempotency_retry: true, idempotency_body_reset: true,
+    return { partial_default_true: true, complete_mode_opt_out: true, idempotency_retry: true, idempotency_body_reset: true,
       polling_terminal: true, ready_download_only: true, trusted_download_origin: true,
       reissue_once: true, known_url_refresh: true, tenant_cleared: true, known_tenant_cleared: true, session_cleared: true };
   } finally {

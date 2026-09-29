@@ -105,6 +105,22 @@ class LocalSQLiteRunStore:
                 return replay
             try:
                 validate_raster_snapshot(snapshot)
+                if snapshot.get("fact_assembly_profile", "strict-v1") not in (
+                    "strict-v1",
+                    "partial-facts-v1",
+                ):
+                    raise ValueError("unknown fact assembly profile")
+                if "report_level_link" in snapshot:
+                    from proofops.application.tagging.report_level_link import validate_config
+
+                    validate_config(snapshot["report_level_link"])
+                    if any(
+                        ref.get("document_version_id") != snapshot["document"]["version_id"]
+                        for refs in snapshot["report_level_link"]["refs"].values()
+                        for ref in refs
+                        if "source_id" in ref
+                    ):
+                        raise ValueError("report-level link document mismatch")
                 if "claim_source_policy" in snapshot:
                     from proofops.adapters.local.claim_source_policies import (
                         publication_reader,
@@ -141,6 +157,12 @@ class LocalSQLiteRunStore:
                             frozen
                         ):
                             raise ValueError("live tagging snapshot identity mismatch")
+                    if (
+                        "preliminary_prompt_sha256" in snapshot
+                        and canonical_hash(snapshot["preliminary_settings"]["system_prompt"])
+                        != snapshot["preliminary_prompt_sha256"]
+                    ):
+                        raise ValueError("live tagging preliminary prompt mismatch")
                     if "relation_settings" in snapshot and (
                         canonical_hash(snapshot["relation_settings"])
                         != snapshot["relation_settings_hash"]

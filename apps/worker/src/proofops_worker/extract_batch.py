@@ -58,6 +58,32 @@ def run_batches(
     for index in range(batches):
         summary = runner.run_batch(tenant_id=tenant_id, run_id=run_id, max_calls=max_calls)
         results.append(dict(summary, batch=index + 1))
+        # Emit one flushed progress line per settled batch, before the next batch
+        # runs, so a long run reports movement instead of buffering until complete.
+        # Only whitelisted scalar telemetry is published: counts derive from the
+        # scalar ``model_processed_after`` and the length of ``pending_after``;
+        # source identifiers, arrays, paths and error text never appear here.
+        processed_after = summary.get("model_processed_after")
+        pending_after = summary.get("pending_after")
+        print(
+            json.dumps(
+                {
+                    "event": "extract_batch_progress",
+                    "batch": index + 1,
+                    "status": summary["status"],
+                    "model_processed_count": (
+                        processed_after if type(processed_after) is int else None
+                    ),
+                    "pending_count": (
+                        len(pending_after) if isinstance(pending_after, list) else None
+                    ),
+                    "stop_code": summary.get("stop_code"),
+                },
+                sort_keys=True,
+            ),
+            file=sys.stderr,
+            flush=True,
+        )
         if summary["status"] in _STOP_STATUSES or summary.get("stop_code"):
             break
     return results

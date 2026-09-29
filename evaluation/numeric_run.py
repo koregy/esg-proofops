@@ -84,6 +84,13 @@ _BINDING_KEYS = frozenset(
         "reported_value_ref",
         "binding_accepted",
         "aggregation",
+        # R30: same-period different-product relative reduction inputs. Optional;
+        # absent keys keep the existing legacy default (no product comparison).
+        "baseline_subject",
+        "subject_ref",
+        "baseline_subject_ref",
+        "product_comparison_accepted",
+        "conditions",
     }
 )
 
@@ -174,7 +181,7 @@ def _build_binding(
     known_source_ids: set[str],
     known_observation_ids: set[str],
 ):
-    from proofops.domain.numeric import AggregationRelation, ClaimBinding
+    from proofops.domain.numeric import AggregationRelation, ClaimBinding, NumericCondition
 
     data = _only_known(raw, _BINDING_KEYS, "binding")
     if data.get("tenant_id") != tenant_id:
@@ -210,6 +217,53 @@ def _build_binding(
             relation=agg["relation"],
             acceptance_state=agg["acceptance_state"],
         )
+    subject_ref = data.get("subject_ref")
+    subject_ref = (
+        _build_source_ref(subject_ref, known_source_ids=known_source_ids, label="subject_ref")
+        if subject_ref is not None
+        else None
+    )
+    baseline_subject_ref = data.get("baseline_subject_ref")
+    baseline_subject_ref = (
+        _build_source_ref(
+            baseline_subject_ref, known_source_ids=known_source_ids, label="baseline_subject_ref"
+        )
+        if baseline_subject_ref is not None
+        else None
+    )
+    conditions = []
+    for raw_condition in data.get("conditions") or ():
+        condition = _only_known(
+            raw_condition,
+            frozenset(
+                {
+                    "source_ref",
+                    "observation_ids",
+                    "binding_sha256",
+                    "relation",
+                    "acceptance_state",
+                    "reviewed_by",
+                }
+            ),
+            "numeric condition",
+        )
+        try:
+            conditions.append(
+                NumericCondition(
+                    source_ref=_build_source_ref(
+                        condition.get("source_ref"),
+                        known_source_ids=known_source_ids,
+                        label="condition source_ref",
+                    ),
+                    observation_ids=tuple(condition.get("observation_ids") or ()),
+                    binding_sha256=condition["binding_sha256"],
+                    relation=condition["relation"],
+                    acceptance_state=condition["acceptance_state"],
+                    reviewed_by=condition["reviewed_by"],
+                )
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise InputRejected(f"invalid numeric condition: {exc}") from exc
     try:
         return ClaimBinding(
             claim_id=data["claim_id"],
@@ -233,6 +287,11 @@ def _build_binding(
             reported_value_ref=reported_value_ref,
             binding_accepted=data.get("binding_accepted", False),
             aggregation=aggregation,
+            baseline_subject=data.get("baseline_subject"),
+            subject_ref=subject_ref,
+            baseline_subject_ref=baseline_subject_ref,
+            product_comparison_accepted=data.get("product_comparison_accepted", False),
+            conditions=tuple(conditions),
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise InputRejected(f"invalid binding: {exc}") from exc

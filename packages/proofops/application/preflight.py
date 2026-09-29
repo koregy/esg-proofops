@@ -522,7 +522,12 @@ def check_local_upstage_tagger(
         expected_role="tagger",
     )
     from proofops.application.tagging.preliminary import (
+        ACTOR_ROLE_SYSTEM_SUFFIX,
         CONTEXT_SYSTEM_SUFFIX,
+        GOAL_ROLE_SYSTEM_SUFFIX,
+        P1_SYSTEM_PROMPT,
+        P2_SYSTEM_PROMPT,
+        PERIOD_ROLE_SYSTEM_SUFFIX,
         TABLE_ROLE_SYSTEM_SUFFIX,
         TABLE_SYSTEM_SUFFIX,
     )
@@ -535,6 +540,8 @@ def check_local_upstage_tagger(
             "upstage-compact-ids-frozen-unicode-v1",
             "upstage-compact-coverage-unicode-v2",
             "upstage-compact-source-quotes-v3",
+            "upstage-compact-source-quotes-v4",
+            "upstage-compact-source-quotes-v5",
         }
         or (
             settings.model_profile == "upstage-preliminary-source-quotes-v1"
@@ -561,6 +568,61 @@ def check_local_upstage_tagger(
             + CONTEXT_SYSTEM_SUFFIX
             + TABLE_SYSTEM_SUFFIX
             + TABLE_ROLE_SYSTEM_SUFFIX
+        )
+        or (
+            settings.model_profile == "upstage-preliminary-source-quotes-table-role-v2-p1"
+            and settings.system_prompt == P1_SYSTEM_PROMPT
+        )
+        or (
+            settings.model_profile == "upstage-preliminary-source-quotes-table-role-v2-p2"
+            and settings.system_prompt == P2_SYSTEM_PROMPT
+        )
+        or (
+            settings.model_profile == "upstage-preliminary-source-quotes-table-role-v1-position-v1"
+            and settings.system_prompt
+            == PRELIMINARY_SYSTEM_PROMPT
+            + CONTEXT_SYSTEM_SUFFIX
+            + TABLE_SYSTEM_SUFFIX
+            + TABLE_ROLE_SYSTEM_SUFFIX
+        )
+        or (
+            settings.model_profile
+            == "upstage-preliminary-source-quotes-table-role-v2-p2-position-v1"
+            and settings.system_prompt == P2_SYSTEM_PROMPT
+        )
+        or (
+            # R34 opt-in: the table-role chain plus the goal-role suffix, pinned
+            # as one longer chain so neither the table-role prompt nor any older
+            # prompt can be sent under this profile and vice versa. Requires
+            # preliminary_table_role=True and its dependencies.
+            settings.model_profile == "upstage-preliminary-source-quotes-goal-role-v1"
+            and settings.system_prompt
+            == PRELIMINARY_SYSTEM_PROMPT
+            + CONTEXT_SYSTEM_SUFFIX
+            + TABLE_SYSTEM_SUFFIX
+            + TABLE_ROLE_SYSTEM_SUFFIX
+            + GOAL_ROLE_SYSTEM_SUFFIX
+        )
+        or (
+            settings.model_profile == "upstage-preliminary-source-quotes-actor-role-v1"
+            and settings.system_prompt
+            == PRELIMINARY_SYSTEM_PROMPT
+            + CONTEXT_SYSTEM_SUFFIX
+            + TABLE_SYSTEM_SUFFIX
+            + TABLE_ROLE_SYSTEM_SUFFIX
+            + GOAL_ROLE_SYSTEM_SUFFIX
+            + ACTOR_ROLE_SYSTEM_SUFFIX
+        )
+        or (
+            settings.model_profile == "upstage-preliminary-source-quotes-actor-role-v2"
+            and settings.system_prompt
+            == PRELIMINARY_SYSTEM_PROMPT
+            + CONTEXT_SYSTEM_SUFFIX
+            + TABLE_SYSTEM_SUFFIX
+            + TABLE_ROLE_SYSTEM_SUFFIX
+            + GOAL_ROLE_SYSTEM_SUFFIX
+            + ACTOR_ROLE_SYSTEM_SUFFIX
+            + PERIOD_ROLE_SYSTEM_SUFFIX
         )
         or (
             settings.model_profile == "upstage-relation-source-quotes-v1"

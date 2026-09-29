@@ -1,7 +1,7 @@
 """Bounded, opt-in Upstage text probe; independent of production model composition.
 
 One local SQLite ledger covers the user's cumulative USD 10 base authorization.
-The base can be extended up to USD20 via authorize_additional_budget(); both base and
+The general spending ceiling is USD30 via authorize_additional_budget(); both base and
 any authorized extension are durably recorded in the ledger before any spending
 counts against the new limit.  Before each request, reserve USD 1 (deliberately
 much larger than these tiny requests at the pinned rates).  Unknown/failed calls
@@ -24,6 +24,22 @@ from proofops.domain.provenance import canonical_hash
 
 MODEL = "solar-pro3"
 MODEL_PRO4 = "solar-pro4"
+# Text, document parse and information-extract rates rechecked at the official
+# pricing page on 2026-09-25; keep one deadline across transports.
+PRICE_RECHECK_AT = datetime(2026, 10, 2, tzinfo=UTC)
+GENERAL_CEILING_USD = Decimal("30.00")
+R32_HISTORICAL_GENERAL_USD = Decimal("20.00")
+RECORDED_GENERAL_REASON = (
+    "User 2026-09-18 approved additional USD10, cumulative USD20; "
+    "existing spend and unsettled reservations preserved."
+)
+# Recognise the existing R32 authorization exactly; it is historical and cannot
+# be selected by an environment variable or a caller of the general probe.
+R32_REASON = (
+    "2026-09-24 user: 이번 평가용 누적 $22 승인; R32 Samsung/Kakao/Hana "
+    "fixed-report evaluation only; cumulative USD22 including prior reservations; "
+    "no unrelated runs."
+)
 PRICE = PricingSnapshot(
     "upstage-solar-pro3-2026-09-09",
     MODEL,
@@ -125,12 +141,18 @@ def request_usage(ledger, request_ids) -> dict:
     cost = sum((amount for amount, _ in entries), Decimal(0))
     input_tokens = output_tokens = document_parse_pages = 0
     has_parse_receipt = False
+    has_aggregate_bound = False
     for receipt in settled:
         if not isinstance(receipt, dict) or any(
             key in receipt and not isinstance(receipt[key], str)
             for key in ("model", "provider_model")
         ):
             raise ValueError("ACCOUNTING_UNAVAILABLE")
+        if receipt.get("settlement_origin") == "provider_aggregate_upper_bound":
+            if not isinstance(receipt.get("aggregate_bound_id"), str):
+                raise ValueError("ACCOUNTING_UNAVAILABLE")
+            has_aggregate_bound = True
+            continue
         parse_models = {"document-parse-260128", "document-parse"}
         if receipt.get("model") in parse_models or receipt.get("provider_model") in parse_models:
             if (
@@ -170,10 +192,10 @@ def request_usage(ledger, request_ids) -> dict:
         "unsettled_calls": unknown,
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
-        "token_usage_complete": not unknown and not has_parse_receipt,
-        "cost_with_vat_reserve_usd": "unknown" if unknown else str(cost),
+        "token_usage_complete": not unknown and not has_parse_receipt and not has_aggregate_bound,
+        "cost_with_vat_reserve_usd": "unknown" if unknown or has_aggregate_bound else str(cost),
         "committed_or_reserved_usd": str(cost),
-        "unknown_reservation_cost_usd": "unknown" if unknown else None,
+        "unknown_reservation_cost_usd": "unknown" if unknown or has_aggregate_bound else None,
     }
     if has_parse_receipt:
         result["document_parse_pages"] = document_parse_pages
@@ -217,23 +239,116 @@ class UpstageProbe:
         self._responses.mkdir(mode=0o700, exist_ok=True)
         self._responses.chmod(0o700)
 
-    def _authorized_limit(self, db) -> Decimal:
-        """Sum POLICY base limit plus all durable extension rows (called inside a transaction)."""
+    @staticmethod
+    def _authorized_limit(db) -> Decimal:
+        """Validate all recorded grants, then return this probe's general-run cap."""
         stored = db.execute("SELECT body FROM probe_policy WHERE id=1").fetchone()
         if stored is None or stored[0] != json.dumps(POLICY, sort_keys=True):
             raise ValueError("BUDGET_POLICY_MISMATCH")
-        try:
-            amounts = [
-                Decimal(row[0]) for row in db.execute("SELECT additional_usd FROM probe_extensions")
-            ]
-        except (InvalidOperation, TypeError, ValueError):
-            raise ValueError("BUDGET_POLICY_MISMATCH") from None
-        if any(not value.is_finite() or value <= 0 for value in amounts):
-            raise ValueError("BUDGET_POLICY_MISMATCH")
-        limit = Decimal(POLICY["limit_usd"]) + sum(amounts, Decimal(0))
-        if limit > Decimal("20.00"):
-            raise ValueError("BUDGET_POLICY_MISMATCH")
-        return limit
+        general = Decimal(POLICY["limit_usd"])
+        scoped_count = 0
+        for extension_id, raw, reason, authorized_at in db.execute(
+            "SELECT id, additional_usd, reason, authorized_at FROM probe_extensions ORDER BY id"
+        ):
+            try:
+                amount = Decimal(raw)
+                timestamp = datetime.fromisoformat(authorized_at.replace("Z", "+00:00"))
+                if (
+                    not amount.is_finite()
+                    or amount <= 0
+                    or not isinstance(reason, str)
+                    or not reason.strip()
+                    or len(reason) > 512
+                    or timestamp.tzinfo is None
+                ):
+                    raise ValueError
+            except (InvalidOperation, AttributeError, TypeError, ValueError):
+                raise ValueError("BUDGET_POLICY_MISMATCH") from None
+            if reason == R32_REASON:
+                scoped_count += 1
+                if (
+                    extension_id != 2
+                    or amount != Decimal("2.00")
+                    or scoped_count != 1
+                    or general != R32_HISTORICAL_GENERAL_USD
+                ):
+                    raise ValueError("BUDGET_POLICY_MISMATCH")
+            else:
+                try:
+                    decoded = json.loads(reason)
+                    canonical_general = (
+                        isinstance(decoded, dict)
+                        and set(decoded) == {"scope", "reason"}
+                        and decoded["scope"] == "general"
+                        and isinstance(decoded["reason"], str)
+                        and bool(decoded["reason"].strip())
+                        and reason == json.dumps(decoded, sort_keys=True, separators=(",", ":"))
+                    )
+                except (TypeError, ValueError):
+                    canonical_general = False
+                recorded_general = (
+                    extension_id == 1
+                    and amount == Decimal("10.00")
+                    and reason == RECORDED_GENERAL_REASON
+                )
+                if not (canonical_general or recorded_general) or (
+                    scoped_count
+                    and (extension_id != 3 or amount != Decimal("10.00") or not canonical_general)
+                ):
+                    raise ValueError("BUDGET_POLICY_MISMATCH")
+                general += amount
+                if general > GENERAL_CEILING_USD:
+                    raise ValueError("BUDGET_POLICY_MISMATCH")
+        return general
+
+    @staticmethod
+    def _call_total(db) -> Decimal:
+        total = Decimal(0)
+        for raw, receipt in db.execute("SELECT committed, receipt FROM probe_calls"):
+            try:
+                amount = Decimal(raw)
+                if (
+                    not amount.is_finite()
+                    or amount < 0
+                    or amount > Decimal(POLICY["reservation_usd"])
+                ):
+                    raise ValueError
+                if receipt is None:
+                    if amount != Decimal(POLICY["reservation_usd"]):
+                        raise ValueError
+                else:
+                    parsed = json.loads(receipt)
+                    if not isinstance(parsed, dict):
+                        raise ValueError
+                    if (
+                        "cost_with_vat_reserve_usd" in parsed
+                        and Decimal(parsed["cost_with_vat_reserve_usd"]) != amount
+                    ):
+                        raise ValueError
+            except (InvalidOperation, TypeError, ValueError):
+                raise ValueError("BUDGET_LEDGER_INVALID") from None
+            total += amount
+        if db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='probe_aggregate_bounds'"
+        ).fetchone():
+            for bound_id, raw, audit_raw in db.execute(
+                "SELECT id, committed, audit FROM probe_aggregate_bounds"
+            ):
+                try:
+                    amount = Decimal(raw)
+                    audit = json.loads(audit_raw)
+                    if (
+                        not amount.is_finite()
+                        or amount < 0
+                        or not bound_id.startswith("aggregate:")
+                        or not isinstance(audit, dict)
+                        or Decimal(audit["total_usd"]) != amount
+                    ):
+                        raise ValueError
+                except (InvalidOperation, KeyError, TypeError, ValueError):
+                    raise ValueError("BUDGET_LEDGER_INVALID") from None
+                total += amount
+        return total
 
     @property
     def model(self) -> str:
@@ -245,10 +360,7 @@ class UpstageProbe:
             authorized_limit = self._authorized_limit(db)
             if db.execute("SELECT 1 FROM probe_calls WHERE request_id=?", (request_id,)).fetchone():
                 raise ValueError("DUPLICATE_PROBE_REQUEST")
-            total = sum(
-                (Decimal(row[0]) for row in db.execute("SELECT committed FROM probe_calls")),
-                Decimal(0),
-            )
+            total = self._call_total(db)
             if total + Decimal(POLICY["reservation_usd"]) > authorized_limit:
                 raise ValueError("BUDGET_EXHAUSTED")
             db.execute(
@@ -334,10 +446,17 @@ class UpstageProbe:
             return False
 
     def authorize_additional_budget(self, additional_usd: str, *, reason: str) -> dict:
-        """Append explicit authorization, preserving history and the USD20 ceiling."""
+        """Append explicit authorization, preserving history and the process ceiling."""
         if not isinstance(additional_usd, str):
             raise ValueError("AUTHORIZATION_AMOUNT_INVALID")
         if not isinstance(reason, str) or not reason.strip() or len(reason) > 512:
+            raise ValueError("AUTHORIZATION_REASON_REQUIRED")
+        stored_reason = json.dumps(
+            {"scope": "general", "reason": reason.strip()},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        if len(stored_reason) > 512:
             raise ValueError("AUTHORIZATION_REASON_REQUIRED")
         try:
             amount = Decimal(additional_usd)
@@ -349,14 +468,15 @@ class UpstageProbe:
         with sqlite3.connect(self.ledger, timeout=10) as db:
             db.execute("BEGIN IMMEDIATE")
             current_limit = self._authorized_limit(db)
-            if current_limit + amount > Decimal("20.00"):
+            if current_limit + amount > GENERAL_CEILING_USD:
                 raise ValueError("AUTHORIZATION_EXCEEDS_CEILING")
             authorized_at = datetime.now(UTC).isoformat()
             db.execute(
                 "INSERT INTO probe_extensions "
                 "(additional_usd, reason, authorized_at) VALUES (?,?,?)",
-                (stored_usd, reason.strip(), authorized_at),
+                (stored_usd, stored_reason, authorized_at),
             )
+            self._authorized_limit(db)
         return {
             "previous_limit_usd": str(current_limit),
             "additional_usd": stored_usd,
@@ -368,12 +488,13 @@ class UpstageProbe:
         with sqlite3.connect(self.ledger) as db:
             rows = db.execute("SELECT committed, receipt FROM probe_calls").fetchall()
             authorized_limit = self._authorized_limit(db)
+            committed = self._call_total(db)
         return {
             "limit_usd": POLICY["limit_usd"],
             "authorized_limit_usd": str(authorized_limit),
             "calls": len(rows),
             "unsettled_calls": sum(receipt is None for _, receipt in rows),
-            "committed_usd": str(sum((Decimal(cost) for cost, _ in rows), Decimal(0))),
+            "committed_usd": str(committed),
         }
 
     def _post(self, body):
@@ -407,10 +528,10 @@ class UpstageProbe:
         max_tokens: int = 1024,
         json_mode: bool = False,
     ):
-        # Pricing verified at https://www.upstage.ai/pricing/api on 2026-09-18 by coordinator:
+        # Pricing reverified at https://www.upstage.ai/pricing/api on 2026-09-25:
         # Pro3 $0.15/$0.60, Pro4 $0.30/$1.20 per M tokens (conservative, promotions ignored).
-        # Guard extended from 2026-09-16 to 2026-09-25.
-        if datetime.now(UTC) >= datetime(2026, 9, 25, tzinfo=UTC):
+        # Recheck in one week; historical price IDs/rates and ledger policy stay unchanged.
+        if datetime.now(UTC) >= PRICE_RECHECK_AT:
             raise ValueError("PRICE_RECHECK_REQUIRED")
 
         if (

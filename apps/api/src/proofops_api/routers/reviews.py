@@ -144,13 +144,7 @@ def build_reviews_router(
         except (sqlite3.DatabaseError, ValueError, KeyError):
             return _error_response(409, "REVIEW_CONFLICT", "Review queue unavailable.")
 
-    @router.post(
-        "/v1/reviews/{review_id}/resolve",
-        operation_id="review_resolve",
-        response_model=ReviewResolution,
-        openapi_extra=request_schema,
-    )
-    async def resolve(request: Request, review_id: UUID):
+    async def resolve_request(request: Request, review_id: UUID, *, reopen: bool):
         now = clock()
         auth = _authorize(request, auth_store, now, "reviewer")
         if isinstance(auth, JSONResponse):
@@ -174,6 +168,7 @@ def build_reviews_router(
                 body,
                 request.headers.get("If-Match"),
                 request.headers.get("Idempotency-Key"),
+                reopen=reopen,
             )
             return JSONResponse(
                 result,
@@ -189,5 +184,23 @@ def build_reviews_router(
             return _error_response(
                 409, "REVIEW_CONFLICT", "Review transaction could not be committed."
             )
+
+    @router.post(
+        "/v1/reviews/{review_id}/resolve",
+        operation_id="review_resolve",
+        response_model=ReviewResolution,
+        openapi_extra=request_schema,
+    )
+    async def resolve(request: Request, review_id: UUID):
+        return await resolve_request(request, review_id, reopen=False)
+
+    @router.post(
+        "/v1/reviews/{review_id}/re-review",
+        operation_id="review_re_review",
+        response_model=ReviewResolution,
+        openapi_extra=request_schema,
+    )
+    async def re_review(request: Request, review_id: UUID):
+        return await resolve_request(request, review_id, reopen=True)
 
     return router

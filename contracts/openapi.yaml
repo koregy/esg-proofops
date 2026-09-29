@@ -2610,6 +2610,116 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/ReviewResolve'
+  /v1/reviews/{review_id}/re-review:
+    post:
+      operationId: review_re_review
+      summary: review_re_review
+      description: >-
+        Explicit re-review of an already-resolved review. Additive to
+        review_resolve with identical guards (reviewer role, session cookie,
+        CSRF, strict If-Match on the current review revision, Idempotency-Key).
+        Targets the current tag head and appends the next immutable
+        tag/decision/review revisions; prior revisions and exports are never
+        mutated. Provenance stays human on this HTTP route. Returns 412
+        STALE_REVIEW_REVISION when the review is still open (use review_resolve)
+        or when the supplied base tag revision is not the current head.
+      x-minimum-role: reviewer
+      x-rate-limit: 10/min/user
+      x-idempotency-required: true
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewResolution'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Forbidden or CSRF failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found or tenant mismatch
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Conflict / gate blocked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '412':
+          description: Stale revision or review still open
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Schema or domain validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Rate/budget limit
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Dependency unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      parameters:
+      - name: review_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema:
+          type: string
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema:
+          type: string
+          minLength: 16
+          maxLength: 128
+      - name: If-Match
+        in: header
+        required: true
+        schema:
+          type: string
+          pattern: ^"[1-9][0-9]*"$
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReviewResolve'
   /v1/runs/{run_id}/exports:
     post:
       operationId: export_create
@@ -5096,6 +5206,271 @@ paths:
       x-minimum-role: viewer
       x-idempotency-required: false
       x-rate-limit: 60/min/user
+  /v1/runs/{run_id}/claims/{claim_id}/classification:
+    get:
+      summary: Get Classification
+      operationId: claim_classification_get
+      security:
+      - sessionCookie: []
+      parameters:
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Run Id
+      - name: claim_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Claim Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClassificationView'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Forbidden or CSRF failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found or tenant mismatch
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Conflict / gate blocked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '412':
+          description: Stale revision
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Schema or domain validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Rate/budget limit
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Dependency unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      x-minimum-role: viewer
+      x-idempotency-required: false
+      x-rate-limit: 120/min/user
+    post:
+      summary: Create Classification
+      operationId: claim_classification_create
+      security:
+      - sessionCookie: []
+      parameters:
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Run Id
+      - name: claim_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Claim Id
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema:
+          type: string
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema:
+          type: string
+          minLength: 16
+          maxLength: 128
+      - name: If-Match
+        in: header
+        required: true
+        schema:
+          type: string
+          pattern: ^"[a-f0-9]{64}"$
+      responses:
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClassificationAccepted'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Forbidden or CSRF failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found or tenant mismatch
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Conflict / gate blocked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '412':
+          description: Stale revision
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Schema or domain validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Rate/budget limit
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Dependency unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      x-minimum-role: reviewer
+      x-idempotency-required: true
+      x-rate-limit: 10/min/user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              additionalProperties: false
+              properties:
+                track:
+                  enum:
+                  - goal
+                  - performance
+                  - management
+                  title: Track
+                  type: string
+                safe_harbor_category:
+                  anyOf:
+                  - enum:
+                    - forward_looking
+                    - emissions_estimate
+                    - third_party_information
+                    type: string
+                  - type: 'null'
+                  title: Safe Harbor Category
+                dimensions:
+                  additionalProperties:
+                    anyOf:
+                    - additionalProperties: false
+                      properties:
+                        source_index:
+                          minimum: 0
+                          title: Source Index
+                          type: integer
+                        quote:
+                          minLength: 1
+                          title: Quote
+                          type: string
+                        start:
+                          anyOf:
+                          - minimum: 0
+                            type: integer
+                          - type: 'null'
+                          title: Start
+                        end:
+                          anyOf:
+                          - minimum: 1
+                            type: integer
+                          - type: 'null'
+                          title: End
+                      required:
+                      - source_index
+                      - quote
+                      title: ClassificationSpan
+                      type: object
+                    - type: 'null'
+                  propertyNames:
+                    enum:
+                    - entity
+                    - metric
+                    - reporting_period
+                    - facility
+                    - scope
+                    - product
+                    - material
+                    - boundary
+                  title: Dimensions
+                  type: object
+                reason:
+                  maxLength: 1000
+                  minLength: 5
+                  title: Reason
+                  type: string
+              required:
+              - track
+              - safe_harbor_category
+              - dimensions
+              - reason
+              title: ClassificationRequest
+              type: object
 components:
   securitySchemes:
     sessionCookie:
@@ -5713,6 +6088,37 @@ components:
           type: array
           items:
             type: string
+        grade_range:
+          description: Reachable ladder grades while ladder evidence is unresolved
+            (engine v3+). Not a grade or label; null when decided or when a separate
+            path/rule gap blocks. Absent on decisions stored before engine v3.
+          anyOf:
+          - type: object
+            additionalProperties: false
+            properties:
+              floor:
+                type: string
+                enum:
+                - E0
+                - E1
+                - E2
+                - E3
+              ceiling:
+                type: string
+                enum:
+                - E0
+                - E1
+                - E2
+                - E3
+              open_elements:
+                type: array
+                items:
+                  type: string
+            required:
+            - floor
+            - ceiling
+            - open_elements
+          - type: 'null'
       required:
       - decision_revision
       - tag_revision
@@ -5727,6 +6133,14 @@ components:
       - semantic_hash
       - gap_ids
       allOf:
+      - if:
+          properties:
+            decision_status:
+              const: decided
+        then:
+          properties:
+            grade_range:
+              type: 'null'
       - if:
           properties:
             decision_status:
@@ -5883,10 +6297,189 @@ components:
       - period_match
       - boundary_match
       - evidence_refs
+    ReviewedContext:
+      additionalProperties: false
+      properties:
+        origin:
+          const: ai_delegated
+          title: Origin
+          type: string
+        dimensions:
+          $ref: '#/components/schemas/ReviewedDimensions'
+        numeric_check:
+          $ref: '#/components/schemas/NumericContextCheck'
+      required:
+      - origin
+      - dimensions
+      - numeric_check
+      title: ReviewedContext
+      type: object
+    ReviewedDimensions:
+      additionalProperties: false
+      properties:
+        facility:
+          $ref: '#/components/schemas/SourceRef'
+        reporting_period:
+          $ref: '#/components/schemas/SourceRef'
+        metric:
+          $ref: '#/components/schemas/SourceRef'
+        value:
+          $ref: '#/components/schemas/SourceRef'
+        unit:
+          $ref: '#/components/schemas/SourceRef'
+      required:
+      - facility
+      - reporting_period
+      - metric
+      - value
+      - unit
+      title: ReviewedDimensions
+      type: object
+    NumericContextCheck:
+      additionalProperties: false
+      properties:
+        status:
+          const: needs_review
+          title: Status
+          type: string
+        reason:
+          const: no_comparable_table_observation
+          title: Reason
+          type: string
+        considered:
+          items:
+            $ref: '#/components/schemas/NumericCandidateReview'
+          title: Considered
+          type: array
+      required:
+      - status
+      - reason
+      - considered
+      title: NumericContextCheck
+      type: object
+    NumericCandidateReview:
+      additionalProperties: false
+      properties:
+        source_ref:
+          $ref: '#/components/schemas/SourceRef'
+        status:
+          enum:
+          - claim_source
+          - outside_reviewed_section
+          - unresolved
+          title: Status
+          type: string
+      required:
+      - source_ref
+      - status
+      title: NumericCandidateReview
+      type: object
+    SubmittedReview:
+      additionalProperties: false
+      properties:
+        schema_version:
+          const: 1
+          title: Schema Version
+          type: integer
+        status:
+          const: reference_only
+          title: Status
+          type: string
+        origin:
+          enum:
+          - data_manager_submission
+          - ai_corrected_submission
+          title: Origin
+          type: string
+        tenant_id:
+          format: uuid
+          title: Tenant Id
+          type: string
+        run_id:
+          format: uuid
+          title: Run Id
+          type: string
+        document_version_id:
+          format: uuid
+          title: Document Version Id
+          type: string
+        claim_id:
+          format: uuid
+          title: Claim Id
+          type: string
+        external_claim_id:
+          title: External Claim Id
+          type: string
+        reference_sha256:
+          pattern: ^[0-9a-f]{64}$
+          title: Reference Sha256
+          type: string
+        source_sha256:
+          pattern: ^[0-9a-f]{64}$
+          title: Source Sha256
+          type: string
+        run_input_sha256:
+          pattern: ^[0-9a-f]{64}$
+          title: Run Input Sha256
+          type: string
+        claim_snapshot_sha256:
+          pattern: ^[0-9a-f]{64}$
+          title: Claim Snapshot Sha256
+          type: string
+        claim_source_quality:
+          title: Claim Source Quality
+          type: string
+        files_sha256:
+          additionalProperties:
+            pattern: ^[0-9a-f]{64}$
+            type: string
+          title: Files Sha256
+          type: object
+        tables:
+          additionalProperties:
+            items:
+              additionalProperties:
+                type: string
+              type: object
+            type: array
+          propertyNames:
+            enum:
+            - claims
+            - elements
+            - numeric
+            - assurance
+          title: Tables
+          type: object
+      required:
+      - schema_version
+      - status
+      - origin
+      - tenant_id
+      - run_id
+      - document_version_id
+      - claim_id
+      - external_claim_id
+      - reference_sha256
+      - source_sha256
+      - run_input_sha256
+      - claim_snapshot_sha256
+      - claim_source_quality
+      - files_sha256
+      - tables
+      title: SubmittedReview
+      type: object
     ClaimDetail:
       type: object
       additionalProperties: false
       properties:
+        submitted_reviews:
+          type: array
+          items:
+            $ref: '#/components/schemas/SubmittedReview'
+        reviewed_context:
+          anyOf:
+          - $ref: '#/components/schemas/ReviewedContext'
+          - type: 'null'
         claim:
           $ref: '#/components/schemas/ClaimSummary'
         source_refs:
@@ -7628,7 +8221,6 @@ components:
       - preview_sha256
       title: SourceObservationPreviewResponse
       type: object
-
     ObservationSourceHolds:
       additionalProperties: false
       properties:
@@ -7994,3 +8586,129 @@ components:
       - binding_state
       - document_role
       title: SourceRef
+    ClassificationAccepted:
+      properties:
+        schema_version:
+          type: integer
+          const: 1
+          title: Schema Version
+        classification:
+          additionalProperties: true
+          type: object
+          title: Classification
+        reprocess_job:
+          additionalProperties: true
+          type: object
+          title: Reprocess Job
+      additionalProperties: false
+      type: object
+      required:
+      - schema_version
+      - classification
+      - reprocess_job
+      title: ClassificationAccepted
+    ClassificationSource:
+      properties:
+        source_index:
+          type: integer
+          title: Source Index
+        quote:
+          type: string
+          title: Quote
+        source_ref:
+          $ref: '#/components/schemas/SourceRef'
+      additionalProperties: false
+      type: object
+      required:
+      - source_index
+      - quote
+      - source_ref
+      title: ClassificationSource
+    ClassificationView:
+      properties:
+        schema_version:
+          type: integer
+          const: 1
+          title: Schema Version
+        run_id:
+          type: string
+          format: uuid
+          title: Run Id
+        claim_id:
+          type: string
+          format: uuid
+          title: Claim Id
+        eligible:
+          type: boolean
+          title: Eligible
+        ineligible_reason:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Ineligible Reason
+        blocked_reason:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Blocked Reason
+        etag:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Etag
+        sources:
+          items:
+            $ref: '#/components/schemas/ClassificationSource'
+          type: array
+          title: Sources
+        dimension_axes:
+          items:
+            type: string
+          type: array
+          title: Dimension Axes
+        preliminary_agreement:
+          additionalProperties: true
+          type: object
+          title: Preliminary Agreement
+        current_classification:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Current Classification
+        pending_job:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Pending Job
+        allowed_tracks:
+          items:
+            type: string
+          type: array
+          title: Allowed Tracks
+        allowed_safe_harbor_categories:
+          items:
+            anyOf:
+            - type: string
+            - type: 'null'
+          type: array
+          title: Allowed Safe Harbor Categories
+      additionalProperties: false
+      type: object
+      required:
+      - schema_version
+      - run_id
+      - claim_id
+      - eligible
+      - ineligible_reason
+      - blocked_reason
+      - etag
+      - sources
+      - dimension_axes
+      - preliminary_agreement
+      - current_classification
+      - pending_job
+      - allowed_tracks
+      - allowed_safe_harbor_categories
+      title: ClassificationView

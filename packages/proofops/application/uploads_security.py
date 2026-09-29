@@ -441,7 +441,7 @@ def _inspect(path: str, limits: PdfLimits) -> int:
             depth: int = 0,
             chain_seen: set[int] | None = None,
             allowed_subtypes: frozenset[str] = frozenset(inert_action_subtypes),
-            allow_print: bool = False,
+            allow_user_named_action: bool = False,
         ) -> None:
             """Validate one action dict/array fail-closed; recurse only into its
             own /Next chain (never treat a raw /OpenAction destination array as
@@ -470,7 +470,7 @@ def _inspect(path: str, limits: PdfLimits) -> int:
                         depth=depth + 1,
                         chain_seen=chain_seen,
                         allowed_subtypes=allowed_subtypes,
-                        allow_print=allow_print,
+                        allow_user_named_action=allow_user_named_action,
                     )
                 return
             if not isinstance(action, DictionaryObject):
@@ -486,9 +486,9 @@ def _inspect(path: str, limits: PdfLimits) -> int:
                 raise UploadRejected("PDF_INVALID")
             if subtype_name == "/Named":
                 destination = action.get("/N")
-                # Print is a user-gesture action, never inert auto-navigation.
+                # Print/Find open viewer UI only on a user gesture, never automatically.
                 if str(destination) not in inert_named_destinations and not (
-                    allow_print and str(destination) == "/Print"
+                    allow_user_named_action and str(destination) in {"/Print", "/Find"}
                 ):
                     raise UploadRejected("PDF_INVALID")
             elif subtype_name == "/GoTo":
@@ -521,7 +521,7 @@ def _inspect(path: str, limits: PdfLimits) -> int:
                     depth=depth + 1,
                     chain_seen=chain_seen,
                     allowed_subtypes=allowed_subtypes,
-                    allow_print=allow_print,
+                    allow_user_named_action=allow_user_named_action,
                 )
 
         def reject_dangerous_open_action(open_action: object, *, allow_uri: bool = False) -> None:
@@ -545,7 +545,7 @@ def _inspect(path: str, limits: PdfLimits) -> int:
                 allowed_subtypes=frozenset(user_gesture_inert_subtypes)
                 if allow_uri
                 else frozenset(inert_action_subtypes),
-                allow_print=allow_uri,
+                allow_user_named_action=allow_uri,
             )
 
         while pending:
@@ -576,7 +576,7 @@ def _inspect(path: str, limits: PdfLimits) -> int:
                     reject_dangerous_action_chain(
                         value,
                         allowed_subtypes=frozenset(user_gesture_inert_subtypes),
-                        allow_print=True,
+                        allow_user_named_action=True,
                     )
                 for action_key in action_table_keys.intersection(value.keys()):
                     action_table = value.get(action_key)
@@ -596,7 +596,7 @@ def _inspect(path: str, limits: PdfLimits) -> int:
                                 allowed_subtypes=frozenset(user_gesture_inert_subtypes)
                                 if gesture
                                 else frozenset(inert_action_subtypes),
-                                allow_print=gesture,
+                                allow_user_named_action=gesture,
                             )
                     else:
                         raise UploadRejected("PDF_INVALID")

@@ -179,6 +179,7 @@ def _preliminary_chain(variant: str) -> tuple[str, str]:
 
     from proofops.application.tagging.preliminary import (
         CONTEXT_SYSTEM_SUFFIX,
+        P2_SYSTEM_PROMPT,
         SYSTEM_PROMPT,
         TABLE_ROLE_SYSTEM_SUFFIX,
         TABLE_SYSTEM_SUFFIX,
@@ -193,6 +194,7 @@ def _preliminary_chain(variant: str) -> tuple[str, str]:
             "upstage-preliminary-source-quotes-table-role-v1",
             table + TABLE_ROLE_SYSTEM_SUFFIX,
         ),
+        "p2": ("upstage-preliminary-source-quotes-table-role-v2-p2", P2_SYSTEM_PROMPT),
     }[variant]
 
 
@@ -213,7 +215,7 @@ def _pin_preliminary(service, preliminary, profile: str, prompt: str):
     return pinned
 
 
-@pytest.mark.parametrize("variant", ["table", "table_role"])
+@pytest.mark.parametrize("variant", ["table", "table_role", "p2"])
 def test_table_preliminary_profiles_create_a_real_mode_run_over_http(tmp_path, variant):
     """R12/R16 opt-in pairs must pass the create-run gate, not only preflight."""
 
@@ -228,9 +230,10 @@ def test_table_preliminary_profiles_create_a_real_mode_run_over_http(tmp_path, v
     snapshot = service.store.snapshot(AUTH.tenant_id, response.json()["run_id"])
     assert snapshot["preliminary_settings"]["model_profile"] == pinned.model_profile
     assert snapshot["preliminary_settings"]["system_prompt"] == prompt
+    assert snapshot["preliminary_prompt_sha256"] == canonical_hash(prompt)
 
 
-@pytest.mark.parametrize("variant", ["table", "table_role"])
+@pytest.mark.parametrize("variant", ["table", "table_role", "p2"])
 def test_table_preliminary_profiles_reject_mismatched_prompts(tmp_path, variant):
     """The profile stays welded to its own prompt chain; neither half may be swapped."""
 

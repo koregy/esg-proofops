@@ -34,3 +34,12 @@ outputs/handoff-packages/
 
 # Private customer corpus; never publish real report PDFs
 /outputs/agent-fixtures/*.pdf
+*.pdf
+**/report-pages/
+**/page-images/
+*.sqlite
+*.sqlite3
+*.pem
+*.key
+.vercel
+.env*

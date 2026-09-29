@@ -20,7 +20,7 @@ from proofops.domain.periods import is_supported_period
 from proofops.domain.provenance import canonical_hash
 from proofops.domain.values import SourceRef
 
-CheckKind = Literal["comparison", "sum", "reduction"]
+CheckKind = Literal["comparison", "sum", "reduction", "growth", "product_reduction"]
 CheckStatus = Literal["consistent", "inconsistent", "not_comparable", "not_computable"]
 Interval = tuple[Fraction, Fraction]
 _NUMBER = re.compile(r"([+-]?(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\.[0-9]+)?)(?:\s+(.+))?")
@@ -154,6 +154,23 @@ class AggregationRelation:
 
 
 @dataclass(frozen=True, slots=True)
+class NumericCondition:
+    """Explicit source-backed review that one note applies equally to both operands."""
+
+    source_ref: SourceRef
+    observation_ids: tuple[str, ...]
+    binding_sha256: str
+    relation: str
+    acceptance_state: str
+    reviewed_by: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "observation_ids", tuple(self.observation_ids))
+        if not isinstance(self.source_ref, SourceRef) or not isinstance(self.reviewed_by, str):
+            raise ValueError("invalid numeric condition")
+
+
+@dataclass(frozen=True, slots=True)
 class ClaimBinding:
     claim_id: str
     tenant_id: str
@@ -178,22 +195,33 @@ class ClaimBinding:
     reported_value_ref: SourceRef | None = None
     binding_accepted: bool = False
     aggregation: AggregationRelation | None = None
+    # R30: same-period different-product relative reduction needs an explicitly
+    # accepted baseline product dimension plus verified source spans for both the
+    # current and baseline product literals. These are never inferred from numbers.
+    baseline_subject: str | None = None
+    subject_ref: SourceRef | None = None
+    baseline_subject_ref: SourceRef | None = None
+    product_comparison_accepted: bool = False
+    conditions: tuple[NumericCondition, ...] = ()
 
     def __post_init__(self) -> None:
         if (
             not self.claim_id
             or not self.tenant_id
             or not self.document_version_id
-            or self.kind not in ("comparison", "sum", "reduction")
+            or self.kind not in ("comparison", "sum", "reduction", "growth", "product_reduction")
             or not self.observation_ids
             or len(set(self.observation_ids)) != len(self.observation_ids)
             or type(self.binding_accepted) is not bool
+            or type(self.product_comparison_accepted) is not bool
         ):
             raise ValueError("invalid numeric claim binding")
         if self.kind == "comparison" and len(self.observation_ids) != 1:
             raise ValueError("comparison requires exactly one observation")
-        if self.kind == "reduction" and len(self.observation_ids) != 2:
-            raise ValueError("reduction requires baseline and current observations")
+        if self.kind in ("reduction", "growth") and len(self.observation_ids) != 2:
+            raise ValueError(f"{self.kind} requires baseline and current observations")
+        if self.kind == "product_reduction" and len(self.observation_ids) != 2:
+            raise ValueError("product_reduction requires baseline and current product observations")
         refs = tuple(self.source_refs)
         if not refs or any(not isinstance(ref, SourceRef) for ref in refs):
             raise ValueError("numeric binding requires source_refs")
@@ -201,6 +229,11 @@ class ClaimBinding:
             raise ValueError("numeric binding source version mismatch")
         object.__setattr__(self, "source_refs", refs)
         object.__setattr__(self, "observation_ids", tuple(self.observation_ids))
+        object.__setattr__(self, "conditions", tuple(self.conditions))
+        if any(not isinstance(c, NumericCondition) for c in self.conditions) or (
+            self.conditions and self.kind not in ("growth", "product_reduction")
+        ):
+            raise ValueError("numeric conditions require a supported rate binding")
 
 
 @dataclass(frozen=True, slots=True)
@@ -372,10 +405,12 @@ def _observation_display(
     canonical = unit[2:].strip() if scale == "1000" and unit else unit
     if item.scale_multiplier != scale or item.unit_canonical != canonical:
         return None
-    refs = {ref.source_id: ref for ref in item.source_refs}
+    refs: dict[str, list[SourceRef]] = {}
+    for ref in item.source_refs:
+        refs.setdefault(ref.source_id, []).append(ref)
     raw_match = _NUMBER.fullmatch(item.value_raw.strip())
     unit_bound = any(
-        name == "unit_raw" and target in refs and refs[target].quote.strip() == unit
+        name == "unit_raw" and any(ref.quote.strip() == unit for ref in refs.get(target, ()))
         for _, target, name in item.parent_relations
     ) or any(unit is not None and unit_note_literal(ref.quote) == unit for ref in item.source_refs)
     if not unit_bound and not (raw_match and raw_match[2] == unit):
@@ -385,7 +420,6 @@ def _observation_display(
     if display is None or parsed is None or display[0] != Fraction(parsed):
         return None
     # Preserve explicit field-to-source associations, not merely bag-of-quotes.
-    refs = {ref.source_id: ref for ref in item.source_refs}
     targets = _note_targets(item, original)
     note_ids = {block.source_id for block in original.blocks if block.kind == "footnote"}
     scope_notes = {
@@ -399,9 +433,10 @@ def _observation_display(
             name == field
             and target in refs
             and (
-                target in scope_notes and scope_note_literal(refs[target].quote) == expected
+                target in scope_notes
+                and any(scope_note_literal(ref.quote) == expected for ref in refs[target])
                 if field == "scope" and target in note_ids
-                else refs[target].quote.strip() == expected
+                else any(ref.quote.strip() == expected for ref in refs[target])
             )
             for _, target, name in item.parent_relations
         ):
@@ -519,7 +554,12 @@ def _note_targets(item: NumericObservation, original: NumericSnapshot) -> set[st
     return targets
 
 
-def observation_source_holds(item: NumericObservation, original: NumericSnapshot) -> dict:
+def observation_source_holds(
+    item: NumericObservation,
+    original: NumericSnapshot,
+    *,
+    accepted_note_ids: frozenset[str] = frozenset(),
+) -> dict:
     """Original-lineage diagnostics, not coverage approval or numeric permission."""
     if item.tenant_id != original.tenant_id or (
         item.document_version_id,
@@ -530,7 +570,7 @@ def observation_source_holds(item: NumericObservation, original: NumericSnapshot
     source_ids = {ref.source_id for ref in item.source_refs} | {item.table_id}
     source_ids.update(source for source, _, _ in item.parent_relations)
     issues = unresolved_source_issue_ids(original, source_ids)
-    notes, reasons = _footnote_holds(item, original)
+    notes, reasons = _footnote_holds(item, original, accepted_note_ids=accepted_note_ids)
     if issues:
         reasons.add("source_issue_unresolved")
     return dict(
@@ -541,12 +581,17 @@ def observation_source_holds(item: NumericObservation, original: NumericSnapshot
     )
 
 
-def _unresolved_footnotes(item: NumericObservation, original: NumericSnapshot) -> bool:
-    return bool(_footnote_holds(item, original)[1])
+def _unresolved_footnotes(
+    item: NumericObservation, original: NumericSnapshot, accepted_note_ids: frozenset[str]
+) -> bool:
+    return bool(_footnote_holds(item, original, accepted_note_ids=accepted_note_ids)[1])
 
 
 def _footnote_holds(
-    item: NumericObservation, original: NumericSnapshot
+    item: NumericObservation,
+    original: NumericSnapshot,
+    *,
+    accepted_note_ids: frozenset[str] = frozenset(),
 ) -> tuple[set[str], set[str]]:
     # Accumulate all holds; an unverified value must not hide its sibling note.
     held: set[str] = set()
@@ -594,7 +639,9 @@ def _footnote_holds(
             continue
         raw = note.candidates[note.winner].source.raw_text
         unit, scope = unit_note_literal(raw), scope_note_literal(raw)
-        if not ((unit and unit == item.unit_raw) or (scope and scope == item.scope)):
+        if note.source_id not in accepted_note_ids and not (
+            (unit and unit == item.unit_raw) or (scope and scope == item.scope)
+        ):
             held.add(note.source_id)
             reasons.add("footnote_condition_unsupported_or_mismatched")
         if not any(
@@ -606,7 +653,61 @@ def _footnote_holds(
     return held, reasons
 
 
-def _matches_binding(item: NumericObservation, binding: ClaimBinding, period: str | None) -> bool:
+def condition_binding_hash(binding: ClaimBinding) -> str:
+    payload = asdict(replace(binding, conditions=()))
+    payload.pop("conditions")
+    return canonical_hash(payload)
+
+
+def validated_condition_ids(
+    binding: ClaimBinding, original: NumericSnapshot, items: Sequence[NumericObservation]
+) -> frozenset[str]:
+    """No automatic note interpretation: require pinned explicit review + real lineage."""
+    if not binding.binding_accepted or binding.kind not in ("growth", "product_reduction"):
+        return frozenset()
+    if tuple(item.observation_id for item in items) != binding.observation_ids or not items:
+        return frozenset()
+    digest = condition_binding_hash(binding)
+    blocks = {block.source_id: block for block in original.blocks}
+    valid = set()
+    for condition in binding.conditions:
+        ref = condition.source_ref
+        block = blocks.get(ref.source_id)
+        if (
+            condition.acceptance_state == "accepted"
+            and condition.relation == "same_basis_for_selected_observations"
+            and condition.reviewed_by.strip()
+            and condition.observation_ids == binding.observation_ids
+            and condition.binding_sha256 == digest
+            and _verified(ref, original)
+            and block is not None
+            and block.kind == "footnote"
+            and block.winner is not None
+            and ref.quote == block.candidates[block.winner].source.raw_text
+            and all(
+                any(
+                    edge.source_id == ref.source_id
+                    and edge.relation == "footnote_of"
+                    and edge.target_id in _note_targets(item, original)
+                    for edge in original.edges
+                )
+                for item in items
+            )
+        ):
+            valid.add(ref.source_id)
+    return frozenset(valid)
+
+
+def _matches_binding(
+    item: NumericObservation,
+    binding: ClaimBinding,
+    period: str | None,
+    *,
+    subject_override: str | None = None,
+) -> bool:
+    # ``subject_override`` lets a product comparison require the baseline row to
+    # carry the deliberately-different accepted product literal while every other
+    # dimension still matches the binding exactly. It never relaxes any dimension.
     return (
         bool(period and binding.unit and binding.metric_raw)
         and (
@@ -615,10 +716,49 @@ def _matches_binding(item: NumericObservation, binding: ClaimBinding, period: st
         )
         and item.reporting_period == period
         and all(
-            getattr(item, field) == getattr(binding, "unit" if field == "unit_canonical" else field)
+            getattr(item, field)
+            == (
+                subject_override
+                if field == "subject" and subject_override is not None
+                else getattr(binding, "unit" if field == "unit_canonical" else field)
+            )
             for field in _DIMENSIONS
         )
         and not (binding.unit and "/" in binding.unit and not binding.denominator)
+    )
+
+
+def _product_subjects_verified(
+    binding: ClaimBinding, claim: NumericClaim | None, original: NumericSnapshot
+) -> bool:
+    """Both product literals must be verified spans inside the accepted claim quote.
+
+    Acceptance is explicit and never inferred from the numbers. Each product name
+    is a verified source span that lies inside one of the claim's own verified
+    source refs, exactly like the reported-value span. The two products must be
+    genuinely different subjects, so this is a real cross-product comparison.
+    """
+    current, baseline = binding.subject_ref, binding.baseline_subject_ref
+    return (
+        binding.product_comparison_accepted
+        and claim is not None
+        and bool(binding.subject)
+        and bool(binding.baseline_subject)
+        and binding.subject != binding.baseline_subject
+        and current is not None
+        and baseline is not None
+        and current.quote == binding.subject
+        and baseline.quote == binding.baseline_subject
+        and _verified(current, original)
+        and _verified(baseline, original)
+        and all(
+            any(
+                span.source_id == ref.source_id
+                and ref.char_start <= span.char_start < span.char_end <= ref.char_end
+                for ref in claim.source_refs
+            )
+            for span in (current, baseline)
+        )
     )
 
 
@@ -626,6 +766,26 @@ def _aggregation_verified(
     binding: ClaimBinding, original: NumericSnapshot, items: Sequence[NumericObservation]
 ) -> bool:
     relation = binding.aggregation
+    payload = asdict(replace(binding, aggregation=None))
+    binding_hashes = {canonical_hash(payload)}
+    # Old immutable sum bindings predate the optional product fields. Accept
+    # their original hash only when all those fields retain their old defaults.
+    if (
+        binding.baseline_subject is None
+        and binding.subject_ref is None
+        and binding.baseline_subject_ref is None
+        and binding.product_comparison_accepted is False
+        and not binding.conditions
+    ):
+        for name in (
+            "baseline_subject",
+            "subject_ref",
+            "baseline_subject_ref",
+            "product_comparison_accepted",
+            "conditions",
+        ):
+            payload.pop(name)
+        binding_hashes.add(canonical_hash(payload))
     # Renaming an observation must not count the same source cell twice.
     roots = tuple(frozenset(source for source, _, _ in item.parent_relations) for item in items)
     return (
@@ -636,7 +796,7 @@ def _aggregation_verified(
         and relation.relation == "disjoint_complete_components"
         and relation.target_claim_id == binding.claim_id
         and relation.observation_ids == binding.observation_ids
-        and relation.binding_sha256 == canonical_hash(asdict(replace(binding, aggregation=None)))
+        and relation.binding_sha256 in binding_hashes
         and bool(relation.source_refs)
         and all(_verified(ref, original) for ref in relation.source_refs)
     )
@@ -710,7 +870,8 @@ def check_numeric_consistency(
                 _result(binding, "not_computable", reason="source_issue_unresolved", items=selected)
             )
             continue
-        if any(_unresolved_footnotes(item, original) for item in selected):
+        accepted_notes = validated_condition_ids(binding, original, selected)
+        if any(_unresolved_footnotes(item, original, accepted_notes) for item in selected):
             results.append(
                 _result(
                     binding,
@@ -727,19 +888,40 @@ def check_numeric_consistency(
             continue
         periods = (
             (binding.baseline_period, binding.reporting_period)
-            if binding.kind == "reduction"
+            if binding.kind in ("reduction", "growth")
             else (binding.reporting_period,) * len(selected)
         )
         if not all(is_supported_period(period) for period in periods):
             results.append(_result(binding, "not_comparable", reason="reporting_period_unresolved"))
             continue
-        if (
-            binding.kind == "reduction" and binding.baseline_period == binding.reporting_period
-        ) or not all(
-            _matches_binding(item, binding, period)
-            for item, period in zip(selected, periods, strict=True)
-        ):
-            results.append(_result(binding, "not_comparable", reason="dimension_mismatch"))
+        # A temporal delta needs two distinct periods; a same-period product
+        # comparison needs one shared period with a deliberately different subject.
+        # comparison/sum keep their original period handling (no distinctness rule).
+        if binding.kind in ("reduction", "growth"):
+            period_ok = binding.baseline_period != binding.reporting_period
+        elif binding.kind == "product_reduction":
+            period_ok = binding.baseline_period == binding.reporting_period
+        else:
+            period_ok = True
+        subject_overrides: tuple[str | None, ...] = (
+            (binding.baseline_subject, binding.subject)
+            if binding.kind == "product_reduction"
+            else (None,) * len(selected)
+        )
+        product_ok = binding.kind != "product_reduction" or _product_subjects_verified(
+            binding, claim_index.get(binding.claim_id), original
+        )
+        dimensions_ok = all(
+            _matches_binding(item, binding, period, subject_override=override)
+            for item, period, override in zip(selected, periods, subject_overrides, strict=True)
+        )
+        if not period_ok or not product_ok or not dimensions_ok:
+            reason = (
+                "product_comparison_unaccepted"
+                if binding.kind == "product_reduction" and not product_ok
+                else "dimension_mismatch"
+            )
+            results.append(_result(binding, "not_comparable", reason=reason))
             continue
         numbers = tuple(value for value in displays if value is not None)
         if binding.kind == "comparison":
@@ -760,8 +942,14 @@ def check_numeric_consistency(
             if base_bounds[0] <= 0 <= base_bounds[1]:
                 results.append(_result(binding, "not_computable", reason="zero_baseline_interval"))
                 continue
-            computed = (baseline - current) / baseline * 100
-            corners = tuple((1 - c / b) * 100 for b in base_bounds for c in current_bounds)
+            if binding.kind == "growth":
+                # Temporal growth rate: (current / baseline - 1) * 100.
+                computed = (current / baseline - 1) * 100
+                corners = tuple((c / b - 1) * 100 for b in base_bounds for c in current_bounds)
+            else:
+                # reduction and product_reduction: (1 - current / baseline) * 100.
+                computed = (baseline - current) / baseline * 100
+                corners = tuple((1 - c / b) * 100 for b in base_bounds for c in current_bounds)
             interval = (min(corners), max(corners))
         decimal = _exact_decimal(computed)
         status: CheckStatus = (

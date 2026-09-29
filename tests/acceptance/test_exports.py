@@ -10,20 +10,22 @@ from zipfile import ZipFile
 
 import pytest
 from proofops.application.authorization import MembershipRecord
+from proofops.application.ports.jobs import JobMessage
+from proofops_agent.extraction import SyntheticClaimExtractor
 
 from tests.integration.test_local_tag_runner import TENANT
 from tests.integration.test_revision_coverage import prepare_rescore, resolve, workspace
 from tests.integration.test_run_lifecycle import validate
 
 
-def exports(tmp_path, monkeypatch, *, store_type=None):
+def exports(tmp_path, monkeypatch, *, store_type=None, configure_runner=None):
     try:
         from proofops.adapters.local.export_store import LocalExportStore
         from proofops.application.exports import ExportService
         from proofops_api.routers.exports import build_exports_router
     except ImportError as exc:
         pytest.fail(f"Export implementation missing: {exc}")
-    ws = workspace(tmp_path, monkeypatch)
+    ws = workspace(tmp_path, monkeypatch, configure_runner=configure_runner)
     store = (store_type or LocalExportStore)(ws["service"].store, ws["runner"].claims)
     service = ExportService(store)
     now = [__import__("time").time()]
@@ -73,6 +75,7 @@ def test_real_http_bundle_manifest_provenance_idempotency_and_immutable_reopen(
     assert claim["tag_revision"] == 2 and claim["decision_revision"] == 1
     assert claim["replicate_hashes"] == list(ws["tags"].replicate_hashes)
     assert claim["source_refs"] and claim["source_refs"][0]["bbox"]
+    assert claim["claim_quote"] == ws["runner"].claims.list(TENANT, ws["run"])[0].quote
     assert create(ws).json() == result
     assert create(ws, formats=["json"]).status_code == 409
     # Real rules-only rescore changes current heads, never the old report or audit event.
@@ -90,6 +93,68 @@ def test_real_http_bundle_manifest_provenance_idempotency_and_immutable_reopen(
                 "INSERT OR REPLACE INTO job_records SELECT * FROM job_records "
                 "WHERE kind='export_artifact'"
             )
+
+
+def test_later_tag_checkpoint_keeps_review_decision_coverage_and_export(tmp_path, monkeypatch):
+    extract = SyntheticClaimExtractor.extract
+
+    def two_claims(self, packet):
+        original = extract(self, packet)["spans"][0]
+        split = original["quote"].index(" 1234") + original["char_start"]
+        return {
+            "spans": [
+                original | {"char_end": split, "quote": original["quote"][:split]},
+                original | {"char_start": split + 1, "quote": original["quote"][split + 1 :]},
+            ]
+        }
+
+    def leave_other_claim_for_recovery(runner, run_id):
+        other = runner.claims.load_evidence(TENANT, run_id)[1].claims[1].claim_id
+        preliminary = runner.preliminary
+        runner.preliminary = lambda claim, graph: (
+            None if claim.claim_id == other else preliminary(claim, graph)
+        )
+
+    monkeypatch.setattr(SyntheticClaimExtractor, "extract", two_claims)
+    ws = exports(tmp_path, monkeypatch, configure_runner=leave_other_claim_for_recovery)
+    resolve(ws)
+    jobs, tenant, run_id = ws["jobs"], ws["actor"].tenant_id, ws["run"]
+    run = jobs.get_run(tenant, run_id)
+    assert run["coverage"]["claims_discovered"] == 2
+    old_message = JobMessage(**run["tag_job"])
+    old_checkpoint = jobs.read_checkpoint(old_message)
+    assert old_checkpoint is not None
+    assert [item["status"] for item in json.loads(old_checkpoint)["claims"]] == [
+        "needs_review",
+        "blocked",
+    ]
+    with jobs._transaction() as db:
+        revisions_before = db.execute(
+            "SELECT kind,record_id,value FROM job_records WHERE tenant_id=? AND run_id=? "
+            "AND kind IN ('tag_revision','decision_revision') ORDER BY kind,record_id",
+            (tenant, run_id),
+        ).fetchall()
+    message = replace(old_message, job_id=str(uuid4()), shard="tag-recovery-regression")
+    jobs.enqueue(message, now=ws["runner"].clock())
+    lease = jobs.claim_job(
+        message, owner="test-recovery", now=ws["runner"].clock(), lease_seconds=300
+    )
+    assert lease is not None
+    assert jobs.commit_job(
+        lease, payload=old_checkpoint, now=ws["runner"].clock(), publish=lambda db: None
+    )
+    assert jobs.get_run(tenant, run_id)["coverage"]["claims_decided"] == 1
+    assert jobs.get_run(tenant, run_id)["coverage"]["claims_needs_review"] == 1
+    with jobs._transaction() as db:
+        assert (
+            db.execute(
+                "SELECT kind,record_id,value FROM job_records WHERE tenant_id=? AND run_id=? "
+                "AND kind IN ('tag_revision','decision_revision') ORDER BY kind,record_id",
+                (tenant, run_id),
+            ).fetchall()
+            == revisions_before
+        )
+    assert create(ws).status_code == 202
 
 
 def test_review_during_capture_retries_only_snapshot_then_renders_frozen_revisions(
@@ -351,6 +416,75 @@ def test_mutation_after_freeze_does_not_recapture_or_change_pinned_report(tmp_pa
     assert report["claims"][0]["label"] is None
 
 
+def test_unfinished_export_preserves_tag_uncertainty_without_grading(tmp_path, monkeypatch):
+    ws = exports(tmp_path, monkeypatch)
+    current = ws["runner"].claims.current_tag(TENANT, ws["run"], ws["review"]["claim_id"])
+    expected = [
+        element["element_id"]
+        for element in current["tag"]["elements"]
+        if element["state"] in ("unknown", "conflict")
+    ]
+    assert expected
+    response = create(ws)
+    assert response.status_code == 202, response.text
+    bundle = archive(ws, response.json())[0]
+    claim = json.loads(bundle.read("report.json"))["claims"][0]
+    assert claim["claim_quote"] == ws["runner"].claims.list(TENANT, ws["run"])[0].quote
+    assert claim["unresolved_elements"] == expected
+    assert claim["review_action"]["unresolved_elements"] == expected
+    assert "unresolved_evidence" in claim["review_action"]["reasons"]
+    assert claim["missing_elements"] == []
+    assert claim["evidence_grade"] is None and claim["decision_status"] == "not_run"
+    assert "미해결 요소의 원문 근거 귀속" in bundle.read("report.html").decode()
+
+
+def test_capture_projects_immutable_tag_elements_without_grading(tmp_path, monkeypatch):
+    from proofops.application.reporting import build_report_model
+
+    ws = exports(tmp_path, monkeypatch)
+    store = ws["export_store"]
+    claim_id = ws["review"]["claim_id"]
+    current = ws["runner"].claims.current_tag(TENANT, ws["run"], claim_id)
+    assert current["tag"]["elements"]
+    export_id = store.reserve(
+        ws["actor"],
+        ws["run"],
+        dict(formats=["json", "csv", "html"], allow_partial=True),
+        "tag-elements-check",
+        now=ws["now"][0],
+    )
+    captured = store.capture(TENANT, export_id)
+    record = captured["decisions"][claim_id]
+    assert isinstance(record["tag_elements"], list) and record["tag_elements"]
+    pinned = {e["element_id"]: e for e in current["tag"]["elements"]}
+    for element in record["tag_elements"]:
+        assert element["state"] == pinned[element["element_id"]]["state"]
+        assert element["normalized_value"] == pinned[element["element_id"]]["normalized_value"]
+        assert len(element["evidence_refs"]) == len(pinned[element["element_id"]]["evidence_refs"])
+        if element["evidence_refs"]:
+            assert (
+                element["evidence_refs"][0]["quote"]
+                == pinned[element["element_id"]]["evidence_refs"][0]["quote"]
+            )
+        if element["state"] == "present":
+            assert element["evidence_refs"]
+            assert all(
+                ref.get("verification_state") == "verified" for ref in element["evidence_refs"]
+            )
+    model = build_report_model(captured["manifest"], captured["decisions"])
+    got = [(e["element_id"], e["state"]) for e in model["claims"][0]["tag_elements"]]
+    want = [(e["element_id"], e["state"]) for e in record["tag_elements"]]
+    assert got == want
+    assert model["claims"][0]["evidence_grade"] is None
+    # Foreign/tampered evidence must fail closed at projection time.
+    tampered = json.loads(json.dumps(captured["decisions"]))
+    tampered[claim_id]["tag_elements"].append(
+        json.loads(json.dumps(tampered[claim_id]["tag_elements"][0]))
+    )
+    with pytest.raises(ValueError):
+        build_report_model(captured["manifest"], tampered)
+
+
 def test_idempotency_accepts_contract_strings_and_invalid_json_is_422(tmp_path, monkeypatch):
     ws = exports(tmp_path, monkeypatch)
     ws["http"].headers["Idempotency-Key"] = "synthetic-export-request-0001"
@@ -379,3 +513,65 @@ def test_capture_size_limit_rejects_before_snapshot_or_report_publication(tmp_pa
             ]
             == 0
         )
+
+
+def test_export_preserves_ai_classification_origin_before_tagging(tmp_path, monkeypatch):
+    from proofops.adapters.local.export_store import LocalExportStore
+    from proofops.application.reporting import build_report_model, render_report
+
+    from tests.integration.test_manual_classification_reprocess import (
+        _actor,
+        _blocked_setup,
+        _body,
+    )
+
+    service, run_id, runner, now, classification, claim_id = _blocked_setup(tmp_path, monkeypatch)
+    actor = _actor()
+    view, body = _body(classification, run_id, claim_id, actor)
+    accepted = classification.classify_ai_delegated(
+        actor,
+        run_id,
+        claim_id,
+        body,
+        view["etag"],
+        "export-ai-classification-check",
+        delegated_reviewer="test-agent",
+        delegation_authority="Synthetic test only",
+        now=int(now[0]),
+    )
+    store = LocalExportStore(service.store, runner.claims)
+    export_id = store.reserve(
+        actor,
+        run_id,
+        dict(formats=["json", "csv", "html"], allow_partial=True),
+        "export-ai-check",
+        now=now[0],
+    )
+    captured = store.capture(TENANT, export_id)
+    model = build_report_model(captured["manifest"], captured["decisions"])
+    review = model["claims"][0]["classification_review"]
+    assert review["origin"] == "ai_delegated_classification"
+    assert review["classification_id"] == accepted["classification"]["classification_id"]
+    assert model["claims"][0]["decision_status"] == "not_run"
+    assert "AI 위임 분류(사람 검토 아님)" in render_report(model, "html").decode()
+    assert "ai_delegated_classification" in render_report(model, "csv").decode()
+    assert "ai_delegated_classification" in render_report(model, "json").decode()
+    # A changed mutable head cannot relabel the immutable AI record as human.
+    assert store.freeze(TENANT, export_id, captured)
+    with service.store.jobs._transaction() as db:
+        head = service.store.jobs._get(
+            db, TENANT, run_id, "preliminary_classification_head", claim_id
+        )
+        service.store.jobs._put(
+            db,
+            TENANT,
+            run_id,
+            "preliminary_classification_head",
+            claim_id,
+            dict(head, origin="human_classification"),
+        )
+    from proofops.application.exports import ExportRejected
+
+    with pytest.raises(ExportRejected, match="EXPORT_INTEGRITY_FAILED"):
+        store.capture(TENANT, export_id)
+    assert store.frozen(TENANT, export_id)["decisions"][claim_id]["classification_review"] == review

@@ -27,13 +27,20 @@ packet must pin the longer prompt hash, so the two prompts can never be swapped.
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from pathlib import Path
 
 from proofops.adapters.local.upstage import UpstageProbe
 from proofops.application.preflight import Preflight
 from proofops.application.tagging.preliminary import (
+    ACTOR_ROLE_SYSTEM_SUFFIX,
+    CONTEXT_POSITION_ORDER,
     CONTEXT_SCHEMA,
     CONTEXT_SYSTEM_SUFFIX,
+    GOAL_ROLE_SYSTEM_SUFFIX,
+    P1_SYSTEM_PROMPT,
+    P2_SYSTEM_PROMPT,
+    PERIOD_ROLE_SYSTEM_SUFFIX,
     SCHEMA,
     SYSTEM_PROMPT,
     TABLE_ROLE_SYSTEM_SUFFIX,
@@ -51,13 +58,35 @@ CONTEXT_MODEL_PROFILE = "upstage-preliminary-source-quotes-context-v1"
 TABLE_MODEL_PROFILE = "upstage-preliminary-source-quotes-table-v1"
 # R16: same TABLE wire schema and same validator; only the pinned prompt differs.
 TABLE_ROLE_MODEL_PROFILE = "upstage-preliminary-source-quotes-table-role-v1"
+POSITION_TABLE_ROLE_MODEL_PROFILE = "upstage-preliminary-source-quotes-table-role-v1-position-v1"
+P1_MODEL_PROFILE = "upstage-preliminary-source-quotes-table-role-v2-p1"
+P2_MODEL_PROFILE = "upstage-preliminary-source-quotes-table-role-v2-p2"
+POSITION_P2_MODEL_PROFILE = "upstage-preliminary-source-quotes-table-role-v2-p2-position-v1"
+# R34: same TABLE wire schema and same TABLE validator; adds GOAL_ROLE_SYSTEM_SUFFIX
+# after TABLE_ROLE_SYSTEM_SUFFIX so the goal-role prompt is a strict extension of
+# the table-role prompt. Requires preliminary_table_role=True and its dependencies.
+GOAL_ROLE_MODEL_PROFILE = "upstage-preliminary-source-quotes-goal-role-v1"
+ACTOR_ROLE_MODEL_PROFILE = "upstage-preliminary-source-quotes-actor-role-v1"
+ACTOR_ROLE_MODEL_PROFILE_V2 = "upstage-preliminary-source-quotes-actor-role-v2"
 TRANSPORT_VERSION = "preliminary-source-quotes-v1"
 CONTEXT_TRANSPORT_VERSION = "preliminary-source-quotes-context-v1"
 TABLE_TRANSPORT_VERSION = "preliminary-source-quotes-table-v1"
 TABLE_ROLE_TRANSPORT_VERSION = "preliminary-source-quotes-table-role-v1"
+POSITION_TABLE_ROLE_TRANSPORT_VERSION = "preliminary-source-quotes-table-role-v1-position-v1"
+P1_TRANSPORT_VERSION = "preliminary-source-quotes-table-role-v2-p1"
+P2_TRANSPORT_VERSION = "preliminary-source-quotes-table-role-v2-p2"
+POSITION_P2_TRANSPORT_VERSION = "preliminary-source-quotes-table-role-v2-p2-position-v1"
+# New transport version for replay separation: a stored goal-role receipt can never
+# be replayed as a table-role response and vice versa.
+GOAL_ROLE_TRANSPORT_VERSION = "preliminary-source-quotes-goal-role-v1"
+ACTOR_ROLE_TRANSPORT_VERSION = "preliminary-source-quotes-actor-role-v1"
+ACTOR_ROLE_TRANSPORT_VERSION_V2 = "preliminary-source-quotes-actor-role-v2"
 CONTEXT_SYSTEM_PROMPT = SYSTEM_PROMPT + CONTEXT_SYSTEM_SUFFIX
 TABLE_SYSTEM_PROMPT = CONTEXT_SYSTEM_PROMPT + TABLE_SYSTEM_SUFFIX
 TABLE_ROLE_SYSTEM_PROMPT = TABLE_SYSTEM_PROMPT + TABLE_ROLE_SYSTEM_SUFFIX
+GOAL_ROLE_SYSTEM_PROMPT = TABLE_ROLE_SYSTEM_PROMPT + GOAL_ROLE_SYSTEM_SUFFIX
+ACTOR_ROLE_SYSTEM_PROMPT = GOAL_ROLE_SYSTEM_PROMPT + ACTOR_ROLE_SYSTEM_SUFFIX
+ACTOR_ROLE_SYSTEM_PROMPT_V2 = ACTOR_ROLE_SYSTEM_PROMPT + PERIOD_ROLE_SYSTEM_SUFFIX
 
 _ENVELOPE_KEYS = frozenset(
     (
@@ -132,7 +161,20 @@ class UpstagePreliminaryTransport(UpstageTaggingTransport):
         resume=None,
     ):
         _require_uuid("tenant_id", tenant_id)
-        if settings.model_profile == TABLE_ROLE_MODEL_PROFILE:
+        if settings.model_profile in (P2_MODEL_PROFILE, POSITION_P2_MODEL_PROFILE):
+            expected_prompt = P2_SYSTEM_PROMPT
+        elif settings.model_profile == P1_MODEL_PROFILE:
+            expected_prompt = P1_SYSTEM_PROMPT
+        elif settings.model_profile == ACTOR_ROLE_MODEL_PROFILE_V2:
+            expected_prompt = ACTOR_ROLE_SYSTEM_PROMPT_V2
+        elif settings.model_profile == ACTOR_ROLE_MODEL_PROFILE:
+            expected_prompt = ACTOR_ROLE_SYSTEM_PROMPT
+        elif settings.model_profile == GOAL_ROLE_MODEL_PROFILE:
+            expected_prompt = GOAL_ROLE_SYSTEM_PROMPT
+        elif settings.model_profile in (
+            TABLE_ROLE_MODEL_PROFILE,
+            POSITION_TABLE_ROLE_MODEL_PROFILE,
+        ):
             expected_prompt = TABLE_ROLE_SYSTEM_PROMPT
         elif settings.model_profile == TABLE_MODEL_PROFILE:
             expected_prompt = TABLE_SYSTEM_PROMPT
@@ -155,12 +197,26 @@ class UpstagePreliminaryTransport(UpstageTaggingTransport):
             raise ValueError("UPSTAGE_TAGGING_AUTHORIZER_REQUIRED")
         if resume is not None and not isinstance(resume, TransportResume):
             raise ValueError("UPSTAGE_TAGGING_RESUME_INVALID")
-        if settings.model_profile == CONTEXT_MODEL_PROFILE:
+        if settings.model_profile == POSITION_P2_MODEL_PROFILE:
+            self.TRANSPORT_VERSION = POSITION_P2_TRANSPORT_VERSION
+        elif settings.model_profile == POSITION_TABLE_ROLE_MODEL_PROFILE:
+            self.TRANSPORT_VERSION = POSITION_TABLE_ROLE_TRANSPORT_VERSION
+        elif settings.model_profile == P2_MODEL_PROFILE:
+            self.TRANSPORT_VERSION = P2_TRANSPORT_VERSION
+        elif settings.model_profile == P1_MODEL_PROFILE:
+            self.TRANSPORT_VERSION = P1_TRANSPORT_VERSION
+        elif settings.model_profile == CONTEXT_MODEL_PROFILE:
             self.TRANSPORT_VERSION = CONTEXT_TRANSPORT_VERSION
         elif settings.model_profile == TABLE_MODEL_PROFILE:
             self.TRANSPORT_VERSION = TABLE_TRANSPORT_VERSION
         elif settings.model_profile == TABLE_ROLE_MODEL_PROFILE:
             self.TRANSPORT_VERSION = TABLE_ROLE_TRANSPORT_VERSION
+        elif settings.model_profile == ACTOR_ROLE_MODEL_PROFILE_V2:
+            self.TRANSPORT_VERSION = ACTOR_ROLE_TRANSPORT_VERSION_V2
+        elif settings.model_profile == ACTOR_ROLE_MODEL_PROFILE:
+            self.TRANSPORT_VERSION = ACTOR_ROLE_TRANSPORT_VERSION
+        elif settings.model_profile == GOAL_ROLE_MODEL_PROFILE:
+            self.TRANSPORT_VERSION = GOAL_ROLE_TRANSPORT_VERSION
         self._authorize = authorize
         self._probe, self._settings, self._tenant = probe, settings, tenant_id
         self._resume = resume
@@ -173,15 +229,76 @@ class UpstagePreliminaryTransport(UpstageTaggingTransport):
 
         return UpstageProbe
 
+    def bound_context(self, packet: dict) -> dict:
+        """Fit optional whole context blocks BEFORE packet hashing/authorization.
+
+        Numbered sources are never shortened. Omitted context IDs remain in the
+        frozen packet, so all replicas and receipts describe exactly the same
+        bounded input. An oversized sources-only packet still fails normally.
+        """
+        bounded = deepcopy(packet)
+        data = bounded["untrusted_document_data"]
+        blocks = data.get("context_blocks", [])
+        while blocks:
+            wire = json.dumps(bounded, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            try:
+                self._probe.request_body(
+                    self._settings.rendered_system,
+                    wire,
+                    request_id="context-size-preflight",
+                    max_tokens=self._settings.max_tokens,
+                    json_mode=True,
+                )
+                break
+            except ValueError as error:
+                if str(error) != "PROBE_REQUEST_TOO_LARGE":
+                    # Preserve the normal per-claim authorization/error path.
+                    break
+            removed = blocks.pop()
+            if removed["source_id"] not in data["omitted_source_ids"]:
+                data["omitted_source_ids"].append(removed["source_id"])
+        return bounded
+
     def _wire_request(self, request: dict) -> tuple[str, str, dict[str, dict], Preflight]:
         settings = self._settings
-        role_table = settings.model_profile == TABLE_ROLE_MODEL_PROFILE
+        actor_role_v2 = settings.model_profile == ACTOR_ROLE_MODEL_PROFILE_V2
+        actor_role = settings.model_profile == ACTOR_ROLE_MODEL_PROFILE or actor_role_v2
+        goal_role = settings.model_profile == GOAL_ROLE_MODEL_PROFILE or actor_role
+        role_table = (
+            settings.model_profile
+            in (
+                TABLE_ROLE_MODEL_PROFILE,
+                POSITION_TABLE_ROLE_MODEL_PROFILE,
+                P1_MODEL_PROFILE,
+                P2_MODEL_PROFILE,
+                POSITION_P2_MODEL_PROFILE,
+            )
+            or goal_role
+        )
         is_table = settings.model_profile == TABLE_MODEL_PROFILE or role_table
         is_context = settings.model_profile == CONTEXT_MODEL_PROFILE or is_table
         if is_table:
             expected_schema = TABLE_SCHEMA
-            expected_prompt = TABLE_ROLE_SYSTEM_PROMPT if role_table else TABLE_SYSTEM_PROMPT
-            expected_keys = _TABLE_ENVELOPE_KEYS
+            if settings.model_profile in (P2_MODEL_PROFILE, POSITION_P2_MODEL_PROFILE):
+                expected_prompt = P2_SYSTEM_PROMPT
+            elif settings.model_profile == P1_MODEL_PROFILE:
+                expected_prompt = P1_SYSTEM_PROMPT
+            elif actor_role_v2:
+                expected_prompt = ACTOR_ROLE_SYSTEM_PROMPT_V2
+            elif actor_role:
+                expected_prompt = ACTOR_ROLE_SYSTEM_PROMPT
+            elif goal_role:
+                expected_prompt = GOAL_ROLE_SYSTEM_PROMPT
+            elif role_table:
+                expected_prompt = TABLE_ROLE_SYSTEM_PROMPT
+            else:
+                expected_prompt = TABLE_SYSTEM_PROMPT
+            expected_keys = _TABLE_ENVELOPE_KEYS | (
+                {"context_ordering"}
+                if settings.model_profile
+                in (POSITION_P2_MODEL_PROFILE, POSITION_TABLE_ROLE_MODEL_PROFILE)
+                else set()
+            )
         elif is_context:
             expected_schema, expected_prompt = CONTEXT_SCHEMA, CONTEXT_SYSTEM_PROMPT
             expected_keys = _CONTEXT_ENVELOPE_KEYS
@@ -207,6 +324,11 @@ class UpstagePreliminaryTransport(UpstageTaggingTransport):
             raise ValueError("UPSTAGE_PRELIMINARY_PACKET_INVALID")
         if user.get("prompt_sha256") != canonical_hash(expected_prompt):
             raise ValueError("UPSTAGE_PRELIMINARY_PROMPT_INVALID")
+        if (
+            settings.model_profile in (POSITION_P2_MODEL_PROFILE, POSITION_TABLE_ROLE_MODEL_PROFILE)
+            and user.get("context_ordering") != CONTEXT_POSITION_ORDER
+        ):
+            raise ValueError("UPSTAGE_PRELIMINARY_CONTEXT_POLICY_INVALID")
         if user.get("tenant_id") != request["tenant_id"] or user.get("claim_id") != request.get(
             "claim_id"
         ):

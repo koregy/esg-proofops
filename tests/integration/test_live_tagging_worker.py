@@ -1,6 +1,8 @@
 """Real-provider composition with fake HTTP; no paid calls or domain approvals."""
 
 import json
+import threading
+import time
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -13,13 +15,18 @@ from proofops.application.budget import BudgetLimits, RoleLimit
 from proofops.application.input_reservation import solar_pro4_capacity_policy
 from proofops.application.registry import artifact_sha256
 from proofops.domain.provenance import canonical_hash
+from proofops_worker.consumer import LeaseHeartbeatState, TagHeartbeatFailed, with_lease_heartbeat
 from proofops_worker.live_tagging import LiveTaggingRuntime
 
 
-def configured(tmp_path, monkeypatch):
+def configured(tmp_path, monkeypatch, *, context=False):
     from tests.integration.test_upstage_preliminary_transport import configured as transport_setup
     from tests.integration.test_upstage_tagger_preflight import configured as approvals
 
+    if context:
+        from tests.integration.test_upstage_preliminary_transport import (
+            configured_with_context as transport_setup,
+        )
     adapter, probe, calls, _, _, claim, graph = transport_setup(tmp_path, monkeypatch)
     preliminary = replace(
         adapter._settings, binding=replace(adapter._settings.binding, binding_id=str(UUID(int=500)))
@@ -139,6 +146,64 @@ def configured(tmp_path, monkeypatch):
     return runtime, claim, graph, calls, profiles, usage
 
 
+def test_oversize_context_bound_before_replicas_end_to_end(tmp_path, monkeypatch):
+    """R33: an over-cap context packet is tail-bounded before hashing/authorization.
+
+    Drives ``LiveTaggingRuntime.preliminary`` with a context packet inflated past
+    the real 16384-byte wire cap (R32 Kakao shape). All three replicas must
+    dispatch the same bounded wire: numbered sources byte-identical, the dropped
+    tail block recorded in ``omitted_source_ids``, and exactly the bounded hash
+    authorized — with no spend before the fit is proven.
+    """
+    from proofops.application.tagging.preliminary import (
+        preliminary_request as real_request,
+    )
+
+    runtime, claim, graph, calls, _, usage = configured(tmp_path, monkeypatch, context=True)
+    settings = runtime.preliminary_settings
+    inflated = {}
+
+    def oversized(*args, **kwargs):
+        packet = real_request(*args, **kwargs)
+        assert packet["untrusted_document_data"]["context_blocks"]
+        packet["untrusted_document_data"]["context_blocks"][-1]["text"] = "한글 문맥 " * 2000
+        inflated["packet"] = packet
+        return packet
+
+    monkeypatch.setattr("proofops_worker.live_tagging.preliminary_request", oversized)
+    result = runtime.preliminary(claim, graph)
+    assert result is not None and result[0].track == "management"
+    full = inflated["packet"]
+    # The full packet really does not fit: bounding was necessary, not a no-op.
+    with pytest.raises(ValueError, match="PROBE_REQUEST_TOO_LARGE"):
+        runtime.preliminary_transport._probe.request_body(
+            settings.rendered_system,
+            json.dumps(full, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+            request_id="regression-sanity",
+            max_tokens=settings.max_tokens,
+            json_mode=True,
+        )
+    wires = []
+    for record in runtime.preliminary_records[claim.claim_id]:
+        stored = json.loads(
+            (runtime.receipts / "preliminary" / record["request_id"] / "request.json").read_text()
+        )
+        wires.append(json.loads(stored["wire_user_json"]))
+    assert len(wires) == 3 and wires[0] == wires[1] == wires[2]
+    bounded = wires[0]
+    full = json.loads(json.dumps(full))
+    assert (
+        bounded["untrusted_document_data"]["sources"] == full["untrusted_document_data"]["sources"]
+    )
+    tail_id = full["untrusted_document_data"]["context_blocks"][-1]["source_id"]
+    assert tail_id in bounded["untrusted_document_data"]["omitted_source_ids"]
+    assert len(bounded["untrusted_document_data"]["context_blocks"]) < len(
+        full["untrusted_document_data"]["context_blocks"]
+    )
+    assert runtime.allowed_packets == {(claim.claim_id, canonical_hash(bounded))}
+    assert len(calls) == usage["settled_calls"] == 3
+
+
 def test_live_preliminary_uses_three_distinct_receipts_and_recovers_without_calls(
     tmp_path, monkeypatch
 ):
@@ -255,6 +320,118 @@ def test_settled_provider_failure_exposes_provider_failed_reason(tmp_path, monke
     assert reason["error_code"] in {"UPSTAGE_HTTP_503", "UPSTREAM_UNAVAILABLE"}
     assert reason["category"] in {"provider_failed", "never_sent"}
     monkeypatch.setattr(runtime.preliminary_transport._probe, "complete", original)
+
+
+def test_failed_background_renewal_stops_later_preliminary_paid_calls(tmp_path, monkeypatch):
+    from proofops.application.ports.jobs import LeaseLost
+
+    runtime, claim, graph, calls, _, _ = configured(tmp_path, monkeypatch)
+    runtime.lease.lease_until = int(runtime.runner.clock()) + 2
+    state = LeaseHeartbeatState(int(runtime.runner.clock()))
+    runtime.heartbeat_state = state
+    post = runtime.preliminary_transport._probe._post
+
+    def slow_first_post(body):
+        if not calls:
+            time.sleep(1.1)
+        return post(body)
+
+    def fail_background(*args, **kwargs):
+        if threading.current_thread().name.startswith("lease-heartbeat:"):
+            raise LeaseLost("LEASE_LOST")
+
+    monkeypatch.setattr(runtime.preliminary_transport._probe, "_post", slow_first_post)
+    monkeypatch.setattr(runtime.runner.store.jobs, "heartbeat", fail_background)
+    with pytest.raises(TagHeartbeatFailed):
+        with_lease_heartbeat(
+            runtime.runner.store.jobs,
+            runtime.lease,
+            runtime.runner.clock,
+            lambda _: (runtime.preliminary(claim, graph), {}),
+            state=state,
+        )
+    assert len(calls) == 1
+    assert len(runtime.runner.store.usage.ledger(graph.tenant_id, runtime.snapshot["run_id"])) == 1
+
+
+def test_lease_lost_after_input_count_stops_reservation(tmp_path, monkeypatch):
+    from proofops.application.ports.jobs import LeaseLost
+
+    runtime, claim, graph, calls, _, _ = configured(tmp_path, monkeypatch)
+    count_input_tokens = runtime.preliminary_transport.count_input_tokens
+
+    def lose_lease_after_count(*args, **kwargs):
+        capacity = count_input_tokens(*args, **kwargs)
+        runtime.runner.store.jobs.can_call = lambda *args, **kwargs: False
+        return capacity
+
+    monkeypatch.setattr(runtime.preliminary_transport, "count_input_tokens", lose_lease_after_count)
+    with pytest.raises(LeaseLost):
+        runtime.preliminary(claim, graph)
+    assert calls == []
+    assert runtime.runner.store.usage.cost_data(graph.tenant_id, runtime.snapshot["run_id"]) == []
+
+
+def test_failed_foreground_renewal_has_specific_stop_before_reservation(tmp_path, monkeypatch):
+    runtime, claim, graph, calls, _, _ = configured(tmp_path, monkeypatch)
+    state = LeaseHeartbeatState(int(runtime.runner.clock()))
+    runtime.heartbeat_state = state
+
+    def fail_renewal(*args, **kwargs):
+        raise OSError("private database error")
+
+    monkeypatch.setattr(runtime.runner.store.jobs, "heartbeat", fail_renewal)
+    with pytest.raises(TagHeartbeatFailed):
+        runtime.preliminary(claim, graph)
+    assert state.failed.is_set()
+    assert calls == []
+    assert runtime.runner.store.usage.cost_data(graph.tenant_id, runtime.snapshot["run_id"]) == []
+
+
+def test_relation_validation_stop_persists_safe_code_and_field(tmp_path, monkeypatch):
+    from proofops.application.budget import TokenUsage
+    from proofops.application.tagging.relations import RelationValidationError
+    from proofops.application.tagging.service import RawTagResponse
+
+    runtime, claim, _, _, _, _ = configured(tmp_path, monkeypatch)
+
+    class Transport:
+        def count_input_tokens(self, _request, *, counter):
+            return counter("", "")
+
+        def may_dispatch(self):
+            return True
+
+        def invoke(self, _request):
+            return RawTagResponse(
+                "{}",
+                TokenUsage(20, 10, 0, 0, 1, "succeeded", "fixture-provider"),
+                False,
+            )
+
+    def invalid(_raw):
+        raise RelationValidationError("RELATION_QUOTE_ABSENT", "relations[0].dimensions.entity")
+
+    assert (
+        runtime._source_replicas(
+            "relation",
+            claim,
+            {"claim_id": claim.claim_id},
+            runtime.preliminary_settings,
+            Transport(),
+            runtime.relation_records,
+            invalid,
+            require_consensus=False,
+        )
+        is None
+    )
+    (record,) = runtime.relation_records[claim.claim_id]
+    assert record["stable_reason"] == {
+        "category": "local_stop",
+        "error_code": "RELATION_QUOTE_ABSENT",
+        "detail": "relations[0].dimensions.entity",
+    }
+    assert "quote" not in json.dumps(record)
 
 
 def test_unattempted_later_source_stays_unresolved_after_old_stop(tmp_path, monkeypatch):

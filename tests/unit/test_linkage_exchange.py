@@ -24,11 +24,13 @@ from pathlib import Path
 import pytest
 from proofops.application.claims import Claim, ExtractionProfile, ExtractionReceipt
 from proofops.application.linkage_exchange import (
+    TRIGGER_TAG_MAP,
     BlockedPacket,
     C3Context,
     FinancialContext,
     FinancialFact,
     FinancialSource,
+    _verified_triggers,
     build_packet,
 )
 from proofops.domain.rules.engine import ConfirmedFact, ConfirmedTags
@@ -177,6 +179,68 @@ def _build(**overrides):
     )
     kwargs.update(overrides)
     return build_packet(**kwargs)
+
+
+def test_c2_period_is_bound_to_confirmed_evidence_and_rejects_cross_range_dates():
+    from dataclasses import replace
+
+    from proofops.application.linkage_exchange import C2PeriodContext, period_from_literal
+    from proofops.domain.errors import DomainValidationError
+
+    quote = "배출량 10 tCO2e, 보고년도 : 2025년 1월 1일 ~ 2025년 12월 31일"
+    period = "2025-01-01/2025-12-31"
+    ref = _source_ref(quote=quote)
+    fact = replace(
+        _confirmed_tags().facts[0],
+        name="quantitative_or_qualified_ordinal",
+        evidence_refs=(ref,),
+        normalized_value=quote,
+    )
+    kwargs = dict(
+        item="C2",
+        claim=_claim(quote=quote, source_refs=(ref,)),
+        tags=_confirmed_tags(facts=(fact,)),
+        financial_context=_financial_context(
+            financial=FinancialFact(quote, period, "period", None, "fs-scope")
+        ),
+    )
+    context = C2PeriodContext(period, SR_SOURCE, quote)
+    result = _build(**kwargs, c2_period_context=context)
+    assert not isinstance(result, BlockedPacket), result
+    assert result["sustainability"]["kind"] == "period"
+    assert result["sustainability"]["normalized"] == period
+    assert isinstance(_build(**kwargs), BlockedPacket)
+    categorical = replace(
+        fact, normalized_value="ISO 14001 인증, 2025년 1월 1일 ~ 2025년 12월 31일"
+    )
+    assert isinstance(
+        _build(
+            **(kwargs | {"tags": _confirmed_tags(facts=(categorical,))}), c2_period_context=context
+        ),
+        BlockedPacket,
+    )
+    for invalid in (
+        replace(context, source_id="foreign"),
+        replace(context, normalized="2024-01-01/2024-12-31"),
+        replace(context, quote=quote + " changed"),
+    ):
+        assert isinstance(_build(**kwargs, c2_period_context=invalid), BlockedPacket)
+    assert isinstance(
+        _build(
+            **(kwargs | {"tenant_id": "99999999-9999-4999-8999-999999999999"}),
+            c2_period_context=context,
+        ),
+        BlockedPacket,
+    )
+    assert period_from_literal("2025년 01월 01일 부터 2025년 12월 31일 까지") == period
+    for text in (
+        quote + " / 2024년 1월 1일 ~ 2024년 12월 31일",
+        "발행일 2025년 1월 1일; 수정일 2025년 12월 31일",
+        "2025년 12월 31일 ~ 2025년 1월 1일",
+        "2025-02-30/2025-12-31",
+    ):
+        with pytest.raises((DomainValidationError, ValueError)):
+            period_from_literal(text)
 
 
 @pytest.mark.skipif(not CONTRACT_DIR.is_dir(), reason="handoff contract dir not present")
@@ -386,6 +450,65 @@ def test_no_verified_trigger_blocks_when_fact_not_present():
     result = _build(tags=unresolved_tags)
     assert isinstance(result, BlockedPacket)
     assert result.reason == "no_verified_trigger"
+
+
+def test_the_canonical_org_boundary_fact_name_maps_to_the_contract_trigger():
+    """`org_boundary` is what management.M2/goal.G4 actually emit.
+
+    The older `organizational_boundary` spelling stays mapped (every other case
+    in this module still uses it), and neither spelling changes the verification
+    guards a trigger has to clear.
+    """
+    canonical = _confirmed_tags(
+        facts=(
+            ConfirmedFact(
+                name="org_boundary",
+                state="present",
+                evidence_refs=(_source_ref(),),
+                source_tenant_id=TENANT,
+                citation_verified=True,
+                binding_accepted=True,
+                search_coverage_verified=False,
+                normalized_value='["A","B"]',
+            ),
+        )
+    )
+    assert TRIGGER_TAG_MAP["org_boundary"] == "organizational_boundary"
+    assert TRIGGER_TAG_MAP["organizational_boundary"] == "organizational_boundary"
+    triggers = _verified_triggers(canonical)
+    assert [(t.fact_name, t.trigger_element) for t in triggers] == [
+        ("org_boundary", "organizational_boundary")
+    ]
+
+
+def test_an_unproven_boundary_or_scope_primitive_stays_an_explicit_gap():
+    """No blind widening: a calculation boundary or a GHG `scope` is not a trigger.
+
+    `calculation_boundary` (performance.P3) and `scope` (goal.G4's other
+    primitive) are deliberately absent from the map, so a present+verified fact
+    under either name still produces no trigger at all.
+    """
+    for name in ("calculation_boundary", "scope"):
+        assert name not in TRIGGER_TAG_MAP
+        assert (
+            _verified_triggers(
+                _confirmed_tags(
+                    facts=(
+                        ConfirmedFact(
+                            name=name,
+                            state="present",
+                            evidence_refs=(_source_ref(),),
+                            source_tenant_id=TENANT,
+                            citation_verified=True,
+                            binding_accepted=True,
+                            search_coverage_verified=False,
+                            normalized_value="Scope 1",
+                        ),
+                    )
+                )
+            )
+            == ()
+        )
 
 
 def test_c3_requires_c3_context():
@@ -629,3 +752,66 @@ def test_return_reader_rejects_network_path_and_bad_tenant_version(tmp_path):
             tenant_id="00000000-0000-4000-8000-000000000000",
             financial_local_paths={},
         )
+
+
+def test_whole_quote_entity_set_is_refused_at_the_build_boundary():
+    """A boundary sentence is not a normalized entity set.
+
+    The review path can store a confirmed ``org_boundary`` value that is the
+    literal evidence quote. Mapped to C1 that value used to leave this module as
+    ``sustainability.kind='entity_set'`` with a sentence in ``normalized``, i.e.
+    a quote presented as a typed identifier set. The reconciliation engine's own
+    ``parse_entity_set`` refuses that shape, so the packet was never admissible;
+    only the refusal happened late, after A had already emitted it. It is now
+    refused here, by the same shared validator, with no value repaired or
+    substituted.
+    """
+    ref = _source_ref()
+    whole_quote_tags = _confirmed_tags(
+        facts=(
+            ConfirmedFact(
+                name="org_boundary",
+                state="present",
+                evidence_refs=(ref,),
+                source_tenant_id=TENANT,
+                citation_verified=True,
+                binding_accepted=True,
+                search_coverage_verified=False,
+                normalized_value=ref.quote,
+            ),
+        )
+    )
+    result = _build(tags=whole_quote_tags)
+    assert isinstance(result, BlockedPacket)
+    assert result.reason == "invalid_reconciliation_packet"
+    assert "sustainability.normalized" in result.detail
+
+
+def test_typed_entity_set_still_builds_after_the_shared_validator_gate():
+    """The valid typed path is unchanged: the gate refuses shape, not content."""
+    packet = _build()
+    assert not isinstance(packet, BlockedPacket)
+    assert packet["sustainability"]["kind"] == "entity_set"
+    assert packet["sustainability"]["normalized"] == '["A","B"]'
+
+    from proofops.domain.reconciliation.common import validate_packet
+
+    validate_packet(packet)  # the same validator the boundary now applies
+
+
+def test_malformed_financial_typed_value_is_refused_at_the_same_boundary():
+    """The shared validator covers the financial side too, not only sustainability."""
+    result = _build(
+        financial_context=_financial_context(
+            financial=FinancialFact(
+                raw="12,035,007,218,975",
+                normalized="12,035,007,218,975",
+                kind="currency_amount",
+                unit="KRW",
+                source_id="fs-scope",
+            )
+        )
+    )
+    assert isinstance(result, BlockedPacket)
+    assert result.reason == "invalid_reconciliation_packet"
+    assert "financial.normalized" in result.detail

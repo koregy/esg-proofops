@@ -34,10 +34,14 @@ export function CoveragePanel({ status, coverage }: Props) {
         </p>
       )}
       <p>{coverage.full_scope ? "문서 전체 범위" : "사용자가 지정한 부분 범위"}</p>
+      <p>
+        판독 불가에는 일부 구간의 글자나 좌표를 확인하지 못한 페이지도 포함됩니다.
+        확인된 다른 구간의 주장과 근거는 계속 검토할 수 있습니다.
+      </p>
       <dl>
         <dt>페이지</dt>
         <dd>
-          전체 {coverage.pages_total}, 처리 {coverage.pages_processed}, 판독 불가{" "}
+          전체 {coverage.pages_total}, 처리(판독 불가 제외) {coverage.pages_processed}, 판독 불가{" "}
           {coverage.pages_unreadable}, 미처리 {coverage.pages_unprocessed}
         </dd>
         <dt>청크</dt>

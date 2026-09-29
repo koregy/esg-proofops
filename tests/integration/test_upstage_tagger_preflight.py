@@ -188,3 +188,11 @@ def test_preliminary_context_profile_requires_exact_context_prompt():
     )
     args["binding"]["tagging_settings_sha256"] = canonical_hash(asdict(args["settings"]))
     assert not check(**args).ready
+
+
+def test_quote_v4_requires_its_own_pinned_settings_hash():
+    args = configured()
+    args['settings'] = replace(args['settings'], model_profile='upstage-compact-source-quotes-v4')
+    assert not check(**args).ready
+    args['binding']['tagging_settings_sha256'] = canonical_hash(asdict(args['settings']))
+    assert check(**args).ready

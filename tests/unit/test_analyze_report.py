@@ -60,6 +60,35 @@ def _args(pdf, **overrides):
     return Namespace(**base)
 
 
+@pytest.mark.parametrize("enabled", [False, True])
+def test_claim_typography_option_reaches_pilot_with_required_wrappers(pdf, tmp_path, enabled):
+    args = ar.build_parser().parse_args(
+        [
+            "--pdf",
+            str(pdf),
+            "--pages",
+            "1,2",
+            "--report-year",
+            "2024",
+            "--period-start",
+            "2024-01-01",
+            "--period-end",
+            "2024-12-31",
+            "--state",
+            str(tmp_path / "typography"),
+        ]
+        + (["--claim-span-typography"] if enabled else [])
+    )
+    plan = ar.plan_run(args)
+    assert plan["claim_span_typography"] is enabled
+    for flag in (
+        "--claim-span-typography",
+        "--claim-span-bullet-spacing",
+        "--claim-span-render-resolution",
+    ):
+        assert (flag in plan["argv"]) is enabled
+
+
 def _make_named_destination_pdf(path: Path, entries: list[tuple[str, int]]) -> Path:
     """Small real PDF with named destinations so ``evaluation.report_sections``
     can classify sections without any outline/TOC parsing edge cases.
@@ -480,3 +509,64 @@ def test_explicit_parser_output_limit_is_frozen_in_new_run_argv(pdf, tmp_path):
     for invalid in (0, -1, True, 128 * 1024 * 1024 + 1):
         with pytest.raises(ar.PlanError, match="parser-max-output-bytes"):
             ar.plan_run(_args(pdf, state=tmp_path / "new", parser_max_output_bytes=invalid))
+
+
+@pytest.mark.parametrize("auto_scope", [False, True])
+def test_oversized_pdf_rejected_before_read_or_scope_discovery(tmp_path, monkeypatch, auto_scope):
+    from proofops.application.uploads_security import PdfLimits
+
+    source = tmp_path / "oversized.pdf"
+    with source.open("wb") as stream:
+        stream.truncate(PdfLimits().max_bytes + 1)
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("Oversized input must be refused before content processing")
+
+    monkeypatch.setattr(ar, "_pdf_page_count", unexpected)
+    monkeypatch.setattr(ar, "discover_auto_scope", unexpected)
+    state = tmp_path / "new-state"
+    with pytest.raises(ar.PlanError, match="104857600 bytes"):
+        ar.plan_run(
+            _args(source, auto_scope=auto_scope, pages=None if auto_scope else "1", state=state)
+        )
+    assert not state.exists()
+
+
+def test_actor_role_option_reaches_current_profile_without_paid_defaults(pdf, tmp_path):
+    args = ar.build_parser().parse_args([
+        '--pdf', str(pdf), '--pages', '1', '--report-year', '2024',
+        '--period-start', '2024-01-01', '--period-end', '2024-12-31',
+        '--state', str(tmp_path / 'actor'), '--preliminary-actor-role',
+    ])
+    plan = ar.plan_run(args)
+    for flag in ('--preliminary-context', '--preliminary-table-context',
+                 '--preliminary-table-role', '--preliminary-goal-role',
+                 '--preliminary-actor-role'):
+        assert plan['argv'].count(flag) == 1
+    assert plan['preliminary_actor_role'] is True
+    assert plan['preliminary_context'] is True
+    assert '--invoke' not in plan['argv']
+    assert '--ai-project-review' not in plan['argv']
+    assert not plan['state'].exists()
+    from evaluation.local_upstage_pilot import live_tagging_settings
+    settings = live_tagging_settings(
+        48, preliminary_context=True,
+        preliminary_table_context=True, preliminary_table_role=True,
+        preliminary_goal_role=True, preliminary_actor_role=True,
+    )
+    assert settings['preliminary_settings']['model_profile'].endswith('actor-role-v2')
+    assert settings['tagging_settings']['model_profile'].endswith('source-quotes-v4')
+
+
+def test_direct_script_dry_plan_from_outside_checkout(pdf, tmp_path):
+    import subprocess
+
+    state = tmp_path / 'direct-run'
+    result = subprocess.run([
+        sys.executable, str(Path(ar.__file__).resolve()), '--pdf', str(pdf),
+        '--pages', '1', '--report-year', '2024', '--period-start', '2024-01-01',
+        '--period-end', '2024-12-31', '--state', str(state), '--preliminary-actor-role',
+    ], cwd=tmp_path, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert 'DRY PLAN' in result.stdout and '--preliminary-actor-role' in result.stdout
+    assert not state.exists()

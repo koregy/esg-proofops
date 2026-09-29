@@ -55,3 +55,9 @@ runs. Rollback disables Pro4 trial creation and leaves all recorded results inta
 All calls use the same USD10 ledger, explicit source consent and output/call caps.
 No automatic fallback/retry, reasoning mode, tagging, grade calculation, region
 attestation or production enablement is introduced by this local option.
+
+## Exact content bounds (R34, opt-in)
+
+`--extraction-content-bounds` requires source-ID selection and defaults off. For each existing sentence candidate, the end offset can omit exactly one final ASCII `.` only if its preceding character is alphabetic. Numeric endings, ellipses and closing quotation marks retain their original bounds. No word, number, qualifier, source text, source hash or verifier policy changes. Selected quotes remain exact original substrings; the uncovered stop remains an `unknown/unprocessed_span` exclusion. This is not proof of atomicity or correctness.
+
+Enabled sentence IDs pin `source_id:index:start:end`, and the extraction rule descriptor adds `extraction-content-bounds-v1`; old profiles and IDs remain byte-identical when disabled. Live request and receipt replay resolve the same index. Pilot manifests persist the option, resume restores it, and adding it to an existing run is rejected. Composition compares the complete frozen profile before model calls. Rollback disables the option for new runs; old runs/claims/revisions are never rewritten. No API/DB schema migration or grade rule change is introduced.

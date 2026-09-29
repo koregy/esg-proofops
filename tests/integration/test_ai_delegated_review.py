@@ -30,6 +30,45 @@ def _actor(index=0):
     )
 
 
+def test_cli_re_review_is_explicit_and_dry_by_default(tmp_path, monkeypatch, capsys):
+    from scripts.review_ai_delegated import main
+
+    ws = workspace(tmp_path)
+    service, review = ws[1], ws[3]
+    assert post(ws).status_code == 200
+    before = service.store.history(TENANT, RUN, review["claim_id"])
+    # Only replace input composition: retain real service, source guards, engine and SQLite.
+    monkeypatch.setattr("proofops.application.reviews.ReviewService", lambda *a, **k: service)
+    correction = tmp_path / "correction.json"
+    correction.write_text(json.dumps(ws[4] | {"base_tag_revision": 2}))
+    argv = [
+        "--state-db",
+        str(tmp_path / "state.sqlite"),
+        "--tenant-id",
+        TENANT,
+        "--review-id",
+        review["review_id"],
+        "--correction-json",
+        str(correction),
+        "--delegated-reviewer",
+        "cli-test",
+        "--if-match",
+        '"2"',
+        "--idempotency-key",
+        "cli-explicit-rereview-0001",
+    ]
+    assert main(argv + ["--re-review"]) == 0
+    assert json.loads(capsys.readouterr().out)["re_review"] is True
+    assert service.store.history(TENANT, RUN, review["claim_id"]) == before
+    assert main(argv + ["--apply"]) == 1
+    assert json.loads(capsys.readouterr().out)["error"] == "STALE_REVIEW_REVISION"
+    assert main(argv + ["--apply", "--re-review"]) == 0
+    assert json.loads(capsys.readouterr().out)["new_tag_revision"] == 3
+    after = service.store.history(TENANT, RUN, review["claim_id"])
+    assert after["tags"][:2] == before["tags"]
+    assert after["tags"][-1]["origin"] == "ai_delegated"
+
+
 def test_ai_delegated_review_honest_label_source_rejection_and_conflict(tmp_path):
     ws = workspace(tmp_path)
     service, review, body = ws[1], ws[3], ws[4]

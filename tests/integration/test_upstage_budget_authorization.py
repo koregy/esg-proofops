@@ -237,8 +237,8 @@ def test_invalid_reason_is_rejected(tmp_path, reason):
 # ---------------------------------------------------------------------------
 
 
-def test_expiry_guard_blocks_complete_after_sep25(tmp_path, monkeypatch):
-    """PRICE_RECHECK_REQUIRED must fire when datetime.now() >= 2026-09-25."""
+def test_expiry_guard_blocks_complete_at_oct2(tmp_path, monkeypatch):
+    """PRICE_RECHECK_REQUIRED must fire when datetime.now() >= 2026-10-02."""
     from datetime import UTC, datetime
 
     client = upstage.UpstageProbe("test-secret", tmp_path / "budget.sqlite3")
@@ -247,7 +247,7 @@ def test_expiry_guard_blocks_complete_after_sep25(tmp_path, monkeypatch):
     class ExpiredDateTime(datetime):
         @classmethod
         def now(cls, tz=None):
-            return datetime(2026, 9, 25, tzinfo=UTC)
+            return datetime(2026, 10, 2, tzinfo=UTC)
 
     monkeypatch.setattr(upstage, "datetime", ExpiredDateTime)
     with pytest.raises(ValueError, match="PRICE_RECHECK_REQUIRED"):
@@ -263,7 +263,7 @@ def test_expiry_guard_does_not_block_authorize_additional_budget(tmp_path, monke
     class ExpiredDateTime(datetime):
         @classmethod
         def now(cls, tz=None):
-            return datetime(2026, 9, 25, tzinfo=UTC)
+            return datetime(2026, 10, 2, tzinfo=UTC)
 
     monkeypatch.setattr(upstage, "datetime", ExpiredDateTime)
     client = upstage.UpstageProbe("test-secret", tmp_path / "budget.sqlite3")
@@ -312,28 +312,30 @@ def test_summary_authorized_limit_equals_base_without_extension(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 9. Ceiling enforcement: cumulative total cannot exceed USD 20
+# 9. Ceiling enforcement: cumulative total cannot exceed USD 30
 # ---------------------------------------------------------------------------
 
 
-def test_second_extension_rejected_if_exceeds_20_ceiling(tmp_path):
-    """A second $10 extension would create $30 total and must be rejected."""
+def test_third_extension_rejected_if_exceeds_30_ceiling(tmp_path):
+    """A third extension would exceed the user's $30 cumulative limit."""
     client = upstage.UpstageProbe("test-secret", tmp_path / "budget.sqlite3")
     client.authorize_additional_budget("10.00", reason="first ext")
     assert client.summary()["authorized_limit_usd"] == "20.00"
+    client.authorize_additional_budget("10.00", reason="second ext")
 
     with pytest.raises(ValueError, match="AUTHORIZATION_EXCEEDS_CEILING"):
-        client.authorize_additional_budget("10.00", reason="second ext - must fail")
+        client.authorize_additional_budget("0.01", reason="third ext - must fail")
     # Ledger must not change.
-    assert client.summary()["authorized_limit_usd"] == "20.00"
+    assert client.summary()["authorized_limit_usd"] == "30.00"
 
 
 def test_partial_extension_below_ceiling_is_allowed(tmp_path):
-    """An extension that keeps cumulative total <= $20 is permitted."""
+    """An extension that keeps cumulative total <= $30 is permitted."""
     client = upstage.UpstageProbe("test-secret", tmp_path / "budget.sqlite3")
     client.authorize_additional_budget("5.00", reason="first half")
     client.authorize_additional_budget("5.00", reason="second half")
     assert client.summary()["authorized_limit_usd"] == "20.00"
+    client.authorize_additional_budget("10.00", reason="third extension")
 
     with pytest.raises(ValueError, match="AUTHORIZATION_EXCEEDS_CEILING"):
         client.authorize_additional_budget("0.01", reason="one cent too many")
@@ -362,3 +364,17 @@ def test_reserve_rejects_tampered_policy_body(tmp_path, monkeypatch):
         client.summary()
     with sqlite3.connect(path) as db:
         assert db.execute("SELECT COUNT(*) FROM probe_calls").fetchone()[0] == 0
+
+
+def test_rechecked_price_allows_sep25_request_without_spending(tmp_path, monkeypatch):
+    from datetime import UTC, datetime
+
+    class RecheckedClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 9, 25, 12, tzinfo=UTC)
+
+    monkeypatch.setattr(upstage, "datetime", RecheckedClock)
+    client = upstage.UpstageProbe("offline-key", tmp_path / "budget.sqlite3")
+    client.request_body("JSON", "{}", request_id="price-rechecked")
+    assert client.summary()["calls"] == 0

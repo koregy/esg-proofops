@@ -25,6 +25,19 @@ R07b checklist policy. It accepts only the configured category items and exact
 verified refs from the immutable evidence packet; it does not enable the policy
 or change old runs.
 
+``--category-review-json`` (R24) is an opt-in correction that REMOVES a
+safe-harbor category the frozen packet and every guarded tag-run header agree
+on but the reviewed source does not support. It never adds or replaces a
+category, never rewrites a header/packet/replica hash and creates no fact. The
+dry run validates the ACTUAL request against the replayed loader inputs before
+any write, so a rejected correction is reported without touching the database.
+With ``--re-review`` the dry run also reads the CURRENT tag head through the
+claim head pointer and refuses the same carried-safe-harbor conflict the
+service refuses, instead of discovering it only at ``--apply``.
+
+Use ``--re-review --apply`` to append a revision to a resolved review. The
+correction must name the current tag revision; prior records remain immutable.
+
 Provenance honesty: the new tag revision records
 ``reviewer_sub="ai-delegated-review:<operator>"``,
 ``origin="ai_delegated"`` and ``review_status="ai_delegated_confirmed"``,
@@ -34,7 +47,13 @@ web UI and is NOT accepted as a human gold approval (comparisons still
 require ``human_confirmed``). No independent-human or gold claim is made.
 
 Rollback: stop calling this tool; old ``human``/``consensus`` rows are
-immutable and remain valid, and no DB schema change is involved.
+immutable and remain valid, and no DB schema change is involved. A category
+correction is NOT reverted by this tool: stopping means no further correction
+is recorded, and prior revisions plus the current corrected head stay intact.
+A later re-review that supplies no correction CARRIES and re-validates the
+prior receipt, so the removal is not silently undone; the observed category
+would only reappear if this implementation itself were reverted or if the claim
+were tagged again in a new run.
 """
 
 from __future__ import annotations
@@ -68,6 +87,13 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="Explicit category checklist facts; the run must use the R07b opt-in pack.",
     )
     parser.add_argument(
+        "--category-review-json",
+        help="Explicit removal of a wrong safe-harbor category; observed value must be pinned.",
+    )
+    parser.add_argument(
+        "--context-review-json", help="Source-backed facility section context JSON."
+    )
+    parser.add_argument(
         "--delegated-reviewer",
         required=True,
         help="Trusted local operator id, e.g. coordinator@orca.local.",
@@ -83,11 +109,39 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     parser.add_argument("--idempotency-key", required=True)
     parser.add_argument(
+        "--re-review", action="store_true", help="Explicitly re-review a resolved item."
+    )
+    parser.add_argument(
         "--apply",
         action="store_true",
         help="Perform the write. Without this flag, only inspect (dry run).",
     )
     return parser.parse_args(argv)
+
+
+def _carried_safe_harbor(store, tenant_id, review) -> bool:
+    """Read the CURRENT tag head through the claim head pointer, read-only.
+
+    Uses the same accessor chain as ``ReviewStore.resolve`` (claim head ->
+    that exact tag revision) instead of guessing the newest stored row.
+    Returns False when the claim has no resolved head yet.
+    """
+    jobs = getattr(store, "jobs", None)
+    if jobs is None:
+        return False
+    with jobs._transaction() as db:
+        try:
+            head = jobs._get(db, tenant_id, review["run_id"], "claim_head", review["claim_id"])
+            current = jobs._get(
+                db,
+                tenant_id,
+                review["run_id"],
+                "tag_revision",
+                f'{review["claim_id"]}:{head["tag_revision"]:010}',
+            )
+        except (KeyError, TypeError):
+            return False
+    return isinstance(current.get("safe_harbor_review"), dict)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -144,6 +198,33 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"ok": False, "error": "safe-harbor review JSON invalid"}))
             return 1
 
+    category_review = None
+    if args.category_review_json:
+        try:
+            category_review = json.loads(
+                Path(args.category_review_json).read_text(encoding="utf-8")
+            )
+            if not isinstance(category_review, dict):
+                raise ValueError("expected object")
+        except (OSError, ValueError):
+            print(json.dumps({"ok": False, "error": "category review JSON invalid"}))
+            return 1
+    if category_review is not None and safe_harbor_review is not None:
+        # Same fail-closed rule as the service: the checklist documents the very
+        # category being removed, so the two cannot share one revision.
+        print(json.dumps({"ok": False, "error": "CATEGORY_REVIEW_CONFLICTS_SAFE_HARBOR"}))
+        return 1
+
+    context_review = None
+    if args.context_review_json:
+        try:
+            context_review = json.loads(Path(args.context_review_json).read_text(encoding="utf-8"))
+            if not isinstance(context_review, dict):
+                raise ValueError("expected object")
+        except (OSError, ValueError):
+            print(json.dumps({"ok": False, "error": "context review JSON invalid"}))
+            return 1
+
     database_path = Path(args.state_db)
     # Same wiring as apps/api composition: real loader guards, no shortcuts.
     from proofops.adapters.local.review_store import LocalSQLiteReviewStore  # noqa: E402
@@ -156,6 +237,7 @@ def main(argv: list[str] | None = None) -> int:
     from proofops.application.reviews import (  # noqa: E402
         AI_DELEGATED_ORIGIN,
         AI_DELEGATED_REVIEW_STATUS,
+        _review_category,
     )
     from proofops.application.reviews import (
         ReviewService as _ReviewService,
@@ -184,7 +266,11 @@ def main(argv: list[str] | None = None) -> int:
     uploads = UploadService(database_path, database_path.parent / "objects", registry)
     parser = OpenDataLoaderParser(database_path.parent / "parser-prepared")
     tags = LocalTagStore(runs, uploads, parser)
-    service = _ReviewService(LocalSQLiteReviewStore(runs.jobs), load_inputs=tags.load_inputs)
+    service = _ReviewService(
+        LocalSQLiteReviewStore(runs.jobs),
+        load_inputs=tags.load_inputs,
+        verify_context_sources=tags.verify_context_sources,
+    )
 
     store = service.store
     try:
@@ -201,14 +287,80 @@ def main(argv: list[str] | None = None) -> int:
         "revision": review["revision"],
         "base_tag_revision": review["base_tag_revision"],
         "if_match": if_match,
+        "re_review": args.re_review,
         "element_count": len(body["elements"]) if isinstance(body.get("elements"), list) else 0,
         "applicability_review": applicability_review,
         "safe_harbor_review": safe_harbor_review,
+        "category_review": category_review,
         "would_record_origin": AI_DELEGATED_ORIGIN,
         "would_record_review_status": AI_DELEGATED_REVIEW_STATUS,
         "would_record_reviewer_sub": f"ai-delegated-review:{args.delegated_reviewer}",
         "note": "AI 검토(위임·사람 아님); comparisons still require human_confirmed",
     }
+    if category_review is not None:
+        # Validate the ACTUAL request against the replayed loader inputs before
+        # any write, in the dry run as well as before --apply. Read-only.
+        if (
+            args.re_review
+            and safe_harbor_review is None
+            and _carried_safe_harbor(store, args.tenant_id, review)
+        ):
+            # Same fail-closed rule as the service, reported before --apply:
+            # the current head carries a checklist attestation for the very
+            # category this request removes.
+            print(
+                json.dumps(
+                    {
+                        "ok": False,
+                        "error": "CATEGORY_REVIEW_CONFLICTS_SAFE_HARBOR",
+                        "status": 409,
+                        "stage": "category_review_validation",
+                    }
+                )
+            )
+            return 1
+        try:
+            loader = getattr(service, "load_inputs", None)
+            if loader is None:
+                raise ValueError("review service has no input loader")
+            replayed = loader(args.tenant_id, review["run_id"], review["claim_id"])
+            replayed.validate()
+            _, receipt, superseded = _review_category(replayed, body["track"], category_review)
+        except Exception as exc:  # noqa: BLE001
+            print(
+                json.dumps(
+                    {
+                        "ok": False,
+                        "error": getattr(exc, "code", type(exc).__name__),
+                        "status": getattr(exc, "status", None),
+                        "stage": "category_review_validation",
+                    }
+                )
+            )
+            return 1
+        report["category_review_validation"] = {
+            "ok": True,
+            "observed_category": receipt["observed_category"],
+            "observed_tag_run_headers": receipt["observed_tag_run_headers"],
+            "corrected_category": receipt["corrected_category"],
+            "superseded_checklist_items": list(superseded),
+            "input_snapshot_sha256": receipt["identity"]["input_snapshot_sha256"],
+            "packet_sha256": receipt["identity"]["packet_sha256"],
+            "note": "removal only; observed headers and packet stay pinned",
+        }
+    if context_review is not None:
+        from proofops.application.claim_context_review import review_facility_context
+
+        try:
+            replayed = service.load_inputs(args.tenant_id, review["run_id"], review["claim_id"])
+            replayed.validate()
+            receipt = review_facility_context(replayed, context_review, tags.verify_context_sources)
+            report["context_review_validation"] = receipt["projection"]
+        except (ValueError, KeyError, TypeError) as exc:
+            print(
+                json.dumps({"ok": False, "error": str(exc), "stage": "context_review_validation"})
+            )
+            return 1
     if not args.apply:
         report["applied"] = False
         report["note"] = (
@@ -241,6 +393,9 @@ def main(argv: list[str] | None = None) -> int:
             delegation_authority=args.delegation_authority,
             applicability_review=applicability_review,
             safe_harbor_review=safe_harbor_review,
+            category_review=category_review,
+            context_review=context_review,
+            reopen=args.re_review,
         )
     except Exception as exc:  # noqa: BLE001
         code = getattr(exc, "code", type(exc).__name__)

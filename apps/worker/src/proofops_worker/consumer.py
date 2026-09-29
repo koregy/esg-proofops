@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from random import random
-from threading import Event, Thread
+from threading import Event, Lock, Thread
 from typing import Any
 
 from proofops.application.ports.jobs import JobLease, JobMessage, JobRepository, LeaseLost
@@ -23,7 +24,26 @@ class StageFailure(Exception):
         self.retry_after = retry_after
 
 
-def with_lease_heartbeat(store, lease, clock, operation):
+class TagHeartbeatFailed(BaseException):
+    """Stop tagging outside provider-error handlers after a failed renewal."""
+
+
+@dataclass
+class LeaseHeartbeatState:
+    last_successful_at: int
+    failed: Event = field(default_factory=Event)
+    lock: Any = field(default_factory=Lock)
+
+    def fail(self):
+        with self.lock:
+            self.failed.set()
+
+    def check(self):
+        if self.failed.is_set():
+            raise TagHeartbeatFailed()
+
+
+def with_lease_heartbeat(store, lease, clock, operation, *, state=None):
     """Renew only this lease for the duration of a long operation.
 
     A single heartbeat taken before an expensive step (for example claim-span
@@ -37,15 +57,20 @@ def with_lease_heartbeat(store, lease, clock, operation):
     operation closed instead of letting a stale lease publish.
     """
     lease_seconds = max(1, lease.lease_until - int(clock()))
-    stopped, failed = Event(), Event()
+    stopped = Event()
+    state = state or LeaseHeartbeatState(int(clock()))
 
     def keepalive():
         while not stopped.wait(min(30, lease_seconds / 3)):
-            try:
-                store.heartbeat(lease, now=int(clock()), lease_seconds=lease_seconds)
-            except Exception:
-                failed.set()
-                return
+            with state.lock:
+                if state.failed.is_set():
+                    return
+                try:
+                    store.heartbeat(lease, now=int(clock()), lease_seconds=lease_seconds)
+                except Exception:
+                    state.failed.set()
+                    return
+                state.last_successful_at = int(clock())
 
     thread = Thread(target=keepalive, name=f"lease-heartbeat:{lease.message.job_id}")
     thread.start()
@@ -56,7 +81,7 @@ def with_lease_heartbeat(store, lease, clock, operation):
         thread.join()
     # Join before checking, including a renewal racing with operation completion.
     # The consumer's commit still performs the final ownership/cancellation fence.
-    if failed.is_set():
+    if state.failed.is_set():
         raise StageFailure("LEASE_HEARTBEAT_FAILED", usage=usage)
     return payload, usage
 

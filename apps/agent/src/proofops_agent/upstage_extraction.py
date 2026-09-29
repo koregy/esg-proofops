@@ -119,6 +119,40 @@ SOURCE_ID_CONTEXT_SUFFIX = (
     "They exist only to help you judge whether a short or incomplete-looking supplied "
     "sentence is a genuine company claim or only a title, label or measure name."
 )
+# Append only when opted in, preserving existing prompt bytes and receipt hashes.
+ASSERTION_SYSTEM_SUFFIX = (
+    " Apply the assertion requirement to the selected source sentence itself. "
+    "Context may explain a predicate already present but cannot supply a missing "
+    "predicate or turn a risk/topic heading into an assertion. A phrase naming a "
+    "hazard, damage category, topic or collaborator alone does not assert that "
+    "an event occurred or that the company acted. Return no sentence_ids for it. "
+    "Do not reject Korean noun-ending disclosures merely because they omit a "
+    "conjugated verb: implementation of a specified system, or a stated modeled "
+    "finding, can be a claim when its own text asserts that content. Keep source "
+    "sentences unchanged; do not classify tracks, assign grades, or infer tense."
+)
+
+# Opt-in complete-paragraph selection (R34): appended AFTER ASSERTION_SYSTEM_SUFFIX
+# and only when both source_ids and assertion_prompt are on. The additive bytes are
+# the exact tested wire from the R34 paragraph-selection probe (requests.json SHA
+# 11ede4c376b07ca1d288015fd53c66e0600f28758ff5d87d7f3383b1f38c4dc0) which was
+# derived by subtracting the source-request system_prompt from the probe system.
+# The probe recovered Kakao p48 analysis-activity and modelled-result sentences
+# across 3 replicas while 3 heading controls stayed empty.
+COMPLETE_SELECTION_SYSTEM_SUFFIX = (
+    " Evaluate EVERY supplied sentence independently and return ALL qualifying sentence_ids,"
+    " not just the first or most prominent claim."
+    " A paragraph may contain several claims."
+    " A literal company-specific statement that it performs climate scenario analysis,"
+    " and a stated finding of that analysis, can qualify even when it concerns a"
+    " conditional future financial impact of an environmental transition."
+    " Do not treat a modeled finding as a realized environmental improvement;"
+    " this step only selects statements for later review."
+    " Resolve '이에', '분석 결과', and similar references using the"
+    " supplied paragraph's own sentences without inventing content."
+    " General risk descriptions, topic headings and chart axes still do not qualify"
+    " merely because a nearby sentence is a claim."
+)
 
 _RULE_DESCRIPTOR = [
     "unique-exact-quote-v2-overlapping-occurrences",
@@ -270,6 +304,14 @@ _TABLE_CONTEXT_RULE_ENTRY = "extraction-table-context-v1"
 # sentence ids; spans are restored from the original source offsets and still
 # validated by the frozen span validator. Nothing about quote matching is relaxed.
 _SOURCE_ID_RULE_ENTRY = "extraction-source-id-selection-v1"
+# Distinguish assertion-mode receipts from the original source-ID policy.
+_ASSERTION_RULE_ENTRY = "extraction-assertion-prompt-v1"
+# Complete-paragraph selection (R34): appended after the assertion entry;
+# requires assertion_prompt. Pins its own rule so a complete-selection run
+# cannot replay an assertion-only receipt and vice versa.
+_COMPLETE_SELECTION_RULE_ENTRY = "extraction-complete-paragraph-selection-v1"
+# Excludes a single terminal period for proven OCR mismatches; requires source-ids.
+_CONTENT_BOUNDS_RULE_ENTRY = "extraction-content-bounds-v1"
 # Bounded input/output for the ID wire: a source offering more sentences than
 # this is not served under this profile (its coverage stays unknown) rather than
 # sending an unbounded id list the model could truncate.
@@ -285,18 +327,35 @@ def _context_system_prompt(*, extraction_context: bool, extraction_table_context
 
 
 def _system_prompt(
-    *, extraction_context: bool, extraction_table_context: bool, source_ids: bool
+    *,
+    extraction_context: bool,
+    extraction_table_context: bool,
+    source_ids: bool,
+    assertion_prompt: bool = False,
+    complete_selection: bool = False,
 ) -> str:
     """The exact prompt sent for an option combination; legacy shapes untouched."""
     if not source_ids:
+        # The assertion suffix only refines source-ID mode; it is never a suffix
+        # of the quote-copy prompt. Callers guarantee this, but stay defensive.
         return _context_system_prompt(
             extraction_context=extraction_context,
             extraction_table_context=extraction_table_context,
         )
     if not extraction_context:
-        return SOURCE_ID_SYSTEM_PROMPT
-    prompt = SOURCE_ID_SYSTEM_PROMPT + SOURCE_ID_CONTEXT_SUFFIX
-    return prompt + TABLE_CONTEXT_SYSTEM_SUFFIX if extraction_table_context else prompt
+        prompt = SOURCE_ID_SYSTEM_PROMPT
+    else:
+        prompt = SOURCE_ID_SYSTEM_PROMPT + SOURCE_ID_CONTEXT_SUFFIX
+        if extraction_table_context:
+            prompt = prompt + TABLE_CONTEXT_SYSTEM_SUFFIX
+    # Appended last, after the whole source-ID(+context/table) prompt, exactly
+    # as proven on the wire; the base bytes above are never mutated.
+    if assertion_prompt:
+        prompt = prompt + ASSERTION_SYSTEM_SUFFIX
+    # Appended after assertion suffix when opted in; requires assertion_prompt.
+    if complete_selection:
+        prompt = prompt + COMPLETE_SELECTION_SYSTEM_SUFFIX
+    return prompt
 
 
 def _profile_with_options(
@@ -306,6 +365,10 @@ def _profile_with_options(
     extraction_context: bool = False,
     extraction_table_context: bool = False,
     source_ids: bool = False,
+    assertion_prompt: bool = False,
+    complete_selection: bool = False,
+    extraction_content_bounds: bool = False,
+    position_order: bool = False,
 ) -> ExtractionProfile:
     """Versioned extraction profile for an explicit option combination.
 
@@ -319,16 +382,39 @@ def _profile_with_options(
     prompt suffix, so a table-context run can never replay a context-only
     receipt and vice versa. ``source_ids`` pins the R14 selection contract
     (its own prompt and rule entry), so an ID-selection response can never be
-    served or replayed under a quote-copy profile.
+    served or replayed under a quote-copy profile. ``complete_selection`` is the
+    R34 full-paragraph selection opt-in: it requires both ``source_ids`` and
+    ``assertion_prompt`` and pins its own rule entry and prompt suffix, so a
+    complete-selection run can never replay an assertion-only receipt.
     """
     if model not in (UPSTAGE_MODEL, MODEL_PRO4):
         raise ValueError("UPSTAGE_MODEL_MISMATCH")
     if any(
         type(value) is not bool
-        for value in (year_notation, extraction_context, extraction_table_context, source_ids)
+        for value in (
+            year_notation,
+            extraction_context,
+            extraction_table_context,
+            source_ids,
+            assertion_prompt,
+            complete_selection,
+            extraction_content_bounds,
+            position_order,
+        )
     ):
         raise ValueError("UPSTAGE_PROFILE_OPTION_INVALID")
     if extraction_table_context and not extraction_context:
+        raise ValueError("UPSTAGE_PROFILE_OPTION_INVALID")
+    if position_order and not extraction_context:
+        raise ValueError("UPSTAGE_PROFILE_OPTION_INVALID")
+    if assertion_prompt and not source_ids:
+        # The assertion suffix only refines source-ID mode; it has no wire alone.
+        raise ValueError("UPSTAGE_PROFILE_OPTION_INVALID")
+    if complete_selection and not (source_ids and assertion_prompt):
+        # Complete-selection refines assertion mode; it requires both source-IDs
+        # and the assertion prompt to be on.
+        raise ValueError("UPSTAGE_PROFILE_OPTION_INVALID")
+    if extraction_content_bounds and not source_ids:
         raise ValueError("UPSTAGE_PROFILE_OPTION_INVALID")
     descriptor = [*_RULE_DESCRIPTOR]
     if year_notation:
@@ -339,6 +425,16 @@ def _profile_with_options(
         descriptor.append(_TABLE_CONTEXT_RULE_ENTRY)
     if source_ids:
         descriptor.append(_SOURCE_ID_RULE_ENTRY)
+    if assertion_prompt:
+        descriptor.append(_ASSERTION_RULE_ENTRY)
+    if complete_selection:
+        descriptor.append(_COMPLETE_SELECTION_RULE_ENTRY)
+    if extraction_content_bounds:
+        descriptor.append(_CONTENT_BOUNDS_RULE_ENTRY)
+    if position_order:
+        from proofops.application.tagging.preliminary import CONTEXT_POSITION_ORDER
+
+        descriptor.append(CONTEXT_POSITION_ORDER)
     return ExtractionProfile(
         model_sha256=canonical_hash(
             {"model": model, "provider": "upstage", "transport": "UpstageProbe"}
@@ -348,6 +444,8 @@ def _profile_with_options(
                 extraction_context=extraction_context,
                 extraction_table_context=extraction_table_context,
                 source_ids=source_ids,
+                assertion_prompt=assertion_prompt,
+                complete_selection=complete_selection,
             )
         ),
         rule_sha256=canonical_hash(descriptor),
@@ -368,6 +466,10 @@ class UpstageClaimExtractor:
         extraction_context: bool = False,
         extraction_table_context: bool = False,
         extraction_source_ids: bool = False,
+        extraction_assertion_prompt: bool = False,
+        extraction_complete_selection: bool = False,
+        extraction_content_bounds: bool = False,
+        position_order: bool = False,
     ) -> None:
         if not callable(getattr(probe, "complete", None)):
             raise ValueError("UPSTAGE_PROBE_REQUIRED")
@@ -375,18 +477,41 @@ class UpstageClaimExtractor:
             raise ValueError("UPSTAGE_YEAR_NOTATION_INVALID")
         if type(extraction_context) is not bool:
             raise ValueError("UPSTAGE_EXTRACTION_CONTEXT_INVALID")
+        if type(position_order) is not bool or (position_order and not extraction_context):
+            raise ValueError("UPSTAGE_CONTEXT_ORDER_INVALID")
         if type(extraction_table_context) is not bool or (
             extraction_table_context and not extraction_context
         ):
             raise ValueError("UPSTAGE_EXTRACTION_TABLE_CONTEXT_INVALID")
         if type(extraction_source_ids) is not bool:
             raise ValueError("UPSTAGE_EXTRACTION_SOURCE_IDS_INVALID")
+        if type(extraction_assertion_prompt) is not bool or (
+            extraction_assertion_prompt and not extraction_source_ids
+        ):
+            # The assertion suffix only refines source-ID selection; enabling it
+            # without source-IDs (or with a non-bool) fails closed before any call.
+            raise ValueError("UPSTAGE_EXTRACTION_ASSERTION_PROMPT_INVALID")
+        if type(extraction_content_bounds) is not bool or (
+            extraction_content_bounds and not extraction_source_ids
+        ):
+            raise ValueError("UPSTAGE_EXTRACTION_CONTENT_BOUNDS_INVALID")
+        if type(extraction_complete_selection) is not bool or (
+            extraction_complete_selection
+            and not (extraction_source_ids and extraction_assertion_prompt)
+        ):
+            # Complete-selection requires both source-IDs and assertion-prompt;
+            # enabling it without either (or with a non-bool) fails closed.
+            raise ValueError("UPSTAGE_EXTRACTION_COMPLETE_SELECTION_INVALID")
         profile = _profile_with_options(
             getattr(probe, "model", UPSTAGE_MODEL),
             year_notation=extraction_year_notation,
             extraction_context=extraction_context,
             extraction_table_context=extraction_table_context,
             source_ids=extraction_source_ids,
+            assertion_prompt=extraction_assertion_prompt,
+            complete_selection=extraction_complete_selection,
+            extraction_content_bounds=extraction_content_bounds,
+            position_order=position_order,
         )
         if type(max_tokens) is not int or not 1 <= max_tokens <= 4096:
             raise ValueError("UPSTAGE_MAX_TOKENS_INVALID")
@@ -400,6 +525,10 @@ class UpstageClaimExtractor:
         self._context = extraction_context
         self._table_context = extraction_table_context
         self._source_ids = extraction_source_ids
+        self._assertion_prompt = extraction_assertion_prompt
+        self._complete_selection = extraction_complete_selection
+        self._content_bounds = extraction_content_bounds
+        self._position_order = position_order
         self._request_ids: list[tuple[str, str]] = []
 
     def _validate_spans(self, payload: dict, text: str):
@@ -589,6 +718,11 @@ class UpstageClaimExtractor:
                     "content_sha256": canonical_hash(result["content"]),
                     "spans": resolved,
                     **rejected,
+                    **(
+                        {"context_ordering": self._context_order_policy()}
+                        if self._position_order
+                        else {}
+                    ),
                 }
             ),
         )
@@ -743,6 +877,10 @@ class UpstageClaimExtractor:
                 stored_result.get("request_id") != request_id
                 or stored_result.get("packet_sha256") != packet_sha
                 or stored_result.get("profile") != asdict(self._profile)
+                or (
+                    self._position_order
+                    and stored_result.get("context_ordering") != self._context_order_policy()
+                )
                 or not isinstance(stored_result.get("spans"), list)
                 or stored_result.get("spans") != resolved
             ):
@@ -762,6 +900,11 @@ class UpstageClaimExtractor:
                         "content_sha256": canonical_hash(metadata["content"]),
                         "spans": resolved,
                         **rejected,
+                        **(
+                            {"context_ordering": self._context_order_policy()}
+                            if self._position_order
+                            else {}
+                        ),
                     }
                 ),
             )
@@ -821,7 +964,7 @@ class UpstageClaimExtractor:
             or not isinstance(payload["sentence_ids"], list)
         ):
             raise ValueError("sentence-ids-only response required")
-        allowed = dict(self._sentence_index(text, source_id))
+        allowed = dict(self._sentence_index(text, source_id, self._content_bounds))
         selected = []
         seen: set[str] = set()
         for sentence_id in payload["sentence_ids"]:
@@ -867,7 +1010,9 @@ class UpstageClaimExtractor:
         }
 
     @staticmethod
-    def _sentence_index(text: str, source_id: str) -> list[tuple[str, tuple[int, int]]]:
+    def _sentence_index(
+        text: str, source_id: str, extraction_content_bounds: bool = False
+    ) -> list[tuple[str, tuple[int, int]]]:
         """Bounded ``source_id:index`` sentence ids over the packet's own text.
 
         The ids are minted here and the offsets are this process's own, so
@@ -876,13 +1021,28 @@ class UpstageClaimExtractor:
         allowed id set is exactly the sent one.
         """
         spans = sentence_spans(text)
+        if extraction_content_bounds:
+            adjusted_spans = []
+            for start, end in spans:
+                if end > start + 1 and text[end - 1] == "." and text[end - 2].isalpha():
+                    end -= 1
+                adjusted_spans.append((start, end))
+            spans = adjusted_spans
         if not spans:
             raise ExtractionOutputError("EXTRACTION_SOURCE_SENTENCES_EMPTY")
         if len(spans) > _MAX_SOURCE_SENTENCES:
             # Keep the source unknown and continue the batch instead of sending an
             # unbounded id list the model could silently truncate.
             raise ExtractionOutputError("EXTRACTION_SOURCE_SENTENCES_UNBOUNDED")
-        return [(f"{source_id}:{index}", span) for index, span in enumerate(spans)]
+        return [
+            (
+                f"{source_id}:{index}:{span[0]}:{span[1]}"
+                if extraction_content_bounds
+                else f"{source_id}:{index}",
+                span,
+            )
+            for index, span in enumerate(spans)
+        ]
 
     def _source_id_wire(
         self, packet: dict, text: str, packet_sha: str, context_graph: Any
@@ -896,7 +1056,9 @@ class UpstageClaimExtractor:
         split, a different context or a different omission set addresses a
         different receipt and can never replay this one.
         """
-        sentence_ids = self._sentence_index(text, packet["untrusted_document_data"]["source_id"])
+        sentence_ids = self._sentence_index(
+            text, packet["untrusted_document_data"]["source_id"], self._content_bounds
+        )
         source_id = packet["untrusted_document_data"]["source_id"]
         data: dict[str, Any] = {
             "source_id": source_id,
@@ -913,6 +1075,8 @@ class UpstageClaimExtractor:
             extraction_context=self._context,
             extraction_table_context=self._table_context,
             source_ids=True,
+            assertion_prompt=self._assertion_prompt,
+            complete_selection=self._complete_selection,
         )
         user_data: dict[str, Any] = {
             "tenant_id": packet["tenant_id"],
@@ -921,6 +1085,8 @@ class UpstageClaimExtractor:
             "source_sha256": packet["source_sha256"],
             "untrusted_document_data": data,
         }
+        if self._position_order:
+            user_data["context_ordering"] = self._context_order_policy()
         content_sha = canonical_hash({"system_prompt": system_prompt, "user_data": user_data})
         request_id = str(uuid5(UUID(packet["parse_manifest_id"]), packet_sha + ":" + content_sha))
         return system_prompt, {**user_data, "request_id": request_id}, request_id
@@ -1045,10 +1211,18 @@ class UpstageClaimExtractor:
                 "omitted_source_ids": omitted_source_ids,
             },
         }
+        if self._position_order:
+            user_data["context_ordering"] = self._context_order_policy()
         content_sha = canonical_hash({"system_prompt": system_prompt, "user_data": user_data})
         request_id = str(uuid5(UUID(packet["parse_manifest_id"]), packet_sha + ":" + content_sha))
         user_data = {**user_data, "request_id": request_id}
         return system_prompt, user_data, request_id
+
+    @staticmethod
+    def _context_order_policy() -> dict:
+        from proofops.application.tagging.preliminary import CONTEXT_POSITION_ORDER
+
+        return CONTEXT_POSITION_ORDER
 
     def _context_for(self, packet: dict, context_graph: Any) -> tuple[list[dict], list[str]]:
         """Bounded, source-bound interpretation-only blocks for this packet's block.
@@ -1073,6 +1247,7 @@ class UpstageClaimExtractor:
         from proofops.application.tagging.preliminary import (
             _bounded_context_blocks,
             _context_entry,
+            _position_key,
         )
 
         data = packet["untrusted_document_data"]
@@ -1085,6 +1260,7 @@ class UpstageClaimExtractor:
             (focal.source_ref(),),
             max_context_chars=2000,
             max_context_blocks=4,
+            position_order=self._position_order,
         )
         if not self._table_context:
             return neighbours, omitted
@@ -1120,8 +1296,11 @@ class UpstageClaimExtractor:
             selected.append({**entry, "context_index": len(selected)})
             selected_ids.add(entry["source_id"])
             used += size
-        return selected, [
-            *dict.fromkeys(
+        if self._position_order:
+            selected.sort(key=lambda entry: _position_key(blocks[entry["source_id"]]))
+            selected = [{**entry, "context_index": index} for index, entry in enumerate(selected)]
+        omitted_ids = list(
+            dict.fromkeys(
                 (
                     *omitted,
                     *table.omitted_source_ids,
@@ -1132,7 +1311,10 @@ class UpstageClaimExtractor:
                     ),
                 )
             )
-        ]
+        )
+        if self._position_order:
+            omitted_ids.sort(key=lambda source_id: _position_key(blocks[source_id]))
+        return selected, omitted_ids
 
     @staticmethod
     def _quotes(payload: Any) -> list:
