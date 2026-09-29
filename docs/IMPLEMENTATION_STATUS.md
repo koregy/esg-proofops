@@ -1,4 +1,34 @@
-## 2026-09-29 · Submission integration checkpoint
+## 2026-09-29 17:13 KST · Actual parsing and remaining source verification
+
+The reviewer's private Kia PDF was received and matched the reply's complete
+SHA-256 `d0d814d98c4aeedbbdb2bf8631b8981ae5cde94dec32aa32c57510420274da1f`.
+It differs from the public download, including text on page 111. The private PDF
+and derived contents stay outside Git; the two document versions are not merged.
+
+Document Parse Standard actually completed all 134 pages in 14 batches: 2,536
+elements, including 1,107 paragraphs and 264 tables. The ordinary-price gross
+estimate is USD1.474, not a verified student-account invoice. The replayable
+candidate import preserves request/response/source hashes and physical page
+mapping. All candidates remain unverified; table boxes are not cell boxes.
+The user reports unlimited student access to Solar Pro 2/3 and Document Parse.
+Accounting preserves that declaration separately from estimated usage.
+
+The existing public-PDF run passed parsing and is extracting claims, but its
+macOS-only rendered reader returns UnsupportedPlatform on Windows. In particular,
+all 61 inspected assurance blocks on pages 132–133 remain unverified. Windows OCR
+support and reuse of unchanged verification results are in development. Neither
+full-report tagging, assurance coverage nor C1–C4 completion is claimed.
+
+The shared session ledger was amended from USD10 to USD20 without resetting
+usage/reservations or extending the original midnight KST expiry. At amendment:
+128 calls, no unsettled reservations, gross estimated usage USD1.5476583100.
+The original grant and amendment chain are preserved. This local cap is still
+finite; the student entitlement has not been converted into an unlimited mode.
+
+CI passed both push and PR workflows for `f36ddc1`. Later parser/import/budget
+changes have targeted tests; their release CI must be checked separately.
+
+## Earlier 2026-09-29 · Submission integration checkpoint
 
 The submission branch now includes source-bound C1 entity-set review, exact-date
 assurance interval matching, report preview with export integrity checks, and
