@@ -408,9 +408,12 @@ def build_pilot_argv(
     verify_selected_cells: bool = False,
     native_quote_typography: bool = False,
     native_windows_ocr: bool = False,
+    native_upstage_ocr: bool = False,
+    upstage_ocr_max_calls: int | None = None,
     claim_span_typography: bool = False,
     live_relations: bool = False,
     capacity_refresh: bool = False,
+    tagging_model: str | None = None,
     preliminary_context: bool = False,
     preliminary_actor_role: bool = False,
     ai_project_review: bool = False,
@@ -482,6 +485,21 @@ def build_pilot_argv(
         argv.append("--native-quote-typography")
     if native_windows_ocr:
         argv.append("--native-windows-ocr")
+    if native_upstage_ocr and (native_quote_typography or native_windows_ocr):
+        raise PlanError(
+            "--native-upstage-ocr cannot be combined with --native-quote-typography "
+            "or --native-windows-ocr"
+        )
+    if upstage_ocr_max_calls is not None and (
+        not native_upstage_ocr
+        or type(upstage_ocr_max_calls) is not int
+        or not 1 <= upstage_ocr_max_calls <= 20
+    ):
+        raise PlanError("--upstage-ocr-max-calls needs --native-upstage-ocr and 1..20")
+    if native_upstage_ocr:
+        argv.append("--native-upstage-ocr")
+        if upstage_ocr_max_calls is not None:
+            argv += ["--upstage-ocr-max-calls", str(upstage_ocr_max_calls)]
     if claim_span_typography:
         argv += [
             "--claim-span-render-resolution",
@@ -490,6 +508,9 @@ def build_pilot_argv(
         ]
     if capacity_refresh:
         argv.append("--capacity-policy-refresh")
+    if tagging_model is not None:
+        # Explicit only; omission keeps the pilot's legacy solar-pro4 tagging argv.
+        argv += ["--tagging-model", tagging_model]
     if live_relations:
         argv.append("--live-relations")
     if preliminary_context or preliminary_actor_role:
@@ -636,6 +657,8 @@ def plan_run(args: argparse.Namespace) -> dict:
     verify_selected_cells = bool(getattr(args, "verify_selected_cells", False))
     native_quote_typography = bool(getattr(args, "native_quote_typography", False))
     native_windows_ocr = bool(getattr(args, "native_windows_ocr", False))
+    native_upstage_ocr = bool(getattr(args, "native_upstage_ocr", False))
+    upstage_ocr_max_calls = getattr(args, "upstage_ocr_max_calls", None)
     claim_span_typography = bool(getattr(args, "claim_span_typography", False))
     live_relations = bool(getattr(args, "live_relations", False))
     preliminary_actor_role = bool(getattr(args, "preliminary_actor_role", False))
@@ -666,9 +689,12 @@ def plan_run(args: argparse.Namespace) -> dict:
         verify_selected_cells=verify_selected_cells,
         native_quote_typography=native_quote_typography,
         native_windows_ocr=native_windows_ocr,
+        native_upstage_ocr=native_upstage_ocr,
+        upstage_ocr_max_calls=upstage_ocr_max_calls,
         claim_span_typography=claim_span_typography,
         live_relations=live_relations,
         capacity_refresh=bool(getattr(args, "capacity_refresh", False)),
+        tagging_model=getattr(args, "tagging_model", None),
         preliminary_context=preliminary_context,
         preliminary_actor_role=preliminary_actor_role,
         ai_project_review=ai_project_review,
@@ -710,9 +736,12 @@ def plan_run(args: argparse.Namespace) -> dict:
         "verify_selected_cells": verify_selected_cells,
         "native_quote_typography": native_quote_typography,
         "native_windows_ocr": native_windows_ocr,
+        "native_upstage_ocr": native_upstage_ocr,
+        "upstage_ocr_max_calls": upstage_ocr_max_calls,
         "claim_span_typography": claim_span_typography,
         "live_relations": live_relations,
         "capacity_refresh": bool(getattr(args, "capacity_refresh", False)),
+        "tagging_model": getattr(args, "tagging_model", None) or "solar-pro4",
         "preliminary_context": preliminary_context,
         "preliminary_actor_role": preliminary_actor_role,
         "ai_project_review": ai_project_review,
@@ -766,6 +795,7 @@ def print_plan(plan: dict) -> None:
     for flag in (
         "native_quote_typography",
         "native_windows_ocr",
+        "native_upstage_ocr",
         "claim_span_typography",
         "live_relations",
         "preliminary_context",
@@ -936,6 +966,20 @@ def build_parser() -> argparse.ArgumentParser:
         "unavailable off macOS). Not combinable with --native-quote-typography.",
     )
     parser.add_argument(
+        "--native-upstage-ocr",
+        action="store_true",
+        help="NEW runs: pass the pilot's --native-upstage-ocr so native paragraphs with no "
+        "rendered reader (UnsupportedPlatform) are corroborated by Upstage Document Parse "
+        "crops on the same shared ledger. Not combinable with --native-quote-typography or "
+        "--native-windows-ocr. Uncovered paragraphs are reported, never assumed checked.",
+    )
+    parser.add_argument(
+        "--upstage-ocr-max-calls",
+        type=int,
+        help="Document Parse calls (10 crops each) for --native-upstage-ocr, 1..20 "
+        "(pilot default 1).",
+    )
+    parser.add_argument(
         "--claim-span-typography",
         action="store_true",
         help="Opt a new run into rendered quote/middle-dot comparison, including "
@@ -946,6 +990,13 @@ def build_parser() -> argparse.ArgumentParser:
         dest="capacity_refresh",
         action="store_true",
         help="NEW run: opt into the existing 2026-09-25 capacity policy (expires 2026-10-02).",
+    )
+    parser.add_argument(
+        "--tagging-model",
+        choices=["solar-pro4", "solar-pro3"],
+        default=None,
+        help="NEW run: one model for live preliminary/tagging/relation calls "
+        "(default solar-pro4). Extraction stays on the fixed extraction model.",
     )
     parser.add_argument(
         "--live-relations",

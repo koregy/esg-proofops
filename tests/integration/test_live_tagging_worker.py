@@ -268,7 +268,11 @@ def test_incomplete_preliminary_receipt_never_retries_paid_request(tmp_path, mon
     runtime, claim, graph, calls, _, _ = configured(tmp_path, monkeypatch)
     assert runtime.preliminary(claim, graph) is not None
     first = runtime.preliminary_records[claim.claim_id][0]["request_id"]
-    (runtime.receipts / "preliminary" / first / "response.json").unlink()
+    response = runtime.receipts / "preliminary" / first / "response.json"
+    # The fixture deliberately removes an immutable receipt. Windows requires
+    # clearing its read-only bit before deletion; production protection stays on.
+    response.chmod(0o600)
+    response.unlink()
     assert runtime.preliminary(claim, graph) is None
     assert len(calls) == 3
     record = runtime.preliminary_records[claim.claim_id][0]

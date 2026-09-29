@@ -308,6 +308,12 @@ def checkpoint_native_attestation(envelope):
         ):
             raise ParseFailure("NATIVE_PARAGRAPH_CHECKPOINT_INVALID")
     _checkpoint_windows_ocr(envelope)
+    from proofops.adapters.local.native_upstage_ocr_store import checkpoint_shape
+
+    try:
+        checkpoint_shape(envelope)
+    except (ValueError, TypeError):
+        raise ParseFailure("NATIVE_PARAGRAPH_CHECKPOINT_INVALID") from None
     if (
         not isinstance(receipt, dict)
         or receipt.get("schema") != "native_paragraph_attestation_v2"
@@ -439,6 +445,14 @@ def load_run_evidence(store, uploads, parser, *, tenant_id: str, run_id: str):
 
     with store.jobs._transaction() as db:
         validate_raster_checkpoint_bindings(db, store.jobs, message, snapshot, envelope)
+        from proofops.adapters.local.native_upstage_ocr_store import (
+            validate_checkpoint_bindings as validate_upstage_ocr_bindings,
+        )
+
+        try:
+            validate_upstage_ocr_bindings(db, store.jobs, message, snapshot, envelope)
+        except (ValueError, TypeError, KeyError):
+            raise ParseFailure("NATIVE_UPSTAGE_OCR_CHECKPOINT_INVALID") from None
     policy = store.jobs.parser_note_policy(message)
     native_policy = store.jobs.parser_native_policy(message)
     if native_policy is not None:
@@ -572,6 +586,25 @@ def load_run_evidence(store, uploads, parser, *, tenant_id: str, run_id: str):
             != typography_proof.get("promoted_source_ids")
         ):
             raise ParseFailure("NATIVE_PARAGRAPH_TYPOGRAPHY_PROOF_MISMATCH")
+    upstage_coverage = envelope.get("native_paragraph_upstage_ocr_coverage")
+    if upstage_coverage is not None:
+        # Offline: stored request/receipt records only, re-rendered from the original bytes.
+        from proofops.adapters.local.native_upstage_ocr import compose_checkpoint
+        from proofops.adapters.local.native_upstage_ocr_store import stored_entries
+
+        try:
+            entries, refs = stored_entries(store.jobs, message)
+            graph, coverage, refs, policy_sha256 = compose_checkpoint(
+                snapshot, message, native_receipt, pre_native_graph, source.content, entries, refs
+            )
+            if (
+                coverage != upstage_coverage
+                or refs != envelope["native_paragraph_upstage_ocr_artifacts"]
+                or policy_sha256 != envelope["native_paragraph_upstage_ocr_policy_sha256"]
+            ):
+                raise ValueError("upstage OCR replay differs")
+        except (ValueError, TypeError, KeyError):
+            raise ParseFailure("NATIVE_UPSTAGE_OCR_REPLAY_INVALID") from None
     windows_proof = envelope.get("native_paragraph_windows_ocr_proof")
     if windows_proof is not None:
         from proofops.adapters.local.windows_rendered_verification import replay_windows_ocr
@@ -597,6 +630,7 @@ def load_run_evidence(store, uploads, parser, *, tenant_id: str, run_id: str):
         native_attestation=native_receipt,
         typography_proof=typography_proof or recomputed_typography_proof,
         windows_ocr_proof=windows_proof,
+        upstage_ocr_coverage=upstage_coverage,
         input_hash=snapshot["input_hash"],
         parse_checkpoint_sha256=sha256(payload).hexdigest(),
     )

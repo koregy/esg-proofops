@@ -135,8 +135,14 @@ def live_tagging_settings(
     compact_element_wire: bool = False,
     position_context_order: bool = False,
     capacity_refresh: bool = False,
+    tagging_model: str = "solar-pro4",
 ) -> dict:
-    """Explicit bounded pilot config; grants are registered separately by main."""
+    """Explicit bounded pilot config; grants are registered separately by main.
+
+    ``tagging_model`` selects one model for every live tagging role (NEW run
+    only). The default keeps the historical Pro 4 settings and policy byte-for-
+    byte; ``solar-pro3`` pins the separately versioned Pro 3 reservation policy.
+    """
     from proofops.application.input_reservation import solar_pro4_capacity_policy
     from proofops.application.ports.models import ModelBinding
     from proofops.application.tagging.preliminary import (
@@ -162,6 +168,10 @@ def live_tagging_settings(
         or type(capacity_refresh) is not bool
     ):
         raise ValueError("relation/preliminary-context stage must be explicit boolean")
+    if tagging_model not in ("solar-pro4", "solar-pro3"):
+        raise ValueError("tagging model must be solar-pro4 or solar-pro3")
+    if tagging_model == "solar-pro3" and capacity_refresh:
+        raise ValueError("capacity refresh is a Pro 4 policy revision; not valid for solar-pro3")
     if preliminary_table_context and not preliminary_context:
         raise ValueError("preliminary table context requires preliminary context")
     if preliminary_table_role and not preliminary_table_context:
@@ -219,6 +229,12 @@ def live_tagging_settings(
         "contains an event year and a possibility, not a goal deadline; G1 stays unknown. "
         "'가상기업은 2035년까지 재생에너지 100% 전환을 목표로 한다.' explicitly provides "
         "a goal deadline; G1 may cite '2035년'. "
+        "For a ratio or intensity goal, G3 needs the literal baseline period and the literal "
+        "baseline ratio value in that period; the target ratio or reduction percentage alone "
+        "is not a baseline, so keep G3 unknown without them. "
+        "G5 is present only when the document directly states current progress toward this "
+        "goal; a progress figure you would have to calculate from other reported values is "
+        "derived, never present, so keep G5 unknown and do not compute it. "
         "M3 is external verification, distinct from M1's named means or standard. "
         "Naming or following a framework/standard does not by itself state that external "
         "verification or certification occurred. Require literal evidence of that external "
@@ -330,7 +346,7 @@ def live_tagging_settings(
         settings[prefix + "_settings"] = asdict(
             TaggingSettings(
                 ModelBinding(str(uuid4()), "tagger", False),
-                "solar-pro4",
+                tagging_model,
                 profile,
                 "provider-managed-unverified",
                 prompt,
@@ -338,7 +354,14 @@ def live_tagging_settings(
                 max_tokens=output,
             )
         )
-    settings["input_reservation_policy"] = solar_pro4_capacity_policy(refreshed=capacity_refresh)
+    if tagging_model == "solar-pro3":
+        from proofops.application.input_reservation_pro3 import solar_pro3_capacity_policy
+
+        settings["input_reservation_policy"] = solar_pro3_capacity_policy()
+    else:
+        settings["input_reservation_policy"] = solar_pro4_capacity_policy(
+            refreshed=capacity_refresh
+        )
     return settings
 
 
@@ -349,6 +372,16 @@ def raster_settings(*, max_pages: int, max_calls: int) -> dict:
     return dict(
         raster_runtime_binding_id=str(uuid4()),
         raster_policy=raster_ocr_policy(max_pages=max_pages, max_calls=max_calls),
+    )
+
+
+def upstage_ocr_settings(*, max_pages: int, max_calls: int) -> dict:
+    """Pin a NEW-run native Upstage OCR policy; exclusive with raster settings."""
+    from proofops.adapters.local.native_upstage_ocr import native_upstage_ocr_policy
+
+    return dict(
+        upstage_ocr_runtime_binding_id=str(uuid4()),
+        upstage_ocr_policy=native_upstage_ocr_policy(max_pages=max_pages, max_calls=max_calls),
     )
 
 
@@ -393,6 +426,13 @@ def claim_source_policy_for(args):
     else:
         from proofops.adapters.local.claim_source_verification import claim_source_policy
     return claim_source_policy()
+
+
+def _upstage_ocr_option(args, stage: str) -> dict:
+    """Only a chosen NEW-run native Upstage OCR opt-in reaches the composition."""
+    if getattr(args, "native_upstage_ocr", False) and stage == "parse":
+        return {"native_upstage_ocr": True}
+    return {}
 
 
 def _windows_ocr_option(args, stage: str) -> dict:
@@ -452,6 +492,12 @@ def apply_resume_metadata(args, saved: dict) -> None:
             raise ValueError(f"--resume cannot change {name}; create a new run")
         setattr(args, name, saved_value)
     args.model = saved.get("model", args.model)
+    # Legacy manifests carry no key and were created with Pro 4 tagging.
+    saved_tagging_model = saved.get("tagging_model", "solar-pro4")
+    requested_tagging_model = getattr(args, "tagging_model", None)
+    if requested_tagging_model is not None and requested_tagging_model != saved_tagging_model:
+        raise ValueError("--resume cannot change tagging-model; create a new run")
+    args.tagging_model = saved_tagging_model
     args.verify_paragraphs = bool(saved.get("verify_paragraphs", False))
     args.verify_tables = bool(saved.get("verify_tables", False))
     args.verify_merged_tables = bool(saved.get("verify_merged_tables", False))
@@ -464,6 +510,7 @@ def apply_resume_metadata(args, saved: dict) -> None:
     args.claim_span_bullet_spacing = bool(saved.get("claim_span_bullet_spacing", False))
     args.claim_span_typography = bool(saved.get("claim_span_typography", False))
     args.raster_ocr = bool(saved.get("raster_ocr", False))
+    args.native_upstage_ocr = bool(saved.get("native_upstage_ocr", False))
     args.live_tagging = bool(saved.get("live_tagging", False))
     args.live_relations = bool(saved.get("live_relations", False))
     args.preliminary_context = bool(saved.get("preliminary_context", False))
@@ -496,6 +543,10 @@ def apply_resume_metadata(args, saved: dict) -> None:
         # dict matches the manifest's stored policy under the resume guard.
         args.raster_max_pages = saved["raster_policy"].get("max_pages", args.raster_max_pages)
         args.raster_max_calls = saved["raster_policy"].get("max_calls", args.raster_max_calls)
+    if getattr(args, "native_upstage_ocr", False) and saved.get("upstage_ocr_policy"):
+        stored = saved["upstage_ocr_policy"]
+        args.upstage_ocr_max_pages = stored.get("max_pages", args.upstage_ocr_max_pages)
+        args.upstage_ocr_max_calls = stored.get("max_calls", args.upstage_ocr_max_calls)
 
 
 def run_live_stages(args, *, tenant_id: str, run_id: str) -> dict:
@@ -511,6 +562,7 @@ def run_live_stages(args, *, tenant_id: str, run_id: str) -> dict:
             native_typography_tolerance=args.native_quote_typography and stage == "parse",
             raster_ocr=args.raster_ocr and stage == "parse",
             **_windows_ocr_option(args, stage),
+            **_upstage_ocr_option(args, stage),
         )
         try:
             outcome = worker.run_once(tenant_id=tenant, run_id=run_id)
@@ -725,6 +777,16 @@ def main():
         "recorded under the delegated source authority, not human sign-off.",
     )
     parser.add_argument("--raster-ocr", action="store_true")
+    parser.add_argument(
+        "--native-upstage-ocr",
+        action="store_true",
+        help="NEW runs: corroborate native paragraphs whose rendered reader is unavailable "
+        "(UnsupportedPlatform) with Upstage Document Parse crops on the shared ledger; "
+        "requires --verify-paragraphs, excludes --raster-ocr, --native-quote-typography "
+        "and --native-windows-ocr",
+    )
+    parser.add_argument("--upstage-ocr-max-pages", type=int, default=10)
+    parser.add_argument("--upstage-ocr-max-calls", type=int, default=1)
     parser.add_argument("--raster-max-pages", type=int, default=4)
     parser.add_argument("--raster-max-calls", type=int, default=1)
     parser.add_argument("--invoke", action="store_true")
@@ -793,6 +855,13 @@ def main():
         action="store_true",
         help="Opt-in: use refreshed 2026-09-25 capacity reservation policy revision "
         "(expires 2026-10-02).",
+    )
+    parser.add_argument(
+        "--tagging-model",
+        choices=["solar-pro4", "solar-pro3"],
+        default=None,
+        help="NEW run only (pinned on --resume): one model for every live tagging role "
+        "(preliminary/tagging/relation). Default solar-pro4. --model controls extraction only.",
     )
 
     parser.add_argument(
@@ -959,6 +1028,12 @@ def main():
         parser.error("--position-context-order requires --extraction-context")
     if args.position_context_order and args.live_tagging and not args.preliminary_table_role:
         parser.error("--position-context-order with live tagging requires --preliminary-table-role")
+    if getattr(args, "tagging_model", None) is None:
+        args.tagging_model = "solar-pro4"
+    if args.tagging_model == "solar-pro3" and not args.live_tagging:
+        parser.error("--tagging-model solar-pro3 requires --live-tagging")
+    if args.tagging_model == "solar-pro3" and getattr(args, "capacity_refresh", False):
+        parser.error("--capacity-policy-refresh is a Pro 4 policy; not valid with solar-pro3")
     if args.position_context_order and (args.preliminary_goal_role or args.preliminary_actor_role):
         parser.error("--position-context-order requires only preliminary table role")
     if args.claim_span_render_resolution and not args.verify_claim_spans:
@@ -1001,9 +1076,26 @@ def main():
             "(macOS Vision only); add --native-windows-ocr for a NEW run",
             file=sys.stderr,
         )
+    if getattr(args, "native_upstage_ocr", False) and (
+        not args.verify_paragraphs
+        or args.raster_ocr
+        or args.native_quote_typography
+        or getattr(args, "native_windows_ocr", False)
+    ):
+        parser.error(
+            "--native-upstage-ocr requires --verify-paragraphs without --raster-ocr, "
+            "--native-quote-typography or --native-windows-ocr"
+        )
     raster = (
         raster_settings(max_pages=args.raster_max_pages, max_calls=args.raster_max_calls)
         if args.raster_ocr
+        else {}
+    )
+    upstage_ocr = (
+        upstage_ocr_settings(
+            max_pages=args.upstage_ocr_max_pages, max_calls=args.upstage_ocr_max_calls
+        )
+        if getattr(args, "native_upstage_ocr", False)
         else {}
     )
     pages = sorted(set(int(p) for p in args.pages.split(",")))
@@ -1136,6 +1228,7 @@ def main():
         if args.extraction_content_bounds:
             settings["extraction_content_bounds"] = True
         settings.update(raster)
+        settings.update(upstage_ocr)
         if args.verify_claim_spans:
             settings["claim_source_policy"] = claim_source_policy_for(args)
         if args.live_tagging:
@@ -1152,6 +1245,7 @@ def main():
                     compact_element_wire=args.compact_element_wire,
                     position_context_order=args.position_context_order,
                     capacity_refresh=getattr(args, "capacity_refresh", False),
+                    tagging_model=args.tagging_model,
                 )
             )
             bound = settings["input_reservation_policy"]["reservation_input_tokens"]
@@ -1292,6 +1386,32 @@ def main():
                     ),
                 )
             )
+        if upstage_ocr:
+            from proofops.domain.provenance import canonical_hash
+
+            # Same image-egress authorization shape as raster, pinned to the new policy.
+            profiles[-1][2]["allow_raster_upload"] = True
+            profiles.append(
+                (
+                    "runtime",
+                    upstage_ocr["upstage_ocr_runtime_binding_id"],
+                    dict(
+                        common,
+                        runtime_binding_id=upstage_ocr["upstage_ocr_runtime_binding_id"],
+                        schema="local_upstage_raster_binding_v1",
+                        role="vision",
+                        model_id="document-parse-260128",
+                        endpoint="https://api.upstage.ai/v1/document-digitization",
+                        budget_limit_usd="20.00",
+                        mode="standard",
+                        max_pages=args.upstage_ocr_max_pages,
+                        max_calls=args.upstage_ocr_max_calls,
+                        accepts_images=True,
+                        image_input_verified=True,
+                        raster_policy_sha256=canonical_hash(upstage_ocr["upstage_ocr_policy"]),
+                    ),
+                )
+            )
         if args.live_tagging:
             from proofops.domain.provenance import canonical_hash
 
@@ -1309,7 +1429,8 @@ def main():
                             common,
                             runtime_binding_id=identifier,
                             role="tagger",
-                            model_id="solar-pro4",
+                            # The pinned settings name the run's one tagging model.
+                            model_id=pinned["model_id"],
                             endpoint="https://api.upstage.ai/v1/chat/completions",
                             budget_limit_usd="20.00",
                             schema="local_upstage_tagger_binding_v1",
@@ -1443,6 +1564,10 @@ def main():
             manifest["budget_ledger"] = str(budget_ledger)
         if args.raster_ocr:
             manifest.update(raster_ocr=True, raster_policy=raster["raster_policy"])
+        if upstage_ocr:
+            manifest.update(
+                native_upstage_ocr=True, upstage_ocr_policy=upstage_ocr["upstage_ocr_policy"]
+            )
         if args.live_relations:
             manifest["live_relations"] = True
         if args.preliminary_context:
@@ -1491,6 +1616,9 @@ def main():
             manifest["extraction_content_bounds"] = True
         if args.capacity_refresh:
             manifest["capacity_refresh"] = True
+        if args.tagging_model != "solar-pro4":
+            # Absent key == legacy Pro 4 tagging, so earlier manifests stay unchanged.
+            manifest["tagging_model"] = args.tagging_model
         for name in ("parser_timeout_seconds", "parser_memory_bytes"):
             if getattr(args, name) is not None:
                 manifest[name] = getattr(args, name)
@@ -1513,6 +1641,10 @@ def main():
             args.raster_ocr and manifest.get("raster_policy") != raster["raster_policy"]
         ):
             raise ValueError("pilot raster policy changed; create a new state directory")
+        if manifest.get("native_upstage_ocr", False) != bool(upstage_ocr) or (
+            upstage_ocr and manifest.get("upstage_ocr_policy") != upstage_ocr["upstage_ocr_policy"]
+        ):
+            raise ValueError("pilot Upstage OCR policy changed; create a new state directory")
         if manifest.get("live_relations", False) != args.live_relations:
             raise ValueError("pilot relation policy changed; create a new state directory")
         if manifest.get("preliminary_context", False) != args.preliminary_context:
@@ -1590,6 +1722,8 @@ def main():
             raise ValueError("pilot verification policy changed; create a new state directory")
         if manifest.get("model", "solar-pro3") != args.model:
             raise ValueError("pilot model changed; create a new state directory")
+        if manifest.get("tagging_model", "solar-pro4") != args.tagging_model:
+            raise ValueError("pilot tagging model changed; create a new state directory")
     run_id = manifest["run_id"]
     pipeline_outcome = dict(stage=None, status="not_run", exit_code=0)
     if args.invoke:
@@ -1728,6 +1862,7 @@ def main():
                     native_typography_tolerance=args.native_quote_typography and stage == "parse",
                     raster_ocr=args.raster_ocr and stage == "parse",
                     **_windows_ocr_option(args, stage),
+                    **_upstage_ocr_option(args, stage),
                 )
 
             worker_thread, worker_stop = start_background(build_stage, c.runs, tenant)

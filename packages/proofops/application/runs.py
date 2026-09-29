@@ -38,7 +38,10 @@ class RunRejected(ValueError):
         self.code, self.status = code, status
 
 
-_LIVE_TAGGING_MODEL = "solar-pro4"
+# Explicit per-run tagging model (pilot default stays solar-pro4). Every live
+# tagging role must share one model, because one pinned input-reservation policy
+# (validated per model) covers them all; there is no fallback between models.
+_LIVE_TAGGING_MODELS = frozenset({"solar-pro3", "solar-pro4"})
 
 
 def _capacity_accommodated(limits: BudgetLimits | None, upper: int, output_cap: int) -> bool:
@@ -124,6 +127,72 @@ def validate_raster_snapshot(snapshot):
         raise ValueError("RASTER_SNAPSHOT_INVALID")
 
 
+def validate_upstage_ocr_policy(policy):
+    """Shape of the NEW-run native Upstage OCR policy (live equality is checked in adapters)."""
+    hashes = (
+        "native_policy_sha256",
+        "helper_sha256",
+        "store_sha256",
+        "raster_helper_sha256",
+        "normalization_sha256",
+        "quote_fold_sha256",
+    )
+    fields = {"schema", "mode", "max_pages", "max_calls", "eligibility", "comparison"}
+    if (
+        not isinstance(policy, Mapping)
+        or set(policy) != {*fields, "reader_versions", *hashes}
+        or policy["schema"] != "native_upstage_ocr_policy_v1"
+        or policy["mode"] not in ("standard", "enhanced")
+        or type(policy["max_pages"]) is not int
+        or not 1 <= policy["max_pages"] <= 10
+        or type(policy["max_calls"]) is not int
+        or not 1 <= policy["max_calls"] <= 20
+        or policy["eligibility"] != "base_v2_rendered_text_unresolved_unsupported_platform_only"
+        or policy["comparison"] != "normalized_quote_fold_v1"
+        or not isinstance(policy["reader_versions"], Mapping)
+        or set(policy["reader_versions"]) != {"pypdfium2", "pdfplumber", "pypdf", "Pillow"}
+        or any(not isinstance(v, str) or not v.strip() for v in policy["reader_versions"].values())
+    ):
+        raise ValueError("UPSTAGE_OCR_POLICY_INVALID")
+    for name in hashes:
+        _require_sha256(name, policy[name])
+    return _detach(policy)
+
+
+def validate_upstage_ocr_snapshot(snapshot):
+    fields = {
+        "native_upstage_ocr_policy",
+        "native_upstage_ocr_policy_hash",
+        "native_upstage_ocr_runtime",
+        "native_upstage_ocr_runtime_artifact_hash",
+    }
+    present = {k for k in snapshot if k.startswith("native_upstage_ocr_")}
+    if not present:
+        return
+    if (
+        present != fields
+        or any(k.startswith("raster_ocr_") for k in snapshot)
+        or snapshot.get("extraction_mode") != "upstage_probe"
+        or snapshot.get("mode") != "disclosure"
+        or snapshot.get("scope") != "declared_subset"
+    ):
+        raise ValueError("UPSTAGE_OCR_SNAPSHOT_INVALID")
+    policy = validate_upstage_ocr_policy(snapshot["native_upstage_ocr_policy"])
+    grant = snapshot["native_upstage_ocr_runtime"]
+    if (
+        not isinstance(grant, Mapping)
+        or canonical_hash(policy) != snapshot["native_upstage_ocr_policy_hash"]
+        or artifact_sha256(grant) != snapshot["native_upstage_ocr_runtime_artifact_hash"]
+        or grant.get("raster_policy_sha256") != snapshot["native_upstage_ocr_policy_hash"]
+        or grant.get("mode") != policy["mode"]
+        or type(grant.get("max_pages")) is not int
+        or not policy["max_pages"] <= grant["max_pages"] <= 10
+        or type(grant.get("max_calls")) is not int
+        or not policy["max_calls"] <= grant["max_calls"] <= 20
+    ):
+        raise ValueError("UPSTAGE_OCR_SNAPSHOT_INVALID")
+
+
 class RunService:
     """Root supplies trusted parser/budget/build config; absent config fails closed."""
 
@@ -147,6 +216,8 @@ class RunService:
         relation_settings: TaggingSettings | None = None,
         raster_runtime_binding_id: str | None = None,
         raster_policy=None,
+        upstage_ocr_runtime_binding_id: str | None = None,
+        upstage_ocr_policy=None,
         input_reservation_policy=None,
         position_context_order=None,
         budget_limits=None,
@@ -245,6 +316,17 @@ class RunService:
         self.raster_runtime_binding_id, self.raster_policy = (
             raster_runtime_binding_id,
             raster_policy,
+        )
+        if (upstage_ocr_runtime_binding_id is None) != (upstage_ocr_policy is None) or (
+            upstage_ocr_policy is not None and raster_policy is not None
+        ):
+            raise ValueError("complete, exclusive upstage OCR configuration required")
+        if upstage_ocr_runtime_binding_id is not None:
+            _require_uuid("upstage_ocr_runtime_binding_id", upstage_ocr_runtime_binding_id)
+            upstage_ocr_policy = validate_upstage_ocr_policy(upstage_ocr_policy)
+        self.upstage_ocr_runtime_binding_id, self.upstage_ocr_policy = (
+            upstage_ocr_runtime_binding_id,
+            upstage_ocr_policy,
         )
         self.input_reservation_policy = (
             _detach(dict(input_reservation_policy))
@@ -373,6 +455,50 @@ class RunService:
                 )
             except (RegistryNotFound, ValueError, KeyError, TypeError):
                 raise RunRejected("CONFIG_GATE_BLOCKED") from None
+        upstage_ocr_snapshot = {}
+        if self.upstage_ocr_runtime_binding_id is not None or self.upstage_ocr_policy is not None:
+            # NEW-run native Upstage OCR: same image-egress preflight as raster, own policy.
+            try:
+                _require_uuid("upstage_ocr_runtime_binding_id", self.upstage_ocr_runtime_binding_id)
+                upstage_policy = validate_upstage_ocr_policy(self.upstage_ocr_policy)
+                upstage_runtime = _detach(
+                    self.registry.resolve_profile(
+                        auth, "runtime", self.upstage_ocr_runtime_binding_id
+                    )
+                )
+                upstage_preflight = check_local_upstage_raster(
+                    binding=upstage_runtime,
+                    consent=consent,
+                    auth=auth,
+                    checked_at=timestamp,
+                    source_sha256=document["sha256"],
+                    document_rights=rights_id,
+                    model_sha256=canonical_hash(
+                        dict(
+                            model="document-parse-260128",
+                            provider="upstage",
+                            transport="UpstageParseProbe",
+                        )
+                    ),
+                )
+                if not upstage_preflight.ready or raster_snapshot:
+                    raise ValueError("UPSTAGE_OCR_PREFLIGHT_BLOCKED")
+                upstage_ocr_snapshot = dict(
+                    native_upstage_ocr_policy=upstage_policy,
+                    native_upstage_ocr_policy_hash=canonical_hash(upstage_policy),
+                    native_upstage_ocr_runtime=upstage_runtime,
+                    native_upstage_ocr_runtime_artifact_hash=artifact_sha256(upstage_runtime),
+                )
+                validate_upstage_ocr_snapshot(
+                    dict(
+                        upstage_ocr_snapshot,
+                        extraction_mode=self.extraction_mode,
+                        mode=body["mode"],
+                        scope=body["scope"],
+                    )
+                )
+            except (RegistryNotFound, ValueError, KeyError, TypeError):
+                raise RunRejected("CONFIG_GATE_BLOCKED") from None
         if (self.extraction_profile is not None or self.extraction_mode is not None) and (
             not isinstance(self.extraction_profile, ExtractionProfile)
             or (self.extraction_profile.synthetic, self.extraction_mode)
@@ -439,11 +565,13 @@ class RunService:
             ):
                 raise RunRejected("CONFIG_GATE_BLOCKED")
             pinned_settings = (preliminary, tagging) + ((relation,) if relation is not None else ())
+            if len({pinned.model_id for pinned in pinned_settings}) != 1:
+                raise RunRejected("CONFIG_GATE_BLOCKED")
             for pinned in pinned_settings:
                 if (
                     pinned.binding.synthetic is not False
                     or pinned.binding.role != "tagger"
-                    or pinned.model_id != _LIVE_TAGGING_MODEL
+                    or pinned.model_id not in _LIVE_TAGGING_MODELS
                     or type(pinned.max_tokens) is not int
                     or not 1 <= pinned.max_tokens <= 4096
                 ):
@@ -585,6 +713,7 @@ class RunService:
                     relation_runtime_artifact_hash=artifact_sha256(relation_runtime),
                 )
         snapshot.update(raster_snapshot)
+        snapshot.update(upstage_ocr_snapshot)
         if self.position_context_order is not None:
             snapshot["position_context_order"] = dict(self.position_context_order)
         return self.store.create(auth, body, key, snapshot, self.budget_limits, now=now)

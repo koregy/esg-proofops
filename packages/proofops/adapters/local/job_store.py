@@ -722,6 +722,11 @@ class LocalSQLiteJobStore:
                 )
 
                 validate_raster_checkpoint_bindings(db, self, message, snapshot, envelope)
+                from proofops.adapters.local.native_upstage_ocr_store import (
+                    validate_checkpoint_bindings as validate_upstage_ocr_bindings,
+                )
+
+                validate_upstage_ocr_bindings(db, self, message, snapshot, envelope)
                 run.update(current_stage="extract", coverage=coverage, parse_job=asdict(message))
             if (
                 message.stage == "extract"
