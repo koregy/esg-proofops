@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, "feature/*"]
+    branches: [main, "feature/*", "submission/**"]
   pull_request:
     branches: [main]
 
@@ -98,6 +98,12 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter proofops-web typecheck
       - run: pnpm --filter proofops-web build
+      - name: Build public submission demo
+        run: pnpm --filter proofops-web build
+        env:
+          VITE_DEMO_STATIC: "true"
+      - name: Exercise public demo and read-only export in Chrome
+        run: node apps/web/test/submission-static-demo.mjs
 
   architecture:
     runs-on: ubuntu-24.04
