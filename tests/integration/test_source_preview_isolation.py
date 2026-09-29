@@ -192,7 +192,11 @@ def test_timeout_kills_the_render_child_and_removes_scratch(scratch, monkeypatch
 def test_memory_bound_stops_an_allocating_child(
     scratch, monkeypatch, tmp_path, megabytes, allocated
 ):
-    """A marker outside the scratch dir proves the cap, not something else, stopped it."""
+    """Touch resident pages and prove the watchdog stops a sustained cap breach.
+
+    POSIX samples RSS, unlike the Windows Job Object allocation cap. A marker
+    immediately after allocation races that sample and can precede the kill.
+    """
     seen: dict = {}
     _capture_pid(monkeypatch, seen)
     marker = tmp_path / "allocated.txt"
@@ -200,8 +204,9 @@ def test_memory_bound_stops_an_allocating_child(
     script = "\n".join(
         [
             f"block = bytearray({megabytes} * 1024 * 1024)",
-            f"open({str(marker)!r}, 'w').write('ok')",
+            "for offset in range(0, len(block), 4096): block[offset] = 1",
             "import time; time.sleep(2)",
+            f"open({str(marker)!r}, 'w').write('ok')",
         ]
     )
     _inject(monkeypatch, script, seen)
