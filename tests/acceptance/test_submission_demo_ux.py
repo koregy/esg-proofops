@@ -23,6 +23,9 @@ import submission_demo as sd  # noqa: E402
 
 def test_submission_demo_ui_ux_renders_correctly_under_demo_and_production(tmp_path: Path) -> None:
     esbuild = next((ROOT / "node_modules/.pnpm").glob("esbuild@*/node_modules/esbuild/bin/esbuild"))
+    with esbuild.open("rb") as stream:
+        is_script = stream.read(2) == b"#!"
+    esbuild_command = ["node", str(esbuild)] if is_script else [str(esbuild)]
     router_path = subprocess.check_output(
         ["node", "-e", 'console.log(require.resolve("react-router", { paths: ["./apps/web"] }))'],
         cwd=ROOT,
@@ -136,13 +139,16 @@ console.log("ALL SUBMISSION DEMO UX ACCEPTANCE CHECKS PASSED");
     bundle = tmp_path / "submission_demo_ux_render.cjs"
     subprocess.run(
         [
-            str(esbuild),
+            *esbuild_command,
             str(entry),
             "--bundle",
             "--platform=node",
             "--format=cjs",
             "--jsx=automatic",
             "--define:import.meta.env={}",
+            # Vite resolves this browser-only worker URL. This Node render harness
+            # exercises RunNav/DocumentFlow and never opens the PDF upload worker.
+            "--external:pdfjs-dist/build/pdf.worker.min.mjs?url",
             f"--outfile={bundle}",
         ],
         check=True,
