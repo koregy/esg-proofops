@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hmac
+import http.client
 import json
 import os
 import sys
@@ -49,6 +50,9 @@ MAX_CONTEXT = 2_000
 MAX_ESTIMATE_USD = 0.01
 INPUT_RATE = 0.15 / 1_000_000
 OUTPUT_RATE = 0.60 / 1_000_000
+# Vercel maxDuration is 55s; never start a paid call that cannot finish inside it.
+PROVIDER_TIMEOUT_S = 20
+TIME_BUDGET_S = 50
 PACK = RulePackSnapshot(**json.loads((ROOT / "api/rulepack.json").read_text(encoding="utf-8")))
 
 
@@ -118,9 +122,14 @@ def _provider(system: str, user: dict, max_tokens: int) -> dict:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=20) as response:
+        with urllib.request.urlopen(request, timeout=PROVIDER_TIMEOUT_S) as response:
             raw = response.read(65_537)
-    except (urllib.error.URLError, TimeoutError) as exc:
+    except urllib.error.HTTPError as exc:
+        if exc.code == 429:
+            raise LiveError(503, "UPSTAGE_RATE_LIMITED") from None
+        raise LiveError(502, "UPSTAGE_UNAVAILABLE") from None
+    except (urllib.error.URLError, http.client.HTTPException, OSError) as exc:
+        # TimeoutError and connection resets are OSError subclasses.
         raise LiveError(502, "UPSTAGE_UNAVAILABLE") from exc
     if len(raw) > 65_536:
         raise LiveError(502, "UPSTAGE_RESPONSE_TOO_LARGE")
@@ -163,11 +172,12 @@ def run_claim(payload: dict, *, access_code: str, call_model=None) -> dict:
     required = os.environ.get("DEMO_ACCESS_CODE", "")
     if not required:
         raise LiveError(503, "DEMO_NOT_CONFIGURED")
-    if not hmac.compare_digest(access_code, required):
+    if not hmac.compare_digest(access_code.encode("utf-8"), required.encode("utf-8")):
         raise LiveError(403, "ACCESS_DENIED")
     if datetime.now(UTC) >= PRICE_RECHECK_AT:
         raise LiveError(503, "PRICE_RECHECK_REQUIRED")
     call_model = call_model or _provider
+    request_started = monotonic()
     if not isinstance(payload, dict) or set(payload) - {"claim", "context", "page_label"}:
         raise LiveError(400, "INVALID_INPUT")
     claim, context, page = (
@@ -199,6 +209,11 @@ def run_claim(payload: dict, *, access_code: str, call_model=None) -> dict:
     )
     track = preliminary.get("track")
     category = preliminary.get("safe_harbor_category")
+    # Case/whitespace variants only; unknown values still fail closed below.
+    if isinstance(track, str):
+        track = track.strip().lower()
+    if isinstance(category, str):
+        category = category.strip().lower()
     if track in ("unknown", "unclear", "null", "none"):
         track = None
     if category in ("null", "none", "unknown"):
@@ -260,6 +275,8 @@ def run_claim(payload: dict, *, access_code: str, call_model=None) -> dict:
         "track": track,
         "elements": names,
     }
+    if monotonic() - request_started + PROVIDER_TIMEOUT_S > TIME_BUDGET_S:
+        raise LiveError(504, "TIME_BUDGET_EXCEEDED")
     raw_tags, usage2, ms2, _, actual2 = _step(call_model, tag_system, tag_user, 768, est1)
     if actual1 + actual2 > MAX_ESTIMATE_USD:
         raise LiveError(502, "ACTUAL_COST_CAP_EXCEEDED")
@@ -412,8 +429,10 @@ class handler(BaseHTTPRequestHandler):
     def do_POST(self):
         try:
             length = int(self.headers.get("Content-Length", "0"))
-            if length < 1 or length > MAX_BODY:
+            if length > MAX_BODY:
                 raise LiveError(413, "BODY_TOO_LARGE")
+            if length < 1:
+                raise LiveError(400, "INVALID_INPUT")
             payload = json.loads(self.rfile.read(length))
             result = run_claim(payload, access_code=self.headers.get("X-Demo-Access-Code", ""))
             status = 200

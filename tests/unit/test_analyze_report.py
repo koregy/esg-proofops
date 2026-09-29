@@ -60,6 +60,34 @@ def _args(pdf, **overrides):
     return Namespace(**base)
 
 
+def test_all_pages_preserves_full_document_scope_without_running(pdf, tmp_path):
+    plan = ar.plan_run(
+        _args(pdf, pages=None, all_pages=True, claim_pages="2", state=tmp_path / "full")
+    )
+    assert plan["pages"] == [1, 2, 3]
+    assert plan["claim_pages"] == [2]
+    assert plan["page_count"] == 3
+    assert plan["invoke"] is False
+    assert not plan["state"].exists()
+
+
+@pytest.mark.parametrize("options", [{"pages": "1"}, {"pages": None, "auto_scope": True}])
+def test_all_pages_rejects_conflicting_selection_before_scope_discovery(pdf, monkeypatch, options):
+    def forbidden(_):
+        pytest.fail("conflicting selection must not discover or write a scope proposal")
+
+    monkeypatch.setattr(ar, "discover_auto_scope", forbidden)
+    with pytest.raises(ar.PlanError, match="--all-pages"):
+        ar.plan_run(_args(pdf, all_pages=True, **options))
+
+
+def test_page_ranges_are_explicit_sorted_unique_and_bounded():
+    assert ar.parse_pages("3,1-3,7-8") == [1, 2, 3, 7, 8]
+    for invalid in ("3-1", "0-2", "1-2-3", "1-999999999"):
+        with pytest.raises(ar.PlanError):
+            ar.parse_pages(invalid)
+
+
 @pytest.mark.parametrize("enabled", [False, True])
 def test_claim_typography_option_reaches_pilot_with_required_wrappers(pdf, tmp_path, enabled):
     args = ar.build_parser().parse_args(

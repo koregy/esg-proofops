@@ -1,8 +1,10 @@
 """One fake-call path through the serverless claim demo; no network or paid model."""
 
+import http.client
 import importlib.util
 import json
 import threading
+import urllib.error
 import urllib.request
 from http.server import HTTPServer
 from pathlib import Path
@@ -18,10 +20,12 @@ SPEC.loader.exec_module(live)
 
 def test_rule_pack_snapshot_matches_repo_config():
     root = MODULE.parents[1]
-    manifest = yaml.safe_load((root / "config/rule_pack_manifest.yaml").read_text())
+    manifest = yaml.safe_load((root / "config/rule_pack_manifest.yaml").read_text(encoding="utf-8"))
     assert set(live.PACK.files) == set(manifest["files"])
     for name in manifest["files"]:
-        assert live.PACK.file_content(name) == yaml.safe_load((root / "config" / name).read_text())
+        assert live.PACK.file_content(name) == yaml.safe_load(
+            (root / "config" / name).read_text(encoding="utf-8")
+        )
 
 
 def test_fake_pipeline_and_guards(monkeypatch):
@@ -248,6 +252,134 @@ def test_http_handler_with_fake_model(monkeypatch):
         with urllib.request.urlopen(request, timeout=2) as response:
             assert response.status == 200
             assert json.load(response)["status"] == "needs_review"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def _post(port, body, code="local-only"):
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/api/live-claim",
+        body,
+        {"Content-Type": "application/json", "X-Demo-Access-Code": code},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=2) as response:
+            return response.status, json.load(response)
+    except urllib.error.HTTPError as error:
+        return error.code, json.load(error)
+
+
+def test_non_ascii_access_code_is_denied_not_internal_error(monkeypatch):
+    monkeypatch.setenv("DEMO_ACCESS_CODE", "local-only")
+    with pytest.raises(live.LiveError) as error:
+        live.run_claim({"claim": "2030년 배출을 줄입니다"}, access_code="코드é", call_model=None)
+    assert (error.value.status, error.value.code) == (403, "ACCESS_DENIED")
+
+
+def test_provider_connection_drop_maps_to_unavailable(monkeypatch):
+    monkeypatch.setenv("UPSTAGE_API_KEY", "test-key-not-real")
+
+    def drop(*args, **kwargs):
+        raise http.client.RemoteDisconnected("closed")
+
+    monkeypatch.setattr(live.urllib.request, "urlopen", drop)
+    with pytest.raises(live.LiveError) as error:
+        live._provider("system", {"x": 1}, 10)
+    assert (error.value.status, error.value.code) == (502, "UPSTAGE_UNAVAILABLE")
+
+    def reset(*args, **kwargs):
+        raise ConnectionResetError("reset")
+
+    monkeypatch.setattr(live.urllib.request, "urlopen", reset)
+    with pytest.raises(live.LiveError) as error:
+        live._provider("system", {"x": 1}, 10)
+    assert error.value.code == "UPSTAGE_UNAVAILABLE"
+
+
+def test_provider_rate_limit_is_distinct_and_key_not_leaked(monkeypatch):
+    monkeypatch.setenv("UPSTAGE_API_KEY", "test-key-not-real")
+
+    def limited(*args, **kwargs):
+        raise urllib.error.HTTPError("https://api.upstage.ai", 429, "Too Many", {}, None)
+
+    monkeypatch.setattr(live.urllib.request, "urlopen", limited)
+    with pytest.raises(live.LiveError) as error:
+        live._provider("system", {"x": 1}, 10)
+    assert (error.value.status, error.value.code) == (503, "UPSTAGE_RATE_LIMITED")
+    assert "test-key-not-real" not in repr(error.value.__dict__)
+
+
+def test_case_variant_track_is_normalized(monkeypatch):
+    monkeypatch.setenv("DEMO_ACCESS_CODE", "local-only")
+
+    def fake(system, user, max_tokens):
+        content = (
+            {"claim_id": user["claim_id"], "track": " Goal ", "safe_harbor_category": "NULL"}
+            if "sources" in user
+            else {"elements": []}
+        )
+        return {
+            "choices": [{"message": {"content": json.dumps(content)}}],
+            "usage": {"prompt_tokens": 100, "completion_tokens": 40},
+        }
+
+    result = live.run_claim(
+        {"claim": "2030년 배출량을 줄이겠다."}, access_code="local-only", call_model=fake
+    )
+    assert result["steps"][0]["track"] == "goal"
+    assert result["steps"][0]["safe_harbor_category"] is None
+    assert result["decision"]["evidence_grade"] is None
+
+
+def test_second_paid_call_skipped_when_time_budget_would_be_exceeded(monkeypatch):
+    monkeypatch.setenv("DEMO_ACCESS_CODE", "local-only")
+    clock = iter([0.0, 0.0, 34.0, 34.0, 34.0, 34.0])
+    monkeypatch.setattr(live, "monotonic", lambda: next(clock))
+    called = []
+
+    def fake(system, user, max_tokens):
+        called.append(max_tokens)
+        content = {"claim_id": user["claim_id"], "track": "goal", "safe_harbor_category": None}
+        return {
+            "choices": [{"message": {"content": json.dumps(content)}}],
+            "usage": {"prompt_tokens": 100, "completion_tokens": 40},
+        }
+
+    with pytest.raises(live.LiveError) as error:
+        live.run_claim(
+            {"claim": "2030년 배출을 줄입니다"}, access_code="local-only", call_model=fake
+        )
+    assert (error.value.status, error.value.code) == (504, "TIME_BUDGET_EXCEEDED")
+    assert called == [384]
+
+
+def test_http_handler_rejects_bad_bodies_without_model_call(monkeypatch):
+    monkeypatch.setenv("DEMO_ACCESS_CODE", "local-only")
+    called = []
+    monkeypatch.setattr(live, "_provider", lambda *args: called.append(args))
+    server = HTTPServer(("127.0.0.1", 0), live.handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        port = server.server_port
+        assert _post(port, b"") == (400, {"error": "INVALID_INPUT"})
+        assert _post(port, b"{not json") == (400, {"error": "INVALID_JSON"})
+        assert _post(port, b"[]") == (400, {"error": "INVALID_INPUT"})
+        too_long = json.dumps({"claim": "가" * 501}).encode()
+        assert _post(port, too_long) == (400, {"error": "INVALID_INPUT"})
+        multi_line = json.dumps({"claim": "첫 줄\n둘째 줄"}).encode()
+        assert _post(port, multi_line) == (400, {"error": "INVALID_INPUT"})
+        extra = json.dumps({"claim": "문장", "grade": "E4"}).encode()
+        assert _post(port, extra) == (400, {"error": "INVALID_INPUT"})
+        assert _post(port, b"x" * (live.MAX_BODY + 1)) == (413, {"error": "BODY_TOO_LARGE"})
+        assert _post(port, json.dumps({"claim": "문장"}).encode(), code="wrong") == (
+            403,
+            {"error": "ACCESS_DENIED"},
+        )
+        assert not called
     finally:
         server.shutdown()
         server.server_close()

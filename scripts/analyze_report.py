@@ -80,17 +80,29 @@ class PlanError(ValueError):
 
 
 def parse_pages(raw: str) -> list[int]:
-    """Sorted, de-duplicated 1-based page list; reject non-positive/non-int entries."""
+    """Expand explicit 1-based pages/ranges with a bounded allocation."""
     pages: set[int] = set()
     for chunk in raw.split(","):
         token = chunk.strip()
         if not token:
             continue
+        if "-" in token and not token.startswith("-"):
+            bounds = token.split("-")
+            try:
+                if len(bounds) != 2:
+                    raise ValueError
+                first, last = (int(bound.strip()) for bound in bounds)
+            except ValueError as exc:
+                raise PlanError(f"invalid page range {token!r}; use e.g. 1-3") from exc
+            if not 1 <= first <= last <= 1000:
+                raise PlanError(f"page range {token!r} must be ascending within 1..1000")
+            pages.update(range(first, last + 1))
+            continue
         try:
             value = int(token)
         except ValueError as exc:
             raise PlanError(
-                f"invalid page value {token!r}; use comma-separated 1-based ints"
+                f"invalid page value {token!r}; use comma-separated pages or ranges"
             ) from exc
         if value < 1:
             raise PlanError(f"page numbers are 1-based; {value} is out of range")
@@ -434,6 +446,13 @@ def plan_run(args: argparse.Namespace) -> dict:
     auto_scope_proposal: dict | None = None
     auto_scope_applied: dict | None = None
     auto_scope_artifact: Path | None = None
+    all_pages = bool(getattr(args, "all_pages", False))
+    if all_pages and (args.pages is not None or getattr(args, "auto_scope", False)):
+        raise PlanError("--all-pages cannot be combined with --pages or --auto-scope")
+    if getattr(args, "auto_scope_max_pages", None) is not None and not getattr(
+        args, "auto_scope", False
+    ):
+        raise PlanError("--auto-scope-max-pages requires --auto-scope")
     if getattr(args, "auto_scope", False):
         if args.pages is not None:
             raise PlanError("--auto-scope cannot be combined with an explicit --pages")
@@ -451,9 +470,13 @@ def plan_run(args: argparse.Namespace) -> dict:
             pdf, auto_scope_proposal, auto_scope_applied
         )
     else:
-        if args.pages is None:
-            raise PlanError("--pages is required unless --auto-scope is set")
-        pages = parse_pages(args.pages)
+        if all_pages:
+            _validate_pdf_file(pdf)
+            pages = list(range(1, _pdf_page_count(pdf) + 1))
+        else:
+            if args.pages is None:
+                raise PlanError("--pages is required unless --auto-scope or --all-pages is set")
+            pages = parse_pages(args.pages)
         claim_pages = None
         raw_claim_pages = getattr(args, "claim_pages", None)
         if raw_claim_pages is not None:
@@ -543,6 +566,7 @@ def plan_run(args: argparse.Namespace) -> dict:
         "pages": pages,
         "claim_pages": claim_pages,
         "page_count": page_count,
+        "all_pages": all_pages,
         "invoke": bool(args.invoke),
         "serve": bool(args.serve),
         "port": args.port,
@@ -590,6 +614,11 @@ def print_plan(plan: dict) -> None:
             print("    Full proposed scope is used (no --auto-scope-max-pages exclusion).")
         print(f"  auto-scope artifact:          {plan['auto_scope_artifact']}")
     print(f"  pages:     {plan['pages']}")
+    if plan.get("all_pages"):
+        print(
+            "  Full-document page selection; this is not proof of completed processing. "
+            "Call budgets, source verification and review gates remain unchanged."
+        )
     claim_scope = plan["claim_pages"] if plan["claim_pages"] is not None else "(all selected pages)"
     print(f"  claim_pages: {claim_scope}")
     table_mode = (
@@ -641,12 +670,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--pages",
         default=None,
-        help="Comma-separated 1-based pages, e.g. '30,31'. Required unless --auto-scope.",
+        help="1-based pages/ranges, e.g. '30-35,84'. Required unless --auto-scope/--all-pages.",
+    )
+    parser.add_argument(
+        "--all-pages",
+        action="store_true",
+        help="Explicitly select every physical page for parsing/evidence. Optional "
+        "--claim-pages limits extraction only. Does not raise call or money budgets, "
+        "approve evidence, or imply full processing completion.",
     )
     parser.add_argument(
         "--claim-pages",
         default=None,
-        help="Optional comma-separated 1-based subset of --pages to extract claims from. "
+        help="Optional 1-based pages/ranges within the selected pages to extract claims from. "
         "Parsing and evidence still cover all --pages; omit to keep legacy behaviour. "
         "Not compatible with --auto-scope (which derives both scopes itself).",
     )
