@@ -1,0 +1,28 @@
+{
+  "schema": "submission-kia-pinned-inputs-1",
+  "note": "Public-source identities only. Hashes pin the exact bytes this case was built from; a different byte copy is refused, not silently accepted.",
+  "sr_page_count": 134,
+  "sr_source": {
+    "url": "https://worldwide.kia.com/files/sustainability/sustainability-report/oe/198434396/zmqm/198434649euyt.pdf",
+    "landing_page": "https://worldwide.kia.com/ko/company/sustainability/esg/sustainability-report",
+    "retrieved_on": "2026-09-29",
+    "prior_developer_a_sha256": "d0d814d98c4aeedbbdb2bf8631b8981ae5cde94dec32aa32c57510420274da1f"
+  },
+  "sr_period_quote": "2024년 1월 1일부터 2024년 12월 31일까지",
+  "financial_identity": {
+    "company_id": "kr-dart-corp-00106641",
+    "package_id": "kia-fy2024-sr2025-dart-20250313001390",
+    "rcept_no": "20250313001390",
+    "as_of_date": "2026-09-29"
+  },
+  "sha256": {
+    "sr_pdf": "9ce8f379b0e858efc2cd1940c4cd3f4f56d67d027e4897afe345d10856aa4b0f",
+    "a_snapshot": "65b84b10e4e2a4692133c1009182c7a83fc00bd8f0545447a33fe2628d9a6a3c",
+    "dart_facts": "546ce4cc266e69bf80f19c0c6ce3676cc2436130c021e7f0489819e8a02800bb",
+    "dart_annex_source_reference": "912439c9c6902d89b0621feb1c744a9b2b6c2112caa7dd872e3b6ee1c1778295",
+    "dart_annex_rows": "b06964b2d8fb15808d45d79dafd929c668ccb81d664cd660fd4aecd920c2743a",
+    "dart_annex_text": "1c99c114561f6c596745a53b2f6217198653ac59aaf1f7970209cf88021abd00",
+    "dart_filings_receipt": "666254020ca6a9e9fe36c24f4c3d23d474c5ef6edc62c93549080f52a85f9489",
+    "reconciliation_csv": "df4b7817184b3a5fcfcce948b3514b70335fbdd48c01172ea4c6d89869723017"
+  }
+}
