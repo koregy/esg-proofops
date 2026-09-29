@@ -12,6 +12,7 @@ import re
 import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
+from datetime import date
 from hashlib import sha256
 from typing import Any
 
@@ -43,8 +44,12 @@ MATCH_RULES = {
     "version": "task-007-v1",
     "scope": "exact-nfc-subset",
     "period": "exact-year-literal-yyyy-yyyy년-yyyy년도",
+    "period_interval": (
+        "explicit-calendar-date-interval-iso-dotted-korean;"
+        "equal-yes;disjoint-or-exceeds-no;contained-unknown;year-vs-interval-unknown"
+    ),
     "unknown": "undetermined",
-    "exclusion": "explicit-dimension-first-exact-year-or-unresolved",
+    "exclusion": "explicit-dimension-first-exact-year-or-overlapping-interval-or-unresolved",
     "multiple_scope_axes": "undetermined-without-scoped-extraction",
     "levels": LEVELS,
 }
@@ -351,6 +356,55 @@ def _normalize_year(value: str | None) -> str | None:
     return None
 
 
+_DATE = (
+    r"(?:([0-9]{4})-([0-9]{2})-([0-9]{2})"
+    r"|([0-9]{4})\.\s*([0-9]{1,2})\.\s*([0-9]{1,2})\.?"
+    r"|([0-9]{4})년\s*([0-9]{1,2})월\s*([0-9]{1,2})일)"
+)
+_INTERVAL = re.compile(
+    rf"{_DATE}\s*(?:(?:~|～|–|—|-|to)\s*{_DATE}|부터\s*{_DATE}\s*까지)", re.IGNORECASE
+)
+
+
+def _normalize_interval(value: str | None) -> tuple[date, date] | None:
+    """Match-time explicit calendar date interval with both endpoints spelled out.
+
+    Accepts whole-string `YYYY-MM-DD`, `YYYY.MM.DD` (optional spaces/trailing
+    dot) or `YYYY년 M월 D일` endpoints joined by ~/～/–/—/-/to or
+    `...부터 ...까지`. Endpoints must be valid Gregorian dates in order. Single
+    dates, year labels, omitted endpoint years, fiscal labels and extra prose
+    return None: no report date, calendar year or fiscal year is inferred.
+    Stored fields are never rewritten.
+    """
+    if not isinstance(value, str):
+        return None
+    match = _INTERVAL.fullmatch(_text(value))
+    if match is None:
+        return None
+    parts = [int(g) for g in match.groups() if g is not None]
+    if len(parts) != 6:
+        return None
+    try:
+        start, end = date(*parts[:3]), date(*parts[3:])
+    except ValueError:
+        return None
+    return (start, end) if start <= end else None
+
+
+def _compare_intervals(claim: tuple[date, date], statement: tuple[date, date]) -> str:
+    """Exact interval is `yes`; any claim day outside the opinion is `no`.
+
+    A claim period strictly inside the opinion period stays `unknown`: the
+    contract requires the period itself to match, and an annual opinion is
+    not evidence that a sub-period figure was assured.
+    """
+    if claim == statement:
+        return "yes"
+    if statement[0] <= claim[0] and claim[1] <= statement[1]:
+        return "unknown"
+    return "no"
+
+
 def _validated_dimension_text(ref, *, claim, original, tenant_id: str) -> str | None:
     """Return the literal dimension quote when it is source-bound to this claim.
 
@@ -401,8 +455,9 @@ def _normalize_reporting_period(text: str | None) -> str | None:
 
     Exact `YYYY`, `YYYY년`, or `YYYY 년도`/`YYYY년도` maps to `YYYY` at the
     claim-context build step (the stored SourceRef keeps the original quote).
-    Ranges, multi-year phrases, or inferred years return literally so
-    `match_assurance` keeps them `unknown`.
+    Ranges, date intervals, multi-year phrases, or inferred years return
+    literally; `match_assurance` parses explicit date intervals at match time
+    and keeps everything else `unknown`.
     """
     if text is None:
         return None
@@ -465,9 +520,13 @@ def claim_context_from_review_inputs(review_inputs, *, tenant_id, document_versi
 def match_assurance(statement: AssuranceStatement | None, claim: ClaimContext) -> AssuranceMatch:
     """Match one opinion at a time; never merge providers or promote assurance level.
 
-    Period compares exact single-year literals only (YYYY, YYYY년, YYYY 년도),
-    normalized at match time on both comparands without rewriting stored
-    fields; ranges and extra prose stay unknown. ponytail: exact names only;
+    Period compares exact single-year literals (YYYY, YYYY년, YYYY 년도) with
+    each other and explicit calendar date intervals (`_normalize_interval`)
+    with each other, normalized at match time on both comparands without
+    rewriting stored fields. A year never compares with an interval; year
+    ranges and extra prose stay unknown. An excluded interval that overlaps the
+    claim interval excludes it; incomparable exclusions leave the statement
+    unresolved. ponytail: exact names only;
     approved alias normalization can extend this when supplied, without fuzzy
     scope expansion.
     """
@@ -485,8 +544,12 @@ def match_assurance(statement: AssuranceStatement | None, claim: ClaimContext) -
         statement_year = (
             _normalize_year(statement.reporting_period) if statement.reporting_period else None
         )
+        claim_interval = _normalize_interval(claim.reporting_period)
+        statement_interval = _normalize_interval(statement.reporting_period)
         if claim_year is not None and statement_year is not None:
             period = "yes" if claim_year == statement_year else "no"
+        elif claim_interval is not None and statement_interval is not None:
+            period = _compare_intervals(claim_interval, statement_interval)
         entity = _subset(claim.entities, statement.entities)
         facility = _subset(claim.facilities, statement.facilities)
         boundary = (
@@ -507,10 +570,33 @@ def match_assurance(statement: AssuranceStatement | None, claim: ClaimContext) -
             )
         )
         excluded_years = tuple(_normalize_year(value) for value in statement.excluded_periods)
-        excluded = excluded or (claim_year is not None and claim_year in excluded_years)
+        excluded_intervals = tuple(
+            _normalize_interval(value) for value in statement.excluded_periods
+        )
+        excluded = (
+            excluded
+            or (claim_year is not None and claim_year in excluded_years)
+            or (
+                claim_interval is not None
+                and any(
+                    interval is not None
+                    and interval[0] <= claim_interval[1]
+                    and claim_interval[0] <= interval[1]
+                    for interval in excluded_intervals
+                )
+            )
+        )
         uncertain = (
             statement.unresolved_fields
-            or any(year is None for year in excluded_years)
+            or any(
+                year is None and interval is None
+                for year, interval in zip(excluded_years, excluded_intervals, strict=True)
+            )
+            or (claim_year is not None and any(year is None for year in excluded_years))
+            or (
+                claim_interval is not None
+                and any(interval is None for interval in excluded_intervals)
+            )
             or any(name == "explicit_exclusions" for name, _ in statement.explicit_exclusions)
         )
         if "scope_group" in statement.unresolved_fields:

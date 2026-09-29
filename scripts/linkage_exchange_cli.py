@@ -63,7 +63,7 @@ def _load_financial_context(path: Path):
         FinancialSource,
     )
 
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8"))
     financial = FinancialFact(**data["financial"])
     sources = tuple(FinancialSource(**s) for s in data.get("financial_sources", []))
     c3 = C3Context(**data["c3_context"]) if data.get("c3_context") else None
@@ -75,6 +75,21 @@ def _load_financial_context(path: Path):
     }
     return FinancialContext(
         **kwargs, financial=financial, financial_sources=sources, c3_context=c3, c4_context=c4
+    )
+
+
+def _load_c1_entity_set_review(path: Path):
+    from proofops.application.linkage_exchange import (
+        C1EntitySetReview,
+        ReviewedEntity,
+        ReviewedSourceBinding,
+    )
+
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return C1EntitySetReview(
+        **{k: v for k, v in data.items() if k not in ("entities", "source_bindings")},
+        entities=tuple(ReviewedEntity(**e) for e in data["entities"]),
+        source_bindings=tuple(ReviewedSourceBinding(**b) for b in data["source_bindings"]),
     )
 
 
@@ -217,15 +232,15 @@ def reviewed_head_tags(claims, claim, *, tenant_id: str, run_id: str, claim_id: 
     return confirmed, head_revision
 
 
-def _cmd_build_packet(args: argparse.Namespace) -> int:
+def _open_claims(database_path_arg: str):
+    """Open the local run's claim and upload stores exactly as build-packet always has."""
     from proofops.adapters.local.claim_store import LocalClaimStore
     from proofops.adapters.local.run_store import LocalSQLiteRunStore
     from proofops.adapters.parsing.opendataloader import OpenDataLoaderParser
-    from proofops.application.linkage_exchange import BlockedPacket, C2PeriodContext, build_packet
     from proofops.application.registry import Registry
     from proofops.application.uploads import UploadService
 
-    database_path = Path(args.database_path)
+    database_path = Path(database_path_arg)
     if database_path.is_dir():
         for candidate in ("state.sqlite3", "storage.db", "runs.sqlite"):
             if (database_path / candidate).is_file():
@@ -251,6 +266,13 @@ def _cmd_build_packet(args: argparse.Namespace) -> int:
 
     parser = OpenDataLoaderParser(parser_dir)
     claims = LocalClaimStore(run_store, uploads, parser)
+    return claims, uploads
+
+
+def _cmd_build_packet(args: argparse.Namespace) -> int:
+    from proofops.application.linkage_exchange import BlockedPacket, C2PeriodContext, build_packet
+
+    claims, uploads = _open_claims(args.database_path)
 
     try:
         claim = claims.get(args.tenant_id, args.run_id, args.claim_id)
@@ -418,7 +440,9 @@ def _cmd_build_packet(args: argparse.Namespace) -> int:
     period_context = None
     if getattr(args, "c2_period_context", None):
         try:
-            period_context = C2PeriodContext(**json.loads(Path(args.c2_period_context).read_text()))
+            period_context = C2PeriodContext(
+                **json.loads(Path(args.c2_period_context).read_text(encoding="utf-8"))
+            )
             if args.item != "C2":
                 raise ValueError("period context is only supported for C2")
         except (OSError, ValueError, TypeError) as exc:
@@ -433,6 +457,36 @@ def _cmd_build_packet(args: argparse.Namespace) -> int:
             )
             return 1
 
+    entity_review = None
+    if getattr(args, "c1_entity_set_review", None):
+        try:
+            entity_review = _load_c1_entity_set_review(Path(args.c1_entity_set_review))
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            print(
+                json.dumps(
+                    {
+                        "execution_state": "blocked",
+                        "reason": "invalid_c1_entity_set_review",
+                        "detail": str(exc),
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            return 1
+    receipt_out = getattr(args, "c1_review_receipt_out", None)
+    if receipt_out and (entity_review is None or Path(receipt_out).exists()):
+        print(
+            json.dumps(
+                {
+                    "execution_state": "blocked",
+                    "reason": "invalid_c1_review_receipt_out",
+                    "detail": "receipt output needs --c1-entity-set-review and a new path",
+                },
+                ensure_ascii=False,
+            )
+        )
+        return 2
+
     result = build_packet(
         claim=claim,
         tags=confirmed_tags,
@@ -444,6 +498,8 @@ def _cmd_build_packet(args: argparse.Namespace) -> int:
         sr_published_at=sr_published_at,
         trusted_company_id=trusted_company_id,
         c2_period_context=period_context,
+        run_id=args.run_id,
+        c1_entity_set_review=entity_review,
     )
     if isinstance(result, BlockedPacket):
         print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
@@ -459,7 +515,9 @@ def _cmd_build_packet(args: argparse.Namespace) -> int:
 
         financial_local_paths = {}
         if getattr(args, "financial_local_paths", None):
-            financial_local_paths = json.loads(Path(args.financial_local_paths).read_text())
+            financial_local_paths = json.loads(
+                Path(args.financial_local_paths).read_text(encoding="utf-8")
+            )
         try:
             verify_packet_sources(
                 result,
@@ -492,7 +550,72 @@ def _cmd_build_packet(args: argparse.Namespace) -> int:
         )
         return 1
 
+    if receipt_out:
+        from proofops.application.linkage_exchange import c1_review_receipt
+
+        with Path(receipt_out).open("x", encoding="utf-8") as handle:
+            json.dump(
+                c1_review_receipt(entity_review, result), handle, ensure_ascii=False, indent=2
+            )
     print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+    return 0
+
+
+def _cmd_draft_c1_review(args: argparse.Namespace) -> int:
+    """Emit a C1EntitySetReview draft whose pins all come from the trusted head.
+
+    Tenant, company, run, claim, version, accepted tag revision, fact value and
+    verified evidence quotes are copied from the stores, never typed by hand.
+    `entities` stays empty: the reviewer (human or delegated AI) must name each
+    ID with a literal label from a bound quote, so the draft alone never builds.
+    """
+    from proofops.application.linkage_exchange import C1_REVIEW_FACT_NAMES, _verified_triggers
+
+    def refuse(reason: str, detail: str) -> int:
+        print(json.dumps({"execution_state": "blocked", "reason": reason, "detail": detail}))
+        return 1
+
+    claims, uploads = _open_claims(args.database_path)
+    try:
+        claim = claims.get(args.tenant_id, args.run_id, args.claim_id)
+        snap = uploads.version_snapshot(args.tenant_id, claim.document_version_id)
+        company_id = uploads.get_document(args.tenant_id, snap["document_id"])["company_id"]
+        tags, _revision = reviewed_head_tags(
+            claims, claim, tenant_id=args.tenant_id, run_id=args.run_id, claim_id=args.claim_id
+        )
+    except (ReviewedHeadRejected, KeyError, ValueError) as exc:
+        return refuse("review_head_unreadable", str(exc))
+    if tags is None:
+        return refuse("missing_confirmed_tags", "no accepted review head for this claim")
+    trigger = next(
+        (t for t in _verified_triggers(tags) if t.fact_name in C1_REVIEW_FACT_NAMES), None
+    )
+    if trigger is None or trigger.normalized_value is None:
+        return refuse(
+            "no_verified_boundary_fact", "no confirmed present, verified org_boundary fact"
+        )
+    draft = {
+        "synthetic": args.synthetic,
+        "tenant_id": args.tenant_id,
+        "company_id": company_id,
+        "run_id": args.run_id,
+        "claim_id": args.claim_id,
+        "document_version_id": claim.document_version_id,
+        "tag_revision": tags.tag_revision,
+        "fact_name": trigger.fact_name,
+        "fact_value": trigger.normalized_value,
+        "kind": "entity_set",
+        "entities": [],
+        "source_bindings": [
+            {"source_id": ref.source_id, "quote": ref.quote} for ref in trigger.evidence_refs
+        ],
+        "review_id": None,
+        "reviewed_by": None,
+        "reviewed_at": None,
+        "review_origin": None,
+    }
+    with Path(args.output).open("x", encoding="utf-8") as handle:
+        json.dump(draft, handle, ensure_ascii=False, indent=2)
     return 0
 
 
@@ -526,10 +649,12 @@ def _cmd_verify_return(args: argparse.Namespace) -> int:
     from proofops.application.registry import Registry
     from proofops.application.uploads import UploadService
 
-    packet = json.loads(Path(args.input).read_text())
+    packet = json.loads(Path(args.input).read_text(encoding="utf-8"))
     financial_local_paths = {}
     if args.financial_local_paths:
-        financial_local_paths = json.loads(Path(args.financial_local_paths).read_text())
+        financial_local_paths = json.loads(
+            Path(args.financial_local_paths).read_text(encoding="utf-8")
+        )
 
     database_path = Path(args.database_path)
     registry = Registry.sqlite(database_path)
@@ -598,8 +723,36 @@ def main(argv: list[str] | None = None) -> int:
             "(required for non-synthetic ready packet byte verification)"
         ),
     )
+    build.add_argument(
+        "--c1-entity-set-review",
+        help=(
+            "C1 only: JSON C1EntitySetReview pinned to this tenant/company/run/claim/version/"
+            "tag revision; types a confirmed boundary sentence as source-bound entity IDs"
+        ),
+    )
+    build.add_argument(
+        "--c1-review-receipt-out",
+        help="write the separate review approval receipt (never merged into the packet)",
+    )
     build.add_argument("--contract-dir", default=str(CONTRACT_DIR_DEFAULT))
     build.set_defaults(func=_cmd_build_packet)
+
+    draft = sub.add_parser(
+        "draft-c1-review",
+        help="write a C1EntitySetReview draft pinned to the trusted accepted review head",
+    )
+    draft.add_argument("--tenant-id", required=True)
+    draft.add_argument("--run-id", required=True)
+    draft.add_argument("--claim-id", required=True)
+    draft.add_argument("--database-path", required=True)
+    draft.add_argument("--output", required=True, help="new file; never overwritten")
+    draft.add_argument(
+        "--synthetic",
+        action=argparse.BooleanOptionalAction,
+        required=True,
+        help="must equal the FinancialContext synthetic flag used at build time",
+    )
+    draft.set_defaults(func=_cmd_draft_c1_review)
 
     verify = sub.add_parser(
         "verify-return", help="validate.py return-mode PLUS byte-level source verification"
