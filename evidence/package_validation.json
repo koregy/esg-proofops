@@ -1,9 +1,9 @@
 {
-  "checked_at": "2026-09-23T06:54:42.845514+00:00",
+  "checked_at": "2026-09-29T01:29:07.326589+00:00",
   "scope": "documentation, structured contracts and synthetic schema examples only",
   "status": "passed",
-  "checks_total": 976,
-  "passed": 976,
+  "checks_total": 974,
+  "passed": 974,
   "failed": 0,
   "counts": {
     "numbered_documents": 35,
@@ -54,6 +54,11 @@
       "detail": ""
     },
     {
+      "name": "json:package.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
       "name": "json:PACKAGE_MANIFEST.json",
       "passed": true,
       "detail": ""
@@ -64,547 +69,27 @@
       "detail": ""
     },
     {
-      "name": "json:package.json",
+      "name": "json:vercel.json",
       "passed": true,
       "detail": ""
     },
     {
-      "name": "json:infra/cdk/package.json",
+      "name": "json:api/rulepack.json",
       "passed": true,
       "detail": ""
     },
     {
-      "name": "json:infra/cdk/tsconfig.json",
+      "name": "json:apps/web/package.json",
       "passed": true,
       "detail": ""
     },
     {
-      "name": "json:evidence/upstage-tagging-diagnostics.json",
+      "name": "json:apps/web/tsconfig.json",
       "passed": true,
       "detail": ""
     },
     {
-      "name": "json:evidence/developer-a-live-20260918.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/doosan-independent-raster-ocr-20260919.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/parser_dependency_notices.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/live-tagging-kb-schema-20260919.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/live-tagging-kb-source-blockers-20260919.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/native-spacing-fix-20260919.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/preliminary-ensemble-20260919.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/semantic-review-results.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/raster-prose-downstream-live-20260919.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/context-loop-results.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/live-tagging-kb-baseline-20260919.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/context-loop-review.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/native-cold-replay-profile-20260919.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/context-retrieval-results.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/legacy_inspection.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/live-tagging-kb-rubric-20260919.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/preliminary-period-frequency-20260919.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/metric-split-real-cases.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/extraction-assurance-ab-20260919.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/atomic-expanded-results.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/clause-context-results.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/raster-v5-two-report-live-20260919.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/numeric-basis-review.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/doosan-source-visual-diagnostic-20260919.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/section-map-results.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/semantic-dimension-results.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/live-tagging-kb-m3-replay-20260919.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/local-upstage-service-pilot.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/native-ocr-linux-replay-cause-20260919.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/orchestration_tasks.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/table-role-guard-replay.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/live-tagging-doosan-emptyform-20260919.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/live-tagging-kb-relations-20260919.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/live-tagging-blockers-20260919.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/semantic-context-fewshot.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/semantic-context-results.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/semantic-capability-cases.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/local-direct-attribution-replay-20260919.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/live-tagging-doosan-source-repair-20260919.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/semantic-expanded-diagnostics.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/semantic-expanded-results.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/doosan-paragraph-geometry-20260919.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/raster-cache-prose-live-20260919.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/semantic-clauses-review.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/live-relation-disagreements-20260919.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/claim-dimension-results.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/live-tagging-doosan-glyph-20260919.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/live-tagging-kb-source-repair-20260919.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/preliminary-probes-20260918.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/semantic-isolated-results.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/doosan-independent-raster-replay-20260919.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/live-tagging-doosan-relation-isolation-20260919.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/live-tagging-doosan-coverage-20260919.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/live-tagging-doosan-examples-20260919.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/metric-split-results.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/table-recovery-results.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/atomic-coverage-results.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/live-tagging-doosan-quotes-20260919.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/live-tagging-doosan-baseline-20260919.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/raster-page-usage-replay-20260919.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/native-spacing-probe-20260919.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/atomic-expanded-review.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/section-pipeline-results.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/upstage-price-recheck-20260918.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/live-tagging-kb-local-attribution-20260919.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/measurement-role-results.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/local-evidence-search-20260919.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/semantic-capability-results.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/native-replay-cache-benchmark-20260919.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/local-relation-scope-replay-20260919.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/semantic-context-cases.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/retrieval-repair-results.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/live-tagging-kb-m3-prompt-20260919.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/preliminary-examples-ab-20260919.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/ocr-punctuation-what-if-20260919.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/parser-extraction-comparison.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/service-loop-results.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/raster-prose-priority-replay-20260919.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/atomic-recovery-results.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/cross-report-service-results.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/semantic-token-results.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/table-role-results.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/quantity-candidate-results.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/doosan-native-raster-visibility-20260919.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/semantic-isolated-review.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/native-ocr-padding-20260919.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/table-context/cross-report.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/source-binding/replay.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/table-note-review/note-discriminator-evaluation.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/table-note-review/automatic-worker-live.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/table-note-review/unresolved-note-evaluation.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/table-note-review/unseen-layout-evaluation.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/complex-table-roles/layout-comparison.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/complex-table-roles/live-comparison.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/document-atomic/schema.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/document-atomic/live-comparison.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/table-notes/probe-summary.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/dense-note-input/probe-summary.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/agent-visual-review/samsung-life-table-context-v2.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/agent-visual-review/samsung-life.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/agent-visual-review/kepco-table-context-v2.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/agent-visual-review/kepco.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/agent-visual-review/table-context-replay.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/table-atomic-claims/live-comparison.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:evidence/document-coverage/replay.json",
+      "name": "json:apps/web/public/demo/naver-2025.json",
       "passed": true,
       "detail": ""
     },
@@ -619,167 +104,7 @@
       "detail": ""
     },
     {
-      "name": "json:handoff/2026-09-18/contract/example-policy.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:handoff/2026-09-18/contract/input.schema.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:handoff/2026-09-18/contract/policy.schema.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:handoff/2026-09-18/contract/example-output.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:handoff/2026-09-18/contract/output.schema.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:handoff/2026-09-18/contract/example-input.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:handoff/2026-09-18/reference/manifest.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:handoff/team-v2/contract/example-policy.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:handoff/team-v2/contract/input.schema.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:handoff/team-v2/contract/policy.schema.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:handoff/team-v2/contract/example-output.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:handoff/team-v2/contract/output.schema.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:handoff/team-v2/contract/example-input.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:handoff/team-v2/contract/v1/example-policy.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:handoff/team-v2/contract/v1/input.schema.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:handoff/team-v2/contract/v1/policy.schema.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:handoff/team-v2/contract/v1/example-output.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:handoff/team-v2/contract/v1/output.schema.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:handoff/team-v2/contract/v1/example-input.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:handoff/team-v2/contract/examples/c1-different-entity-types.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:handoff/team-v2/contract/examples/c3-policy-unresolved.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:handoff/team-v2/contract/examples/c4-definition-and-method.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:handoff/team-v2/contract/examples/c2-same-period.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:handoff/team-v2/contract/examples/c4-search-incomplete.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:handoff/team-v2/contract/examples/c1-difference-no-explanation.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:handoff/team-v2/contract/examples/c1-same-entities.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:handoff/team-v2/contract/examples/c1-search-incomplete.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:handoff/team-v2/reference/manifest.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:contracts/task_execution_order.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:contracts/environment_variables.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:contracts/task_catalog.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
       "name": "json:contracts/api_operations.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:contracts/storage_entities.json",
       "passed": true,
       "detail": ""
     },
@@ -789,7 +114,67 @@
       "detail": ""
     },
     {
+      "name": "json:contracts/environment_variables.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
       "name": "json:contracts/requirement_catalog.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:contracts/storage_entities.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:contracts/task_catalog.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:contracts/task_execution_order.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:contracts/jsonschema/api_models.schema.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:contracts/jsonschema/document_graph.schema.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:contracts/jsonschema/llm_tags.schema.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:contracts/jsonschema/preliminary_tags.schema.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:contracts/jsonschema/source_relations.schema.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:contracts/reconciliation/collection_manifest.schema.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:contracts/reconciliation/example-input.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:contracts/reconciliation/example-output.json",
       "passed": true,
       "detail": ""
     },
@@ -804,57 +189,22 @@
       "detail": ""
     },
     {
-      "name": "json:contracts/reconciliation/policy.schema.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:contracts/reconciliation/collection_manifest.schema.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:contracts/reconciliation/example-output.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
       "name": "json:contracts/reconciliation/output.schema.json",
       "passed": true,
       "detail": ""
     },
     {
-      "name": "json:contracts/reconciliation/example-input.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:contracts/reconciliation/examples/c1-different-entity-types.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:contracts/reconciliation/examples/c3-policy-unresolved.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:contracts/reconciliation/examples/c4-definition-and-method.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:contracts/reconciliation/examples/c2-same-period.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:contracts/reconciliation/examples/c4-search-incomplete.json",
+      "name": "json:contracts/reconciliation/policy.schema.json",
       "passed": true,
       "detail": ""
     },
     {
       "name": "json:contracts/reconciliation/examples/c1-difference-no-explanation.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:contracts/reconciliation/examples/c1-different-entity-types.json",
       "passed": true,
       "detail": ""
     },
@@ -869,52 +219,552 @@
       "detail": ""
     },
     {
-      "name": "json:contracts/jsonschema/preliminary_tags.schema.json",
+      "name": "json:contracts/reconciliation/examples/c2-same-period.json",
       "passed": true,
       "detail": ""
     },
     {
-      "name": "json:contracts/jsonschema/document_graph.schema.json",
+      "name": "json:contracts/reconciliation/examples/c3-policy-unresolved.json",
       "passed": true,
       "detail": ""
     },
     {
-      "name": "json:contracts/jsonschema/api_models.schema.json",
+      "name": "json:contracts/reconciliation/examples/c4-definition-and-method.json",
       "passed": true,
       "detail": ""
     },
     {
-      "name": "json:contracts/jsonschema/llm_tags.schema.json",
+      "name": "json:contracts/reconciliation/examples/c4-search-incomplete.json",
       "passed": true,
       "detail": ""
     },
     {
-      "name": "json:contracts/jsonschema/source_relations.schema.json",
+      "name": "json:evidence/atomic-coverage-results.json",
       "passed": true,
       "detail": ""
     },
     {
-      "name": "json:packages/proofops/application/reconciliation/schemas/input.schema.json",
+      "name": "json:evidence/atomic-expanded-results.json",
       "passed": true,
       "detail": ""
     },
     {
-      "name": "json:packages/proofops/application/reconciliation/schemas/policy.schema.json",
+      "name": "json:evidence/atomic-expanded-review.json",
       "passed": true,
       "detail": ""
     },
     {
-      "name": "json:packages/proofops/application/reconciliation/schemas/output.schema.json",
+      "name": "json:evidence/atomic-recovery-results.json",
       "passed": true,
       "detail": ""
     },
     {
-      "name": "json:sources/source_manifest.json",
+      "name": "json:evidence/claim-dimension-results.json",
       "passed": true,
       "detail": ""
     },
     {
-      "name": "json:sources/external_sources.json",
+      "name": "json:evidence/clause-context-results.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/context-loop-results.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/context-loop-review.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/context-retrieval-results.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/cross-report-service-results.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/developer-a-live-20260918.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/doosan-independent-raster-ocr-20260919.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/doosan-independent-raster-replay-20260919.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/doosan-native-raster-visibility-20260919.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/doosan-paragraph-geometry-20260919.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/doosan-source-visual-diagnostic-20260919.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/extraction-assurance-ab-20260919.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/legacy_inspection.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/live-relation-disagreements-20260919.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/live-tagging-blockers-20260919.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/live-tagging-doosan-baseline-20260919.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/live-tagging-doosan-coverage-20260919.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/live-tagging-doosan-emptyform-20260919.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/live-tagging-doosan-examples-20260919.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/live-tagging-doosan-glyph-20260919.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/live-tagging-doosan-quotes-20260919.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/live-tagging-doosan-relation-isolation-20260919.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/live-tagging-doosan-source-repair-20260919.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/live-tagging-kb-baseline-20260919.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/live-tagging-kb-local-attribution-20260919.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/live-tagging-kb-m3-prompt-20260919.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/live-tagging-kb-m3-replay-20260919.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/live-tagging-kb-relations-20260919.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/live-tagging-kb-rubric-20260919.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/live-tagging-kb-schema-20260919.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/live-tagging-kb-source-blockers-20260919.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/live-tagging-kb-source-repair-20260919.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/local-direct-attribution-replay-20260919.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/local-evidence-search-20260919.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/local-relation-scope-replay-20260919.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/local-upstage-service-pilot.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/measurement-role-results.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/metric-split-real-cases.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/metric-split-results.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/native-cold-replay-profile-20260919.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/native-ocr-linux-replay-cause-20260919.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/native-ocr-padding-20260919.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/native-replay-cache-benchmark-20260919.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/native-spacing-fix-20260919.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/native-spacing-probe-20260919.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/numeric-basis-review.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/ocr-punctuation-what-if-20260919.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/orchestration_tasks.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/parser-extraction-comparison.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/parser_dependency_notices.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/preliminary-ensemble-20260919.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/preliminary-examples-ab-20260919.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/preliminary-period-frequency-20260919.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/preliminary-probes-20260918.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/quantity-candidate-results.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/raster-cache-prose-live-20260919.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/raster-page-usage-replay-20260919.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/raster-prose-downstream-live-20260919.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/raster-prose-priority-replay-20260919.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/raster-v5-two-report-live-20260919.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/retrieval-repair-results.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/section-map-results.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/section-pipeline-results.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/semantic-capability-cases.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/semantic-capability-results.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/semantic-clauses-review.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/semantic-context-cases.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/semantic-context-fewshot.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/semantic-context-results.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/semantic-dimension-results.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/semantic-expanded-diagnostics.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/semantic-expanded-results.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/semantic-isolated-results.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/semantic-isolated-review.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/semantic-review-results.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/semantic-token-results.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/service-loop-results.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/table-recovery-results.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/table-role-guard-replay.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/table-role-results.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/upstage-price-recheck-20260918.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/upstage-tagging-diagnostics.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/agent-visual-review/kepco-table-context-v2.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/agent-visual-review/kepco.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/agent-visual-review/samsung-life-table-context-v2.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/agent-visual-review/samsung-life.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/agent-visual-review/table-context-replay.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/complex-table-roles/layout-comparison.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/complex-table-roles/live-comparison.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/dense-note-input/probe-summary.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/document-atomic/live-comparison.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/document-atomic/schema.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/document-coverage/replay.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/source-binding/replay.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/table-atomic-claims/live-comparison.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/table-context/cross-report.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/table-note-review/automatic-worker-live.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/table-note-review/note-discriminator-evaluation.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/table-note-review/unresolved-note-evaluation.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/table-note-review/unseen-layout-evaluation.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/table-notes/probe-summary.json",
       "passed": true,
       "detail": ""
     },
@@ -934,12 +784,12 @@
       "detail": ""
     },
     {
-      "name": "json:fixtures/rule_cases.json",
+      "name": "json:fixtures/llm_tags_example.json",
       "passed": true,
       "detail": ""
     },
     {
-      "name": "json:fixtures/llm_tags_example.json",
+      "name": "json:fixtures/rule_cases.json",
       "passed": true,
       "detail": ""
     },
@@ -949,42 +799,152 @@
       "detail": ""
     },
     {
-      "name": "json:outputs/agent-results/R19-kb-native-differences.json",
+      "name": "json:handoff/2026-09-18/contract/example-input.json",
       "passed": true,
       "detail": ""
     },
     {
-      "name": "json:outputs/agent-results/R19-bullet-spacing.json",
+      "name": "json:handoff/2026-09-18/contract/example-output.json",
       "passed": true,
       "detail": ""
     },
     {
-      "name": "json:outputs/agent-results/R02g-layout-review/kia-layout.json",
+      "name": "json:handoff/2026-09-18/contract/example-policy.json",
       "passed": true,
       "detail": ""
     },
     {
-      "name": "json:outputs/agent-results/R02g-layout-review/lotte-layout.json",
+      "name": "json:handoff/2026-09-18/contract/input.schema.json",
       "passed": true,
       "detail": ""
     },
     {
-      "name": "json:outputs/agent-results/R16-live-table/summary.json",
+      "name": "json:handoff/2026-09-18/contract/output.schema.json",
       "passed": true,
       "detail": ""
     },
     {
-      "name": "json:outputs/agent-results/R16-live-table/proposal-used.json",
+      "name": "json:handoff/2026-09-18/contract/policy.schema.json",
       "passed": true,
       "detail": ""
     },
     {
-      "name": "json:outputs/agent-results/R16-live-table/manifest.json",
+      "name": "json:handoff/2026-09-18/reference/manifest.json",
       "passed": true,
       "detail": ""
     },
     {
-      "name": "json:outputs/agent-results/R13-table-recovery/lotte-p29-layout.json",
+      "name": "json:handoff/team-v2/contract/example-input.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:handoff/team-v2/contract/example-output.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:handoff/team-v2/contract/example-policy.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:handoff/team-v2/contract/input.schema.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:handoff/team-v2/contract/output.schema.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:handoff/team-v2/contract/policy.schema.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:handoff/team-v2/contract/examples/c1-difference-no-explanation.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:handoff/team-v2/contract/examples/c1-different-entity-types.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:handoff/team-v2/contract/examples/c1-same-entities.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:handoff/team-v2/contract/examples/c1-search-incomplete.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:handoff/team-v2/contract/examples/c2-same-period.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:handoff/team-v2/contract/examples/c3-policy-unresolved.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:handoff/team-v2/contract/examples/c4-definition-and-method.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:handoff/team-v2/contract/examples/c4-search-incomplete.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:handoff/team-v2/contract/v1/example-input.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:handoff/team-v2/contract/v1/example-output.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:handoff/team-v2/contract/v1/example-policy.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:handoff/team-v2/contract/v1/input.schema.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:handoff/team-v2/contract/v1/output.schema.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:handoff/team-v2/contract/v1/policy.schema.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:handoff/team-v2/reference/manifest.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:infra/cdk/package.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:infra/cdk/tsconfig.json",
       "passed": true,
       "detail": ""
     },
@@ -994,7 +954,7 @@
       "detail": ""
     },
     {
-      "name": "json:outputs/agent-fixtures/linkage-contract/example-policy.json",
+      "name": "json:outputs/agent-fixtures/linkage-contract/collection_manifest.schema.json",
       "passed": true,
       "detail": ""
     },
@@ -1004,17 +964,7 @@
       "detail": ""
     },
     {
-      "name": "json:outputs/agent-fixtures/linkage-contract/input.schema.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:outputs/agent-fixtures/linkage-contract/policy.schema.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:outputs/agent-fixtures/linkage-contract/collection_manifest.schema.json",
+      "name": "json:outputs/agent-fixtures/linkage-contract/example-input.json",
       "passed": true,
       "detail": ""
     },
@@ -1024,72 +974,32 @@
       "detail": ""
     },
     {
+      "name": "json:outputs/agent-fixtures/linkage-contract/example-policy.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:outputs/agent-fixtures/linkage-contract/input.schema.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
       "name": "json:outputs/agent-fixtures/linkage-contract/output.schema.json",
       "passed": true,
       "detail": ""
     },
     {
-      "name": "json:outputs/agent-fixtures/linkage-contract/example-input.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:outputs/agent-fixtures/linkage-contract/v1/example-policy.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:outputs/agent-fixtures/linkage-contract/v1/input.schema.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:outputs/agent-fixtures/linkage-contract/v1/policy.schema.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:outputs/agent-fixtures/linkage-contract/v1/example-output.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:outputs/agent-fixtures/linkage-contract/v1/output.schema.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:outputs/agent-fixtures/linkage-contract/v1/example-input.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:outputs/agent-fixtures/linkage-contract/examples/c1-different-entity-types.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:outputs/agent-fixtures/linkage-contract/examples/c3-policy-unresolved.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:outputs/agent-fixtures/linkage-contract/examples/c4-definition-and-method.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:outputs/agent-fixtures/linkage-contract/examples/c2-same-period.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "json:outputs/agent-fixtures/linkage-contract/examples/c4-search-incomplete.json",
+      "name": "json:outputs/agent-fixtures/linkage-contract/policy.schema.json",
       "passed": true,
       "detail": ""
     },
     {
       "name": "json:outputs/agent-fixtures/linkage-contract/examples/c1-difference-no-explanation.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:outputs/agent-fixtures/linkage-contract/examples/c1-different-entity-types.json",
       "passed": true,
       "detail": ""
     },
@@ -1104,6 +1014,56 @@
       "detail": ""
     },
     {
+      "name": "json:outputs/agent-fixtures/linkage-contract/examples/c2-same-period.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:outputs/agent-fixtures/linkage-contract/examples/c3-policy-unresolved.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:outputs/agent-fixtures/linkage-contract/examples/c4-definition-and-method.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:outputs/agent-fixtures/linkage-contract/examples/c4-search-incomplete.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:outputs/agent-fixtures/linkage-contract/v1/example-input.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:outputs/agent-fixtures/linkage-contract/v1/example-output.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:outputs/agent-fixtures/linkage-contract/v1/example-policy.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:outputs/agent-fixtures/linkage-contract/v1/input.schema.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:outputs/agent-fixtures/linkage-contract/v1/output.schema.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:outputs/agent-fixtures/linkage-contract/v1/policy.schema.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
       "name": "json:outputs/agent-fixtures/live-lotte/extraction-year-abbreviation/packet.json",
       "passed": true,
       "detail": ""
@@ -1114,12 +1074,67 @@
       "detail": ""
     },
     {
-      "name": "json:apps/web/package.json",
+      "name": "json:outputs/agent-results/R19-bullet-spacing.json",
       "passed": true,
       "detail": ""
     },
     {
-      "name": "json:apps/web/tsconfig.json",
+      "name": "json:outputs/agent-results/R19-kb-native-differences.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:outputs/agent-results/R02g-layout-review/kia-layout.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:outputs/agent-results/R02g-layout-review/lotte-layout.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:outputs/agent-results/R13-table-recovery/lotte-p29-layout.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:outputs/agent-results/R16-live-table/manifest.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:outputs/agent-results/R16-live-table/proposal-used.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:outputs/agent-results/R16-live-table/summary.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:packages/proofops/application/reconciliation/schemas/input.schema.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:packages/proofops/application/reconciliation/schemas/output.schema.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:packages/proofops/application/reconciliation/schemas/policy.schema.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:sources/external_sources.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:sources/source_manifest.json",
       "passed": true,
       "detail": ""
     },
@@ -1134,12 +1149,12 @@
       "detail": ""
     },
     {
-      "name": "yaml:config/retention.yaml",
+      "name": "yaml:config/crosswalk.yaml",
       "passed": true,
       "detail": ""
     },
     {
-      "name": "config_version:config/retention.yaml",
+      "name": "config_version:config/crosswalk.yaml",
       "passed": true,
       "detail": ""
     },
@@ -1154,16 +1169,6 @@
       "detail": ""
     },
     {
-      "name": "yaml:config/rule_pack_manifest.yaml",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "config_version:config/rule_pack_manifest.yaml",
-      "passed": true,
-      "detail": ""
-    },
-    {
       "name": "yaml:config/parsing.yaml",
       "passed": true,
       "detail": ""
@@ -1174,22 +1179,22 @@
       "detail": ""
     },
     {
-      "name": "yaml:config/crosswalk.yaml",
+      "name": "yaml:config/retention.yaml",
       "passed": true,
       "detail": ""
     },
     {
-      "name": "config_version:config/crosswalk.yaml",
+      "name": "config_version:config/retention.yaml",
       "passed": true,
       "detail": ""
     },
     {
-      "name": "yaml:config/accounting/ifrs_s1_connectivity.yaml",
+      "name": "yaml:config/rule_pack_manifest.yaml",
       "passed": true,
       "detail": ""
     },
     {
-      "name": "config_version:config/accounting/ifrs_s1_connectivity.yaml",
+      "name": "config_version:config/rule_pack_manifest.yaml",
       "passed": true,
       "detail": ""
     },
@@ -1204,22 +1209,12 @@
       "detail": ""
     },
     {
-      "name": "yaml:config/accounting/reconciliation_rules.yaml",
+      "name": "yaml:config/accounting/ifrs_s1_connectivity.yaml",
       "passed": true,
       "detail": ""
     },
     {
-      "name": "config_version:config/accounting/reconciliation_rules.yaml",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "yaml:config/accounting/kifrs_1110.yaml",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "config_version:config/accounting/kifrs_1110.yaml",
+      "name": "config_version:config/accounting/ifrs_s1_connectivity.yaml",
       "passed": true,
       "detail": ""
     },
@@ -1234,22 +1229,42 @@
       "detail": ""
     },
     {
-      "name": "yaml:config/assurance/issa5000.yaml",
+      "name": "yaml:config/accounting/kifrs_1110.yaml",
       "passed": true,
       "detail": ""
     },
     {
-      "name": "config_version:config/assurance/issa5000.yaml",
+      "name": "config_version:config/accounting/kifrs_1110.yaml",
       "passed": true,
       "detail": ""
     },
     {
-      "name": "yaml:config/assurance/isae3000.yaml",
+      "name": "yaml:config/accounting/reconciliation_rules.yaml",
       "passed": true,
       "detail": ""
     },
     {
-      "name": "config_version:config/assurance/isae3000.yaml",
+      "name": "config_version:config/accounting/reconciliation_rules.yaml",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "yaml:config/advertising/kftc_guideline.yaml",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "config_version:config/advertising/kftc_guideline.yaml",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "yaml:config/advertising/moe_notice.yaml",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "config_version:config/advertising/moe_notice.yaml",
       "passed": true,
       "detail": ""
     },
@@ -1264,12 +1279,22 @@
       "detail": ""
     },
     {
-      "name": "yaml:config/sasb/industry_map.yaml",
+      "name": "yaml:config/assurance/isae3000.yaml",
       "passed": true,
       "detail": ""
     },
     {
-      "name": "config_version:config/sasb/industry_map.yaml",
+      "name": "config_version:config/assurance/isae3000.yaml",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "yaml:config/assurance/issa5000.yaml",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "config_version:config/assurance/issa5000.yaml",
       "passed": true,
       "detail": ""
     },
@@ -1294,22 +1319,22 @@
       "detail": ""
     },
     {
-      "name": "yaml:config/advertising/moe_notice.yaml",
+      "name": "yaml:config/rubric/elements.yaml",
       "passed": true,
       "detail": ""
     },
     {
-      "name": "config_version:config/advertising/moe_notice.yaml",
+      "name": "config_version:config/rubric/elements.yaml",
       "passed": true,
       "detail": ""
     },
     {
-      "name": "yaml:config/advertising/kftc_guideline.yaml",
+      "name": "yaml:config/rubric/exceptions.yaml",
       "passed": true,
       "detail": ""
     },
     {
-      "name": "config_version:config/advertising/kftc_guideline.yaml",
+      "name": "config_version:config/rubric/exceptions.yaml",
       "passed": true,
       "detail": ""
     },
@@ -1334,26 +1359,6 @@
       "detail": ""
     },
     {
-      "name": "yaml:config/rubric/elements.yaml",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "config_version:config/rubric/elements.yaml",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "yaml:config/rubric/exceptions.yaml",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "config_version:config/rubric/exceptions.yaml",
-      "passed": true,
-      "detail": ""
-    },
-    {
       "name": "yaml:config/rubric/performance.yaml",
       "passed": true,
       "detail": ""
@@ -1364,12 +1369,12 @@
       "detail": ""
     },
     {
-      "name": "yaml:config/standards/iso_14021.yaml",
+      "name": "yaml:config/sasb/industry_map.yaml",
       "passed": true,
       "detail": ""
     },
     {
-      "name": "config_version:config/standards/iso_14021.yaml",
+      "name": "config_version:config/sasb/industry_map.yaml",
       "passed": true,
       "detail": ""
     },
@@ -1384,26 +1389,6 @@
       "detail": ""
     },
     {
-      "name": "yaml:config/standards/iso_14064_1.yaml",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "config_version:config/standards/iso_14064_1.yaml",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "yaml:config/standards/kssb.yaml",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "config_version:config/standards/kssb.yaml",
-      "passed": true,
-      "detail": ""
-    },
-    {
       "name": "yaml:config/standards/ifrs_s1_s2.yaml",
       "passed": true,
       "detail": ""
@@ -1414,12 +1399,42 @@
       "detail": ""
     },
     {
+      "name": "yaml:config/standards/iso_14021.yaml",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "config_version:config/standards/iso_14021.yaml",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "yaml:config/standards/iso_14064_1.yaml",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "config_version:config/standards/iso_14064_1.yaml",
+      "passed": true,
+      "detail": ""
+    },
+    {
       "name": "yaml:config/standards/kesg_v2.yaml",
       "passed": true,
       "detail": ""
     },
     {
       "name": "config_version:config/standards/kesg_v2.yaml",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "yaml:config/standards/kssb.yaml",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "config_version:config/standards/kssb.yaml",
       "passed": true,
       "detail": ""
     },
@@ -4264,12 +4279,12 @@
       "detail": ""
     },
     {
-      "name": "schema_meta:preliminary_tags.schema.json",
+      "name": "schema_meta:api_models.schema.json",
       "passed": true,
       "detail": ""
     },
     {
-      "name": "schema_refs:preliminary_tags.schema.json",
+      "name": "schema_refs:api_models.schema.json",
       "passed": true,
       "detail": ""
     },
@@ -4284,22 +4299,22 @@
       "detail": ""
     },
     {
-      "name": "schema_meta:api_models.schema.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "schema_refs:api_models.schema.json",
-      "passed": true,
-      "detail": ""
-    },
-    {
       "name": "schema_meta:llm_tags.schema.json",
       "passed": true,
       "detail": ""
     },
     {
       "name": "schema_refs:llm_tags.schema.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "schema_meta:preliminary_tags.schema.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "schema_refs:preliminary_tags.schema.json",
       "passed": true,
       "detail": ""
     },
@@ -4814,27 +4829,7 @@
       "detail": ""
     },
     {
-      "name": "md_link:README.md:docs/IMPLEMENTATION_STATUS.md",
-      "passed": true,
-      "detail": ""
-    },
-    {
       "name": "md_link:README.md:docs/00_MASTER_SPEC.md",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "md_link:README.md:docs/26_LEGACY_REUSE_AUDIT.md",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "md_link:README.md:docs/27_PARSING_AND_PROVENANCE.md",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "md_link:README.md:docs/28_RULE_ENGINE_CONTRACT.md",
       "passed": true,
       "detail": ""
     },
@@ -4844,27 +4839,22 @@
       "detail": ""
     },
     {
-      "name": "md_link:README.md:docs/19_IMPLEMENTATION_PLAN.md",
+      "name": "md_link:README.md:evidence/developer-a-validation-20260918.md",
       "passed": true,
       "detail": ""
     },
     {
-      "name": "md_link:README.md:docs/20_TASK_BREAKDOWN.md",
+      "name": "md_link:README.md:evidence/source-linked-demo-verification.md",
       "passed": true,
       "detail": ""
     },
     {
-      "name": "md_link:README.md:contracts/openapi.yaml",
+      "name": "md_link:README.md:docs/SUBMISSION_DEMO.md",
       "passed": true,
       "detail": ""
     },
     {
-      "name": "md_link:README.md:docs/32_REQUIREMENT_TRACEABILITY.md",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "name": "md_link:README.md:docs/17_ENV_CONFIG.md",
+      "name": "md_link:README.md:docs/IMPLEMENTATION_STATUS.md",
       "passed": true,
       "detail": ""
     },

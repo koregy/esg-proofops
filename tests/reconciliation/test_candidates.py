@@ -10,10 +10,13 @@ from pathlib import Path
 import pytest
 from proofops.adapters.dart import ArtifactStore, build_collection_manifest, create_artifact_entry
 from proofops.adapters.dart.candidates import (
+    MAX_DECLARED_ROWSPAN,
     CandidatePreparationError,
     add_operator_sr_sources,
     build_candidate_catalog,
 )
+from proofops.adapters.reconciliation import FileSourceReader
+from proofops.adapters.reconciliation.files import SourceReadError
 
 from evaluation.reconciliation_prepare import prepare_review_draft
 
@@ -210,7 +213,12 @@ def test_candidate_limit_is_enforced_and_reported(tmp_path):
     store, manifest = collection(tmp_path)
     result = prepare(store, manifest, max_candidates=1)
     assert len(result.catalog["candidates"]) == 1
-    assert result.catalog["limits"] == {"max_candidates": 1, "truncated": True}
+    assert result.catalog["limits"] == {
+        "max_candidates": 1,
+        "truncated": True,
+        "max_row_span_candidates": 200,
+        "row_span_candidate_count": 0,
+    }
     with pytest.raises(CandidatePreparationError, match="candidate_limit_invalid"):
         prepare(store, manifest, max_candidates=0)
 
@@ -271,6 +279,230 @@ def sr_input(tmp_path: Path, identity: dict | None = None):
     }
 
 
+# The shape of the real Samsung FY2024 cover: one ROWSPAN="2" label cell over a
+# first row holding the start date and a second row holding the end date.
+COVER = (
+    "<?xml version='1.0'?>"
+    "<DOCUMENT><BODY><COVER><TABLE-GROUP><TABLE><TBODY>"
+    '<TR ACOPY=N><TD ROWSPAN="2" ACLASS=NORMAL>사업연도</TD>'
+    '<TU AUNIT="PERIODFROM">2024년 01월 01일</TU><TD>부터</TD></TR>'
+    '<TR ACOPY=N><TU AUNIT="PERIODTO">2024년 12월 31일</TU><TD>까지</TD></TR>'
+    "<TR ACOPY=N><TD>회사명</TD><TE>주식회사 예시</TE></TR>"
+    "</TBODY></TABLE></TABLE-GROUP></COVER></BODY></DOCUMENT>"
+)
+
+
+def proprietary(tmp_path: Path, markup: str = COVER):
+    """A DART-style member that is not well-formed XML, so the text projection runs."""
+    return collection(tmp_path, document=zipped([(f"{RECEIPT}.xml", markup.encode("utf-8"))]))
+
+
+def spans(result):
+    return [
+        item
+        for item in result.catalog["candidates"]
+        if item["candidate_type"] == "document_row_span"
+    ]
+
+
+def test_split_period_row_is_covered_by_one_exact_contiguous_span(tmp_path):
+    """Both disclosed dates live in one quote whose locator and hash still verify."""
+    store, manifest = proprietary(tmp_path / "dart")
+    result = prepare(store, manifest)
+    period = next(item for item in spans(result) if "사업연도" in item["source"]["quote"])
+    quote = period["source"]["quote"]
+    assert "2024년 01월 01일" in quote
+    assert "2024년 12월 31일" in quote
+    assert "회사명" not in quote and "주식회사 예시" not in quote
+    assert period["verification_state"] == "candidate"
+    assert period["normalization_suggestions"] == {}
+    assert period["lineage"]["representation"] == "derived"
+    assert period["lineage"]["zip_member"] == f"{RECEIPT}.xml"
+    assert period["lineage"]["transformation_locator"].startswith("proprietary-markup-row-span:")
+    assert period["raw"]["element_path"].endswith("/tr")
+    assert period["raw"]["cell_texts"] == [
+        "사업연도",
+        "2024년 01월 01일",
+        "부터",
+        "2024년 12월 31일",
+        "까지",
+    ]
+
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    for artifact in result.artifacts:
+        target = root / artifact.path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(artifact.payload)
+    reader = FileSourceReader(root, result.artifact_index)
+    assert reader.validate(period["source"])
+
+    projection = (root / result.artifact_index[period["source"]["document_id"]]["path"]).read_text(
+        encoding="utf-8"
+    )
+    start, end = (int(part) for part in period["source"]["locator"].split(":")[1:])
+    assert projection[start:end] == quote
+
+    tampered = dict(period["source"])
+    tampered["locator"] = f"chars:{start + 1}:{end}"
+    with pytest.raises(SourceReadError):
+        reader.validate(tampered)
+
+
+def test_row_spans_never_join_two_rows_and_never_displace_existing_candidates(tmp_path):
+    """Each disclosed row gets its own span, and the bounded catalogue is unchanged."""
+    store, manifest = proprietary(tmp_path / "dart")
+    result = prepare(store, manifest)
+    quotes = [item["source"]["quote"] for item in spans(result)]
+    assert len(quotes) == 2
+    period, company = quotes
+    assert "사업연도" in period and "회사명" not in period
+    assert "회사명" in company and "사업연도" not in company
+    assert result.catalog["limits"]["row_span_candidate_count"] == 2
+
+    without = prepare(store, manifest, max_row_spans=0)
+    assert spans(without) == []
+    assert without.catalog["limits"]["row_span_candidate_count"] == 0
+    identity = lambda catalog: [  # noqa: E731
+        (item["candidate_id"], item["source"]["source_id"], item["source"]["locator"])
+        for item in catalog["candidates"]
+        if item["candidate_type"] != "document_row_span"
+    ]
+    assert identity(result.catalog) == identity(without.catalog)
+    assert [item.sha256 for item in result.artifacts] == [item.sha256 for item in without.artifacts]
+
+
+NESTED = (
+    "<?xml version='1.0'?>"
+    "<DOCUMENT><BODY><COVER><TABLE><TBODY>"
+    "<TR ACOPY=N><TD>바깥 왼쪽</TD>"
+    "<TD><TABLE><TBODY><TR><TD>안쪽 왼쪽</TD><TD>안쪽 오른쪽</TD></TR></TBODY></TABLE></TD>"
+    "<TD>바깥 오른쪽</TD></TR>"
+    "</TBODY></TABLE></COVER></BODY></DOCUMENT>"
+)
+
+
+def two_rows(rowspan: str, tag: str = "TD") -> str:
+    return (
+        "<?xml version='1.0'?>"
+        "<DOCUMENT><BODY><COVER><TABLE><TBODY>"
+        f"<TR ACOPY=N><{tag} ROWSPAN={rowspan} ACLASS=NORMAL>사업연도</{tag}>"
+        "<TU>2024년 01월 01일</TU></TR>"
+        "<TR ACOPY=N><TU>2024년 12월 31일</TU></TR>"
+        "</TBODY></TABLE></COVER></BODY></DOCUMENT>"
+    )
+
+
+def test_a_row_interrupted_by_a_nested_table_is_never_spanned(tmp_path):
+    """Discontiguous cells are not a complete row, so only the inner row spans."""
+    store, manifest = proprietary(tmp_path / "dart", NESTED)
+    quotes = [item["source"]["quote"] for item in spans(prepare(store, manifest))]
+    assert not any("바깥 왼쪽" in quote and "바깥 오른쪽" in quote for quote in quotes)
+    assert not any("바깥" in quote for quote in quotes)
+    assert [quote for quote in quotes if "안쪽 왼쪽" in quote and "안쪽 오른쪽" in quote]
+
+
+def test_only_a_well_formed_bounded_cell_rowspan_binds_two_rows(tmp_path):
+    """A declared ROWSPAN joins rows; malformed, oversized or non-cell ones do not."""
+    joined = spans(prepare(*proprietary(tmp_path / "ok", two_rows('"2"'))))
+    assert len(joined) == 1
+    assert "2024년 01월 01일" in joined[0]["source"]["quote"]
+    assert "2024년 12월 31일" in joined[0]["source"]["quote"]
+
+    for name, markup in (
+        ("malformed", two_rows('"two"')),
+        ("oversized", f'"{MAX_DECLARED_ROWSPAN + 1}"'),
+        ("non_cell", two_rows('"2"', tag="DIV")),
+    ):
+        if name == "oversized":
+            markup = two_rows(markup)
+        store, manifest = proprietary(tmp_path / name, markup)
+        quotes = [item["source"]["quote"] for item in spans(prepare(store, manifest))]
+        assert not any(
+            "2024년 01월 01일" in quote and "2024년 12월 31일" in quote for quote in quotes
+        ), name
+
+
+def short_rowspan(declared: int, closed: bool) -> str:
+    """A ROWSPAN that promises more rows than the markup actually carries."""
+    tail = "</TBODY></TABLE></COVER></BODY></DOCUMENT>" if closed else ""
+    return (
+        "<?xml version='1.0'?>"
+        "<DOCUMENT><BODY><COVER><TABLE><TBODY>"
+        f'<TR ACOPY=N><TD ROWSPAN="{declared}" ACLASS=NORMAL>사업연도</TD>'
+        "<TU>2024년 01월 01일</TU></TR>"
+        "<TR ACOPY=N><TU>2024년 12월 31일</TU></TR>"
+        f"{tail}"
+    )
+
+
+def test_a_rowspan_left_unsatisfied_at_table_close_or_eof_yields_no_span(tmp_path):
+    """Two rows do not satisfy ROWSPAN=3, so the partial group is never published."""
+    for name, closed in (("closed", True), ("eof", False)):
+        store, manifest = proprietary(tmp_path / name, short_rowspan(3, closed))
+        result = prepare(store, manifest)
+        quotes = [item["source"]["quote"] for item in spans(result)]
+        assert not any(
+            "2024년 01월 01일" in quote and "2024년 12월 31일" in quote for quote in quotes
+        ), name
+        assert not any("사업연도" in quote for quote in quotes), name
+        # The per-cell candidates are still there; only the false row is withheld.
+        cells = [
+            item["source"]["quote"]
+            for item in result.catalog["candidates"]
+            if item["candidate_type"] == "document_element"
+        ]
+        assert any("2024년 01월 01일" in quote for quote in cells), name
+        assert any("2024년 12월 31일" in quote for quote in cells), name
+
+    # The same markup with a satisfied ROWSPAN=2 does produce one span.
+    satisfied = spans(prepare(*proprietary(tmp_path / "satisfied", short_rowspan(2, True))))
+    assert len(satisfied) == 1
+    assert "2024년 01월 01일" in satisfied[0]["source"]["quote"]
+    assert "2024년 12월 31일" in satisfied[0]["source"]["quote"]
+
+
+def later_rowspan(total_rows: int) -> str:
+    """ROWSPAN=2 on the first row, then ROWSPAN=3 on the second: reaches row 4."""
+    extra = "".join(f"<TR ACOPY=N><TU>R{number}</TU></TR>" for number in range(3, total_rows + 1))
+    return (
+        "<?xml version='1.0'?>"
+        "<DOCUMENT><BODY><COVER><TABLE><TBODY>"
+        '<TR ACOPY=N><TD ROWSPAN="2" ACLASS=NORMAL>사업연도</TD><TU>R1</TU></TR>'
+        '<TR ACOPY=N><TD ROWSPAN="3" ACLASS=NORMAL>감사기간</TD><TU>R2</TU></TR>'
+        f"{extra}"
+        "</TBODY></TABLE></COVER></BODY></DOCUMENT>"
+    )
+
+
+def test_a_rowspan_declared_on_a_later_row_promises_from_that_row(tmp_path):
+    """ROWSPAN=3 on row two reaches row four, so three rows are still incomplete."""
+    short = spans(prepare(*proprietary(tmp_path / "short", later_rowspan(3))))
+    assert short == []
+
+    satisfied = spans(prepare(*proprietary(tmp_path / "satisfied", later_rowspan(4))))
+    assert len(satisfied) == 1
+    quote = satisfied[0]["source"]["quote"]
+    assert satisfied[0]["raw"]["cell_texts"] == [
+        "사업연도",
+        "R1",
+        "감사기간",
+        "R2",
+        "R3",
+        "R4",
+    ]
+    assert quote.count("\n") == 5
+
+
+def test_a_row_cut_by_the_candidate_bound_produces_no_span(tmp_path):
+    """A partially retained row is never spanned; an incomplete row is not a row."""
+    store, manifest = proprietary(tmp_path / "dart")
+    result = prepare(store, manifest, max_candidates=2)
+    assert spans(result) == []
+    with pytest.raises(CandidatePreparationError, match="row_span_limit_invalid"):
+        prepare(store, manifest, max_row_spans=-1)
+
+
 def test_operator_sr_source_is_byte_hash_and_locator_verified(tmp_path):
     store, manifest = collection(tmp_path / "dart")
     sr_manifest = sr_input(tmp_path)
@@ -286,6 +518,57 @@ def test_operator_sr_source_is_byte_hash_and_locator_verified(tmp_path):
     (tmp_path / "sr.txt").write_text("tampered", encoding="utf-8")
     with pytest.raises(CandidatePreparationError, match="sr_source_verification_failed"):
         add_operator_sr_sources(prepare(store, manifest), sr_manifest, tmp_path)
+
+
+def test_operator_sr_sources_report_their_own_bound_beside_the_dart_limit(tmp_path):
+    """A real collection fills the DART bound, so the extra SR source must stay visible."""
+    store, manifest = collection(tmp_path / "dart")
+    prepared = add_operator_sr_sources(
+        prepare(store, manifest, max_candidates=1), sr_input(tmp_path), tmp_path
+    )
+    limits = prepared.catalog["limits"]
+    assert limits["max_candidates"] == 1
+    assert limits["truncated"] is True
+    assert limits["max_operator_sources"] == 100
+    assert limits["operator_source_count"] == 1
+    dart = [
+        item
+        for item in prepared.catalog["candidates"]
+        if item["candidate_type"] != "sustainability_source"
+    ]
+    assert len(dart) == limits["max_candidates"]
+    assert len(prepared.catalog["candidates"]) == (
+        limits["max_candidates"] + limits["operator_source_count"]
+    )
+
+
+def test_repeated_operator_sr_addition_keeps_the_reported_count_truthful(tmp_path):
+    """The reported operator count follows the catalogue, not one manifest's length."""
+    store, manifest = collection(tmp_path / "dart")
+    first = sr_input(tmp_path)
+    prepared = add_operator_sr_sources(prepare(store, manifest, max_candidates=1), first, tmp_path)
+    assert prepared.catalog["limits"]["operator_source_count"] == 1
+
+    second = copy.deepcopy(first)
+    second["sources"][0] = second["sources"][0] | {
+        "source_id": "sr-scope-2",
+        "locator": "chars:0:7",
+        "quote": "Samsung",
+    }
+    prepared = add_operator_sr_sources(prepared, second, tmp_path)
+    operator = [
+        item
+        for item in prepared.catalog["candidates"]
+        if item["candidate_type"] == "sustainability_source"
+    ]
+    limits = prepared.catalog["limits"]
+    assert [item["source"]["source_id"] for item in operator] == ["sr-scope", "sr-scope-2"]
+    assert limits["operator_source_count"] == len(operator) == 2
+    assert limits["max_candidates"] == 1
+    assert limits["max_operator_sources"] == 100
+    assert len(prepared.catalog["candidates"]) == (
+        limits["max_candidates"] + limits["operator_source_count"]
+    )
 
 
 def test_complete_selection_is_pending_unapproved_and_cross_disclosure(tmp_path):

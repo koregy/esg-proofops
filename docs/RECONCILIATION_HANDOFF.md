@@ -56,7 +56,7 @@ normalizers) is the collection side and is described in §9.
 Two different values appear in a normal 1.1 result, and both are confirmed by
 executed probes in this repository:
 
-- `"reconciliation-engine-1.1.0"` — the request reached the pure engine.
+- `"reconciliation-engine-1.2.0"` — the request reached the pure engine.
 - `"reconciliation-application-provenance-1"` — the **application layer** blocked
   before the engine ran (unapproved policy, unverified source, document identity
   mismatch, unverified coverage, …).
@@ -211,9 +211,12 @@ The shipped example policy is `version: "synthetic-demo-only"`,
   `blocked / policy_scope_mismatch`. Flipping `synthetic` to `false` to dodge a
   guard is exactly what that check exists to stop.
 - **C3 has no default multiple and no default account mapping.** The 5.0 figure
-  in the specification is an illustration. Until an operator approves a
-  threshold **and** an account mapping **and** an allowlist covering the
-  requested CAPEX accounts, C3 is `blocked / c3_policy_unapproved`.
+  in the specification is an illustration. REC-004 B keeps the threshold null,
+  so threshold comparisons remain `blocked / c3_policy_unapproved`. A registered,
+  source-verified matching investment commitment can complete as
+  `matched / commitment_disclosed` without a threshold. Both paths still require
+  approved account mapping and an allowlist covering requested CAPEX accounts,
+  plus the currency, period, amount and authenticated policy guards.
 - Everything in `config/accounting/` is `status: draft`,
   `verification_status: unverified`, `approved: false`, with
   `account_mapping: null` and C5 `execution: disabled`. These drafts are **not**
@@ -301,7 +304,7 @@ result = reconcile(
 )
 ```
 
-Executed result for `c1-same-entities` (real run, this repository):
+Historical executed result for `c1-same-entities` (synthetic input, engine 1.1.0):
 
 ```json
 {"schema_version": "1.1", "claim_id": "fixture-claim", "item": "C1",
@@ -396,9 +399,12 @@ API, persistence, revisions and rollback contract.
    registries do not grant approval; the server binds cases to verified claims
    and records reviewer actions. Production document/search-store integration
    and evidence of exhaustive real-company search remain separate work.
-2. **Real policy approval.** No approved reconciliation policy exists. All
-   shipped policies are `synthetic_only`. C3 stays blocked until a threshold,
-   an account mapping and an account allowlist are approved and recorded.
+2. **Real policy approval.** Project-level REC-001 through REC-008 were adopted
+   on 2026-09-28; this does not create authenticated runtime approval or mapping
+   values. The shipped example policies remain `synthetic_only`. Real C3 needs
+   approved account mapping and an allowlist; threshold comparisons stay blocked
+   while the adopted threshold is null. A verified matching commitment may take
+   the direct-existence path described in section 8.
 3. **Live DART collection.** One authenticated Samsung FY2024 annual-report
    collection was verified on 2026-09-21, including JSON, document ZIP and XBRL
    ZIP. This is a collection smoke test. The 98% retrieval-success and sub-5%

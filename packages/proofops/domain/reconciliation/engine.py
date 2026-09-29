@@ -34,7 +34,11 @@ from .common import (
     validate_policy,
 )
 
-ENGINE_VERSION = "reconciliation-engine-1.1.0"
+# 1.2.0 applies the 2026-09-28 adopted REC-001/003/004 rules (C1 period and
+# consolidation guards, C3 CAPEX period guard, C3 disclosed commitment without an
+# approved threshold). Results stored under 1.1.0 stay immutable; the version lets a
+# replay tell which rule set produced them. Contract schema 1.1 is unchanged.
+ENGINE_VERSION = "reconciliation-engine-1.2.0"
 
 _ITEM_EVALUATORS = {
     "C1": c1.evaluate,

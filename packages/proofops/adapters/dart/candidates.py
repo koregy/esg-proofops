@@ -29,6 +29,9 @@ from proofops.adapters.reconciliation import FileSourceReader
 CATALOG_SCHEMA = "reconciliation-candidates-1"
 MAX_CANDIDATES = 2_000
 MAX_QUOTE_CHARS = 8_000
+# Cell tags DART uses inside <TR>, and the largest ROWSPAN that may bind rows.
+_ROW_CELL_TAGS = frozenset({"td", "te", "th", "tu"})
+MAX_DECLARED_ROWSPAN = 8
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _CORP = re.compile(r"^[0-9]{8}$")
 _RECEIPT = re.compile(r"^[0-9]{14}$")
@@ -201,6 +204,20 @@ def add_operator_sr_sources(
         seen_sources.add(source_id)
     catalog = copy.deepcopy(prepared.catalog)
     catalog["candidates"] = candidates
+    # ``max_candidates`` bounds the DART catalogue only.  Operator sustainability
+    # sources are added on top of it, so the separate bound and count are reported
+    # instead of leaving ``len(candidates) > max_candidates`` unexplained.
+    # ``max_operator_sources`` is the bound of *this* call, i.e. of the manifest
+    # being added now, while ``operator_source_count`` is the cumulative number of
+    # operator sources already in the catalogue.  Neither changes any semantics.
+    operator_sources = sum(
+        1 for item in candidates if item["candidate_type"] == "sustainability_source"
+    )
+    catalog["limits"] = {
+        **catalog["limits"],
+        "max_operator_sources": max_sources,
+        "operator_source_count": operator_sources,
+    }
     catalog["artifacts"] = [
         {"document_id": item.document_id, **item.index_entry(), "lineage": item.lineage}
         for item in sorted(artifacts.values(), key=lambda value: value.document_id)
@@ -213,28 +230,121 @@ def add_operator_sr_sources(
 
 
 class _DartTextProjectionParser(HTMLParser):
-    """Tolerant text reader for DART's non-well-formed proprietary markup."""
+    """Tolerant text reader for DART's non-well-formed proprietary markup.
+
+    ``rows`` is the projected text and is byte-identical to earlier releases.
+    ``row_groups`` is a parallel, non-projected record of the disclosed table row
+    each text node belongs to, so the cells of one row can be recognised later
+    without ever joining two different rows.
+
+    A row is one ``<tr>`` instance, except where the document itself binds
+    consecutive ``<tr>`` siblings together with ``ROWSPAN``: the Samsung FY2024
+    cover states its reporting period as ``<TD ROWSPAN="2">사업연도</TD>`` over one
+    ``<TR>`` holding the start date and a second ``<TR>`` holding the end date.
+    Those rows are grouped because the original markup says they are one logical
+    row, never because two rows happen to be adjacent.
+    """
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.stack: list[str] = []
         self.rows: list[tuple[str, str]] = []
+        self.row_groups: list[int | None] = []
+        self._instances: list[int] = []
+        self._opened = 0
+        self._logical_rows = 0
+        self._current: dict[int, int] = {}
+        # Named to stay clear of HTMLParser's own private state: CPython 3.12.14
+        # introduced ``HTMLParser._pending`` and ``close()`` joins it as strings.
+        self._rowspan_pending: dict[int, int] = {}
+        self._row_of: dict[int, int] = {}
+        self._promised: dict[int, int] = {}
+        self._attached: dict[int, int] = {}
 
-    def handle_starttag(self, tag: str, _attrs: list[tuple[str, str | None]]) -> None:
+    @property
+    def incomplete_rows(self) -> frozenset[int]:
+        """Logical rows that promised more ``<tr>`` siblings than the markup carried.
+
+        A ``ROWSPAN="3"`` followed by only one further row -- because ``</TBODY>``
+        or the end of the member arrived first -- is a malformed declaration. What
+        did arrive is not a complete row and must not be published as one, so the
+        caller drops these groups entirely.
+        """
+        return frozenset(
+            row for row, promised in self._promised.items() if self._attached.get(row, 0) < promised
+        )
+
+    def _note_rowspan(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        """Record a well-formed ``ROWSPAN`` declared by a cell of the open row.
+
+        Only a cell tag directly inside the open ``<tr>`` may bind rows, the value
+        must be a plain integer, and an out-of-range declaration is ignored so the
+        rows simply stay separate instead of producing an oversized span.
+        """
+        if tag not in _ROW_CELL_TAGS or not self.stack or self.stack[-1] != "tr":
+            return
+        if len(self._instances) < 2:
+            return
+        for key, value in attrs:
+            if key.lower() != "rowspan":
+                continue
+            try:
+                declared = int((value or "").strip())
+            except ValueError:
+                return
+            if 2 <= declared <= MAX_DECLARED_ROWSPAN:
+                parent = self._instances[-2]
+                self._rowspan_pending[parent] = max(
+                    self._rowspan_pending.get(parent, 0), declared - 1
+                )
+                row = self._row_of.get(self._instances[-1])
+                if row is not None:
+                    # The declaration starts at the row holding this cell, which is
+                    # the ``_attached[row]``-th row of the group, so it reaches row
+                    # ``_attached[row] + declared - 1``. Using ``declared`` alone
+                    # would call a group complete while a promised row is missing.
+                    reaches = self._attached.get(row, 1) + declared - 1
+                    self._promised[row] = max(self._promised.get(row, 1), reaches)
+            return
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self._opened += 1
+        parent = self._instances[-1] if self._instances else 0
+        if tag == "tr":
+            if self._rowspan_pending.get(parent, 0) > 0:
+                self._rowspan_pending[parent] -= 1
+            else:
+                self._logical_rows += 1
+                self._current[parent] = self._logical_rows
+            row = self._current[parent]
+            self._row_of[self._opened] = row
+            self._attached[row] = self._attached.get(row, 0) + 1
+            self._promised.setdefault(row, 1)
+        else:
+            self._note_rowspan(tag, attrs)
         self.stack.append(tag)
+        self._instances.append(self._opened)
 
-    def handle_startendtag(self, _tag: str, _attrs: list[tuple[str, str | None]]) -> None:
-        return
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self._note_rowspan(tag, attrs)
 
     def handle_endtag(self, tag: str) -> None:
         if tag in self.stack:
             index = len(self.stack) - 1 - self.stack[::-1].index(tag)
             del self.stack[index:]
+            del self._instances[index:]
+
+    def _enclosing_row(self) -> int | None:
+        for position in range(len(self.stack) - 1, -1, -1):
+            if self.stack[position] == "tr":
+                return self._row_of.get(self._instances[position])
+        return None
 
     def handle_data(self, data: str) -> None:
         text = " ".join(data.split())
         if text:
             self.rows.append(("/" + "/".join(self.stack or ["document"]), text))
+            self.row_groups.append(self._enclosing_row())
 
 
 def _pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -560,6 +670,86 @@ def _element_path(root: Any, target: Any) -> str:
     return "/" + "/".join(found or ["unknown[1]"])
 
 
+def _row_element_path(path: str) -> str:
+    """The path of the enclosing ``<tr>``: the first path cut after its last ``tr``."""
+    parts = path.split("/")
+    last = len(parts) - 1 - parts[::-1].index("tr")
+    return "/".join(parts[: last + 1])
+
+
+def _row_span_candidates(
+    entry: Mapping[str, Any],
+    artifact: CandidateArtifact,
+    member_hash: str,
+    rows: list[tuple[str, str]],
+    lines: list[str],
+    ranges: list[tuple[int, int]],
+    kept_groups: list[int | None],
+    disclosed: Mapping[int, int],
+    *,
+    row_span_limit: int,
+) -> list[dict[str, Any]]:
+    """Exact contiguous spans over the derived bytes, one per disclosed table row.
+
+    A DART cover row such as ``사업연도 | 2024년 01월 01일 | 부터 | 2024년 12월 31일 |
+    까지`` projects as separate cells, so no single cell candidate carries a whole
+    reporting period. Each span quotes one disclosed row verbatim from the
+    already-written projection, so the artifact bytes, hash, existing candidates
+    and every quote/locator guard are untouched. Rows are never joined by
+    adjacency: a span is emitted only when the cells of one row (one ``<tr>``, or
+    the consecutive ``<tr>`` siblings the markup binds with ``ROWSPAN``) are
+    consecutive in the projection and every disclosed cell of that row is present
+    in that one run. A row interrupted by a nested table, shortened by the
+    quote-length filter, cut by the candidate bound or longer than a reviewable
+    quote is skipped entirely rather than emitted as a partial "complete" row.
+    Nothing here is a reviewed fact or a normalization.
+    """
+    spans: list[dict[str, Any]] = []
+    index = 0
+    while index < len(rows) and len(spans) < row_span_limit:
+        group = kept_groups[index]
+        if group is None:
+            index += 1
+            continue
+        last = index
+        while last + 1 < len(rows) and kept_groups[last + 1] == group:
+            last += 1
+        quote = "\n".join(lines[index : last + 1])
+        covered = last - index + 1
+        if last > index and covered == disclosed.get(group) and len(quote) <= MAX_QUOTE_CHARS:
+            locator = f"chars:{ranges[index][0]}:{ranges[last][1]}"
+            row_path = _row_element_path(rows[index][0])
+            lineage = {
+                **artifact.lineage,
+                "transformation_locator": (
+                    f"proprietary-markup-row-span:{index}:{last}:{row_path}"
+                ),
+                "derived_locator": locator,
+            }
+            raw = {
+                "element_path": row_path,
+                "cell_paths": [path for path, _ in rows[index : last + 1]],
+                "cell_texts": [text for _, text in rows[index : last + 1]],
+            }
+            candidate = {
+                "candidate_type": "document_row_span",
+                "verification_state": "candidate",
+                "source": _source(
+                    artifact,
+                    f"{entry['source_id']}:{member_hash[:12]}:row:{index}-{last}",
+                    locator,
+                    quote,
+                ),
+                "lineage": lineage,
+                "raw": raw,
+                "normalization_suggestions": {},
+            }
+            candidate["candidate_id"] = _candidate_id(lineage, raw)
+            spans.append(candidate)
+        index = last + 1
+    return spans
+
+
 def _proprietary_member_candidates(
     entry: Mapping[str, Any],
     member_name: str,
@@ -567,6 +757,7 @@ def _proprietary_member_candidates(
     decoded: str,
     *,
     candidate_limit: int,
+    row_span_limit: int = 0,
 ) -> tuple[list[dict[str, Any]], list[CandidateArtifact]]:
     lowered = decoded.casefold()
     if "<!doctype" in lowered or "<!entity" in lowered:
@@ -577,9 +768,18 @@ def _proprietary_member_candidates(
         parser.close()
     except (ValueError, RecursionError) as exc:
         raise CandidatePreparationError("xml_parse_rejected") from exc
-    rows = [(path, text) for path, text in parser.rows if len(text) <= MAX_QUOTE_CHARS][
-        :candidate_limit
-    ]
+    usable = [
+        (path, text, group)
+        for (path, text), group in zip(parser.rows, parser.row_groups, strict=True)
+        if len(text) <= MAX_QUOTE_CHARS
+    ][:candidate_limit]
+    rows = [(path, text) for path, text, _ in usable]
+    kept_groups = [group for _, _, group in usable]
+    disclosed = Counter(group for group in parser.row_groups if group is not None)
+    for group in parser.incomplete_rows:
+        # An unsatisfied ROWSPAN never yields a span: dropping the group here makes
+        # the ``covered == disclosed.get(group)`` test below fail closed.
+        disclosed.pop(group, None)
     if not rows:
         return [], []
     lines: list[str] = []
@@ -628,6 +828,19 @@ def _proprietary_member_candidates(
         }
         candidate["candidate_id"] = _candidate_id(lineage, raw)
         candidates.append(candidate)
+    candidates.extend(
+        _row_span_candidates(
+            entry,
+            artifact,
+            member_hash,
+            rows,
+            lines,
+            ranges,
+            kept_groups,
+            disclosed,
+            row_span_limit=row_span_limit,
+        )
+    )
     return candidates, [artifact]
 
 
@@ -638,6 +851,7 @@ def _xml_member_candidates(
     *,
     kind: str,
     candidate_limit: int,
+    row_span_limit: int = 0,
 ) -> tuple[list[dict[str, Any]], list[CandidateArtifact]]:
     decoded = _strict_xml_decode(member)
     try:
@@ -650,6 +864,7 @@ def _xml_member_candidates(
                 member,
                 decoded,
                 candidate_limit=candidate_limit,
+                row_span_limit=row_span_limit,
             )
         raise CandidatePreparationError("xml_parse_rejected") from exc
     member_hash = _digest(member)
@@ -780,12 +995,15 @@ def build_candidate_catalog(
     rcept_no: str,
     consolidation: str,
     max_candidates: int = 500,
+    max_row_spans: int = 200,
     max_zip_files: int = 1_000,
     max_zip_bytes: int = 50 * 1024 * 1024,
 ) -> PreparedCandidates:
     """Validate originals and return a deterministic, bounded candidate snapshot."""
     if type(max_candidates) is not int or not 1 <= max_candidates <= MAX_CANDIDATES:
         raise CandidatePreparationError("candidate_limit_invalid")
+    if type(max_row_spans) is not int or not 0 <= max_row_spans <= MAX_CANDIDATES:
+        raise CandidatePreparationError("row_span_limit_invalid")
     originals = _validated_originals(
         manifest,
         store,
@@ -800,6 +1018,7 @@ def build_candidate_catalog(
         "xbrl": [],
     }
     artifacts: dict[str, CandidateArtifact] = {}
+    row_spans: list[dict[str, Any]] = []
     truncated = False
     for kind, entry, payload in sorted(originals, key=lambda item: item[0]):
         if kind == "statements":
@@ -833,8 +1052,15 @@ def build_candidate_catalog(
                         member,
                         kind=kind,
                         candidate_limit=remaining,
+                        row_span_limit=max(0, max_row_spans - len(row_spans)),
                     )
-                    found.extend(extracted)
+                    # Row spans carry their own bound so they never displace an
+                    # existing element candidate inside ``max_candidates``.
+                    for candidate in extracted:
+                        if candidate["candidate_type"] == "document_row_span":
+                            row_spans.append(candidate)
+                        else:
+                            found.append(candidate)
                     for artifact in member_artifacts:
                         artifacts[artifact.document_id] = artifact
         remaining = max_candidates - len(groups[kind])
@@ -854,6 +1080,7 @@ def build_candidate_catalog(
             break
     if sum(len(group) for group in groups.values()) > len(candidates):
         truncated = True
+    candidates.extend(row_spans)
     referenced = {candidate["source"]["document_id"] for candidate in candidates}
     bounded_artifacts = tuple(artifacts[key] for key in sorted(artifacts) if key in referenced)
     catalog = {
@@ -868,7 +1095,12 @@ def build_candidate_catalog(
             "rcept_no": rcept_no,
             "consolidation": consolidation,
         },
-        "limits": {"max_candidates": max_candidates, "truncated": truncated},
+        "limits": {
+            "max_candidates": max_candidates,
+            "truncated": truncated,
+            "max_row_span_candidates": max_row_spans,
+            "row_span_candidate_count": len(row_spans),
+        },
         "trust": {
             "reviewed": False,
             "policy_approved": False,
