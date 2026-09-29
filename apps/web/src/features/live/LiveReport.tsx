@@ -1,12 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { getElementLabel } from "../labels";
+import { LiveReportResults } from "./LiveReportResults";
 import type { PageInfo, Section } from "./sectionPicker";
 
 type Decision = { evidence_grade: string | null; grade_range: { floor: string; ceiling: string } | null; decision_status: string };
 // source_verified는 원문 출처 검증 완료만 뜻한다. text_matched(native_text_match)는 PDF 텍스트 자동 일치일 뿐 원문 검증이 아니다.
-type Claim = { quote: string; page: number; track: string | null; source_verified: boolean; text_matched?: boolean; verification_level?: string; blocked_reason: string | null; elements: { name: string; element_id: string; state: string; quote: string | null; source_verified: boolean }[]; decision: Decision | null };
-type Result = { claims: Claim[]; pages: number[]; duration_ms: number; cost_usd: number; tagging_passes?: number; notice: string };
-const tracks: Record<string, string> = { goal: "목표", performance: "성과", management: "관리체계" };
+export type Claim = { quote: string; page: number; track: string | null; source_verified: boolean; text_matched?: boolean; verification_level?: string; blocked_reason: string | null; elements: { name: string; element_id: string; state: string; quote: string | null; source_verified: boolean }[]; decision: Decision | null };
+export type Result = { claims: Claim[]; pages: number[]; duration_ms: number; cost_usd: number; tagging_passes?: number; notice: string };
 const errors: Record<string, string> = { ACCESS_DENIED: "접근 키를 확인해 주세요.", BODY_TOO_LARGE: "선택한 쪽의 PDF가 4MB를 넘습니다. 쪽수를 줄여 주세요.", INVALID_PDF: "선택한 PDF를 읽지 못했습니다.", INVALID_PAGES: "쪽 번호를 확인해 주세요.", UPSTAGE_UNAVAILABLE: "문서 파싱을 완료하지 못했습니다. 다시 시도해 주세요.", SOLAR_UNAVAILABLE: "주장 분석을 완료하지 못했습니다. 다시 시도해 주세요.", REQUEST_COST_CAP: "요청 비용 한도를 넘습니다. 쪽수를 줄여 주세요." };
 const sections: [Section, string][] = [["E", "환경(E)"], ["S", "사회(S)"], ["G", "지배구조(G)"], ["A", "부록"], ["O", "기타"]];
 function pickPages(info: PageInfo[], selected: Section[]) {
@@ -144,14 +143,8 @@ export function LiveReport({ file }: { file: File }) {
     {error && <p className="live-report-error" role="alert">{error}</p>}
     {stage && <p className="live-report-stage" role="status">{stage}</p>}
   </section>
-    {result && <section ref={results} className="surface live-report-results analyze-results" aria-label="분석 결과"><h3>선택한 쪽의 분석 결과</h3><p>{result.pages.length}쪽 · {result.claims.length}건 · {(result.duration_ms / 1000).toFixed(1)}초 · 처리 비용 ${result.cost_usd.toFixed(4)} · 사용자 최종 검토 전</p><p>{result.notice}</p><p>묶음당 환경 관련 문단 최대 16개에서 주장 최대 5건을 추출합니다.</p>
-      {result.claims.length === 0 && <p>검토한 문단에서 확인 가능한 환경 주장을 찾지 못했습니다. 다른 쪽을 선택해 주세요.</p>}
-      <ol>{result.claims.map((claim, index) => <li key={`${claim.page}-${index}`}>
-        <div className="live-report-claim-head"><strong>{claim.page}쪽 · {claim.track ? tracks[claim.track] || claim.track : "분류 검토 필요"}</strong><span>{claim.source_verified ? "원문 확인" : claim.text_matched ? "PDF 텍스트 일치 · 잠정 후보 · 원문 검증 전" : "원문 대조 필요"}</span></div>
-        <blockquote>{claim.quote}</blockquote>
-        {claim.decision?.decision_status === "blocked_rule_gap" ? <p>{claim.blocked_reason}</p> : claim.decision?.evidence_grade ? <p>{claim.source_verified ? `규칙 판정 ${claim.decision.evidence_grade}` : `예비 ${claim.decision.evidence_grade} · 원문 검증 전 · 검토 필요`}</p> : claim.decision?.grade_range ? <p>가능 범위 {claim.decision.grade_range.floor}–{claim.decision.grade_range.ceiling} · 검토 필요</p> : <p>등급 보류 · {claim.blocked_reason || "원문 검증과 검토 전에는 등급을 계산하지 않습니다"}</p>}
-        {claim.elements.length > 0 && <details><summary>요소와 근거</summary><ul>{claim.elements.map(element => <li key={element.name}><strong>{getElementLabel(element.element_id)}</strong> · {element.state === "present" && element.source_verified && claim.source_verified ? "근거 확인" : element.state === "present" || element.state === "candidate" ? "근거 후보 · 원문 검증 전" : "미확인"}{element.quote && <q>{element.quote}</q>}</li>)}</ul></details>}
-      </li>)}</ol>
+    {result && <section ref={results} className="surface live-report-results analyze-results" aria-label="분석 결과">
+      <LiveReportResults result={result} fileName={file.name} busy={busy} />
     </section>}
   </>;
 }

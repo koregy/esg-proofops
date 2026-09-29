@@ -211,6 +211,15 @@ a.card:hover, .features .card:hover, .steps .card:hover { transform: translateY(
 .claim-item { display: block; padding: 20px 14px 20px 0; border-bottom: 1px solid var(--line); color: var(--ink) !important; transition: background .2s, padding .25s var(--ease) }
 .claim-item:hover { background: var(--paper); padding-left: 10px }
 .claim-item.selected { background: var(--paper); padding-left: 14px; box-shadow: inset 2px 0 0 var(--green); border-radius: 0 8px 8px 0 }
+.live-analysis-dashboard { min-width: 0; }
+.live-analysis-dashboard .claim-item { width: 100%; text-align: left; font: inherit; background: transparent; border: 0; border-bottom: 1px solid var(--line); cursor: pointer; }
+.live-analysis-dashboard .claim-item.selected { background: var(--paper); }
+.live-analysis-dashboard .claim-detail { scroll-margin-top: 100px; min-width: 0; }
+.live-analysis-dashboard .claim-item-top { flex-wrap: wrap; }
+.live-analysis-dashboard .live-result-filename { overflow-wrap: anywhere; }
+.live-analysis-dashboard .live-grade-row { display: flex; justify-content: space-between; gap: 12px; }
+.live-analysis-dashboard .metrics { margin: 24px 0; }
+.live-analysis-dashboard .overview-grid { margin: 32px 0; }
 .claim-item-top { display: flex; justify-content: space-between; gap: 10px; color: var(--muted); font: 500 12px var(--mono) }
 .mini-status { font: 700 12px var(--mono); white-space: nowrap; color: var(--muted) }
 .mini-status.good { color: var(--green) } .mini-status.warn { color: var(--amber) }
