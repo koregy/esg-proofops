@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from hashlib import sha256
 from pathlib import Path
 
+from proofops.adapters.local.assurance_head import assurance_proofs
 from proofops.application.ports.jobs import JobMessage
 from proofops.application.summaries import summarize_snapshot
 from proofops.domain.provenance import canonical_hash
@@ -143,7 +144,7 @@ class LocalSummaryStore:
         _require_uuid("tenant_id", tenant_id)
         _require_uuid("run_id", run_id)
         jobs = self.runs.jobs
-        with jobs._transaction() as db:
+        with assurance_proofs(jobs, tenant_id, run_id), jobs._transaction() as db:
             run = jobs._get(db, tenant_id, run_id, "run", "META")
             snapshot = self.runs._snapshot(db, tenant_id, run_id)
             projection = self.runs._project(run, snapshot)

@@ -1,15 +1,15 @@
 {
-  "checked_at": "2026-09-29T01:29:07.326589+00:00",
+  "checked_at": "2026-09-29T14:06:49.136138+00:00",
   "scope": "documentation, structured contracts and synthetic schema examples only",
   "status": "passed",
-  "checks_total": 974,
-  "passed": 974,
+  "checks_total": 1001,
+  "passed": 1001,
   "failed": 0,
   "counts": {
     "numbered_documents": 35,
     "requirements": 43,
     "tasks": 46,
-    "api_operations": 60,
+    "api_operations": 61,
     "rule_vectors": 28,
     "edge_vectors": 24
   },
@@ -74,6 +74,11 @@
       "detail": ""
     },
     {
+      "name": "json:.vercel/project.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
       "name": "json:api/rulepack.json",
       "passed": true,
       "detail": ""
@@ -85,6 +90,21 @@
     },
     {
       "name": "json:apps/web/tsconfig.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:apps/web/public/demo/engine-table.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:apps/web/public/demo/kia-2025.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:apps/web/public/demo/kia-validation-20260929.json",
       "passed": true,
       "detail": ""
     },
@@ -174,6 +194,11 @@
       "detail": ""
     },
     {
+      "name": "json:contracts/reconciliation/example-output-1.2.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
       "name": "json:contracts/reconciliation/example-output.json",
       "passed": true,
       "detail": ""
@@ -184,7 +209,17 @@
       "detail": ""
     },
     {
+      "name": "json:contracts/reconciliation/input-1.2.schema.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
       "name": "json:contracts/reconciliation/input.schema.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:contracts/reconciliation/output-1.2.schema.json",
       "passed": true,
       "detail": ""
     },
@@ -320,6 +355,16 @@
     },
     {
       "name": "json:evidence/extraction-assurance-ab-20260919.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/kia-filing-collection-20260929.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:evidence/kia-native-api-validation-20260929.json",
       "passed": true,
       "detail": ""
     },
@@ -794,6 +839,16 @@
       "detail": ""
     },
     {
+      "name": "json:fixtures/submission-kia/dart-consolidation-scope.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:fixtures/submission-kia/pinned-inputs.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
       "name": "json:fixtures/table_notes/legacy-resolved-review.json",
       "passed": true,
       "detail": ""
@@ -1114,7 +1169,17 @@
       "detail": ""
     },
     {
+      "name": "json:packages/proofops/application/reconciliation/schemas/input-1.2.schema.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
       "name": "json:packages/proofops/application/reconciliation/schemas/input.schema.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:packages/proofops/application/reconciliation/schemas/output-1.2.schema.json",
       "passed": true,
       "detail": ""
     },
@@ -1529,6 +1594,11 @@
       "detail": ""
     },
     {
+      "name": "openapi_ref:#/components/schemas/DocumentScopeProposal",
+      "passed": true,
+      "detail": ""
+    },
+    {
       "name": "openapi_ref:#/components/schemas/RunPage",
       "passed": true,
       "detail": ""
@@ -1755,6 +1825,16 @@
     },
     {
       "name": "openapi_ref:#/components/schemas/ClassificationAccepted",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "openapi_ref:#/components/schemas/ScopeProposalSection",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "openapi_ref:#/components/schemas/ScopeProposalAnchor",
       "passed": true,
       "detail": ""
     },
@@ -2010,6 +2090,11 @@
     },
     {
       "name": "path_params:version_get",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "path_params:version_scope_proposal",
       "passed": true,
       "detail": ""
     },
@@ -4829,6 +4914,11 @@
       "detail": ""
     },
     {
+      "name": "md_link:README.md:docs/VERCEL_SUBMISSION.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
       "name": "md_link:README.md:docs/00_MASTER_SPEC.md",
       "passed": true,
       "detail": ""
@@ -4845,6 +4935,51 @@
     },
     {
       "name": "md_link:README.md:evidence/source-linked-demo-verification.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "md_link:README.md:evidence/kia-native-api-validation-20260929.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "md_link:README.md:docs/NATIVE_UPSTAGE_OCR.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "md_link:README.md:docs/SOLAR_PRO3_TAGGING.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "md_link:README.md:docs/search-coverage-receipt-contract.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "md_link:README.md:docs/absence-review-link-contract.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "md_link:README.md:docs/NUMERIC_P6_LINK.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "md_link:README.md:docs/SAFE_HARBOR_CHECKLIST_PRODUCER.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "md_link:README.md:docs/industry-topic-review-contract.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "md_link:README.md:docs/SUBMISSION_PLAN_REMAINING_20260929.md",
       "passed": true,
       "detail": ""
     },

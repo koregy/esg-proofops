@@ -558,8 +558,9 @@ def test_the_older_policies_and_their_receipts_are_unchanged(monkeypatch):
 
 def test_the_wrapper_receipt_is_never_composed_through_the_per_record_cache(monkeypatch):
     """The whole-receipt fields would be inconsistent with a fresh recompute, so
-    the batch path must recompute this wrapper in full and the replay cache must
-    refuse to project it."""
+    the batch path must recompute this wrapper in full. The replay cache may only
+    reuse that whole, byte-identical receipt, and its projection must equal the
+    frozen replay exactly (tests/integration/test_typography_replay_reuse.py)."""
     from proofops.adapters.local import native_replay_cache
 
     render_as_bullet(monkeypatch)
@@ -571,10 +572,15 @@ def test_the_wrapper_receipt_is_never_composed_through_the_per_record_cache(monk
         reader=wrapper, graph=graph, source=source, refs=refs, tenant_id=TENANT, cache=True
     )
     assert receipt == wrapper.attest_claim_spans(graph, source, refs, tenant_id=TENANT)
-    assert not native_replay_cache._wrapper_projection_pinned(wrapper, policy, receipt)
+    assert native_replay_cache._wrapper_projection_pinned(wrapper, policy, receipt)
+    assert native_replay_cache._reuse_wrapper_replay(
+        wrapper, policy, receipt, graph, source, discovery, TENANT
+    ) == wrapper.replay_claim_spans(receipt, graph, source, discovery, tenant_id=TENANT)
+    # A receipt that is not the remembered bytes is never projected.
+    altered = dict(receipt, typography_reads={})
     assert (
         native_replay_cache._reuse_wrapper_replay(
-            wrapper, policy, receipt, graph, source, discovery, TENANT
+            wrapper, policy, altered, graph, source, discovery, TENANT
         )
         is None
     )

@@ -27,11 +27,33 @@ from proofops.application.evidence.report_level import check_report_level
 from proofops.application.evidence.retrieval import EvidencePacket
 from proofops.application.evidence.span_citations import verify_source_ref
 from proofops.application.ingest.graph_fusion import CanonicalDocumentGraph
+from proofops.application.tagging.absence_link import (
+    POLICY as ABSENCE_POLICY,
+)
+from proofops.application.tagging.absence_link import (
+    AbsenceLinkRejected,
+    derive_absences,
+    replay_absence_receipt,
+)
+from proofops.application.tagging.assurance_link import (
+    POLICY as ASSURANCE_POLICY,
+)
+from proofops.application.tagging.assurance_link import (
+    AssuranceLinkRejected,
+    derive_assurance_fact,
+    replay_assurance_receipt,
+)
 from proofops.application.tagging.consensus import (
     PARTIAL_FACTS_HASH,
     PARTIAL_FACTS_V1,
     ConsensusResult,
     form_consensus,
+)
+from proofops.application.tagging.numeric_link import POLICY as NUMERIC_POLICY
+from proofops.application.tagging.numeric_link import (
+    NumericLinkRejected,
+    derive_numeric_fact,
+    replay_numeric_receipt,
 )
 from proofops.application.tagging.report_level_link import replay_report_level_link, strict_fallback
 from proofops.application.tagging.service import TagRun
@@ -367,8 +389,17 @@ def _review_applicability(inputs: ReviewInputs, track: str, review: Any):
     return facts, receipt
 
 
-def _review_safe_harbor(inputs: ReviewInputs, review: Any):
-    """Create only explicit checklist facts from replayed packet references."""
+def _review_safe_harbor(inputs: ReviewInputs, review: Any, *, carried: bool = False):
+    """Create only explicit checklist facts from replayed packet references.
+
+    R00 §12 common guard: a checklist ``absent`` needs a trusted, replay-valid
+    full-document search-coverage proof. Checklist items are not G/P/M elements, so
+    the search-coverage producer cannot attest them yet, and a caller-supplied
+    ``search_coverage_verified`` boolean is never authority. Every ``absent`` item is
+    therefore refused, both in a new request and when an earlier stored receipt would
+    be carried into a new revision. Stored revisions are never rewritten; their
+    items stay as recorded.
+    """
     if not isinstance(review, dict) or set(review) != {
         "policy",
         "input_snapshot_sha256",
@@ -427,6 +458,13 @@ def _review_safe_harbor(inputs: ReviewInputs, review: Any):
             or (state in ("present", "absent", "conflict") and not item["evidence_refs"])
         ):
             raise ReviewRejected("SAFE_HARBOR_REVIEW_INVALID")
+        if state == "absent":
+            raise ReviewRejected(
+                "SAFE_HARBOR_ABSENCE_CARRY_REQUIRES_RECEIPT"
+                if carried
+                else "SAFE_HARBOR_ABSENCE_RECEIPT_REQUIRED",
+                409 if carried else 422,
+            )
         seen.add(name)
         refs, scopes = [], set()
         for raw in item["evidence_refs"]:
@@ -603,10 +641,18 @@ class ReviewService:
         load_inputs: Callable[[str, str, str], ReviewInputs],
         verify_context_sources=None,
         load_run_snapshot=None,
+        load_assurance_statement=None,
+        search_coverage=None,
     ):
         self.store, self.load_inputs = store, load_inputs
         self.verify_context_sources = verify_context_sources
         self.load_run_snapshot = load_run_snapshot
+        # Trusted re-extracting loader (``LocalAssuranceStore.load``); P4 work fails
+        # closed without it, and nothing else in a review can create P4.
+        self.load_assurance_statement = load_assurance_statement
+        # Trusted search-coverage port (``LocalSearchCoverageStore``); absence work
+        # fails closed without it. It replays receipts from the current source/run.
+        self.search_coverage = search_coverage
 
     def _review(self, inputs: ReviewInputs, review_id: str | None = None) -> dict:
         inputs.validate()
@@ -691,6 +737,9 @@ class ReviewService:
         safe_harbor_review: dict | None = None,
         category_review: dict | None = None,
         context_review: dict | None = None,
+        assurance_review: dict | None = None,
+        absence_review: dict | None = None,
+        numeric_review: dict | None = None,
         reopen: bool = False,
     ):
         """Trusted backend-only operation for explicit user-delegated AI review.
@@ -733,6 +782,9 @@ class ReviewService:
             safe_harbor_review=safe_harbor_review,
             category_review=category_review,
             context_review=context_review,
+            assurance_review=assurance_review,
+            absence_review=absence_review,
+            numeric_review=numeric_review,
             reopen=reopen,
         )
 
@@ -752,6 +804,9 @@ class ReviewService:
         safe_harbor_review=None,
         category_review=None,
         context_review=None,
+        assurance_review=None,
+        absence_review=None,
+        numeric_review=None,
         reopen=False,
     ):
         if not isinstance(actor, AuthContext) or not actor.has_capability("reviewer"):
@@ -787,6 +842,58 @@ class ReviewService:
             and inputs.rulepack.approved_at
         ):
             raise ReviewRejected("RULEPACK_APPROVAL_REQUIRED", 409)
+
+        # The statement loader re-extracts from the graph and opens its own SQLite
+        # writer transaction, so it must run before the review store's transaction.
+        preloaded_statement: dict = {}
+        if self.load_assurance_statement is not None and (assurance_review is not None or reopen):
+            try:
+                preloaded_statement["value"] = self.load_assurance_statement(
+                    actor.tenant_id, target["run_id"]
+                )
+            except (ValueError, KeyError, TypeError):
+                preloaded_statement["error"] = "ASSURANCE_STATEMENT_SOURCE_REJECTED"
+
+        def statement_for_build():
+            if self.load_assurance_statement is None:
+                raise ReviewRejected("ASSURANCE_LOADER_UNAVAILABLE", 409)
+            if "error" in preloaded_statement:
+                raise ReviewRejected(preloaded_statement["error"], 409)
+            if "value" not in preloaded_statement:
+                raise ReviewRejected("ASSURANCE_LOADER_UNAVAILABLE", 409)
+            return preloaded_statement["value"]
+
+        # search-absence-link-v1: the producer port replays receipts from the original
+        # PDF/graph/claim/run snapshot and opens its own transactions, so derivation
+        # (fresh) and replay (carried) both happen here, before the writer transaction.
+        # ``build`` re-pins the result to the exact head it is applied to.
+        absence_pre: dict = {}
+        if absence_review is not None:
+            if self.search_coverage is None:
+                raise ReviewRejected("ABSENCE_EVIDENCE_UNAVAILABLE", 409)
+            try:
+                absence_pre["fresh"] = derive_absences(inputs, absence_review, self.search_coverage)
+            except AbsenceLinkRejected as exc:
+                raise ReviewRejected(str(exc), 409) from exc
+        elif reopen:
+            head_tag = getattr(self.store, "head_tag", None)
+            prior_head = (
+                head_tag(actor.tenant_id, target["run_id"], target["claim_id"])
+                if head_tag is not None
+                else None
+            )
+            prior_absence = (prior_head or {}).get("absence_review")
+            if prior_absence is not None:
+                if self.search_coverage is None:
+                    absence_pre["error"] = "ABSENCE_EVIDENCE_UNAVAILABLE"
+                else:
+                    try:
+                        absence_pre["carried"] = (
+                            prior_absence["receipt_sha256"],
+                            replay_absence_receipt(inputs, prior_absence, self.search_coverage),
+                        )
+                    except (AbsenceLinkRejected, KeyError, TypeError) as exc:
+                        absence_pre["error"] = str(exc) or "ABSENCE_REPLAY_MISMATCH"
 
         def build(review, initial, decision_revision):
             inputs.validate()
@@ -893,7 +1000,7 @@ class ReviewService:
             safe_harbor_facts, safe_harbor_receipt = ([], None)
             if effective_safe_harbor is not None:
                 safe_harbor_facts, safe_harbor_receipt = _review_safe_harbor(
-                    inputs, effective_safe_harbor
+                    inputs, effective_safe_harbor, carried=safe_harbor_carried
                 )
                 previous_names |= {f.name for f in safe_harbor_facts}
             new_facts = [f for n, f in facts.items() if n not in previous_names] + reviewed_facts
@@ -904,6 +1011,8 @@ class ReviewService:
                 if context_review is not None
                 else (prior_context.get("request") if isinstance(prior_context, dict) else None)
             )
+            if numeric_review is not None and context_request is not None:
+                raise ReviewRejected("NUMERIC_CONFLICTS_CONTEXT_REVIEW", 409)
             context_receipt = None
             if context_request is not None:
                 from proofops.application.claim_context_review import review_facility_context
@@ -954,6 +1063,130 @@ class ReviewService:
                     context_receipt["carried_from"] = prior_context.get(
                         "carried_from", prior_provenance
                     )
+            # P4 (assurance-link-v1): only a statement-pinned, re-extracted, fully
+            # covered single-opinion match can supply the prior fact P4 requires.
+            # A carried receipt is recomputed and must be byte-identical.
+            assurance_fact, assurance_receipt = None, None
+            body_p4 = next((e for e in elements if e.element_id == "P4"), None)
+            prior_assurance = initial.get("assurance_review")
+            if prior_assurance is not None and not reopen:
+                raise ReviewRejected("ASSURANCE_REPLAY_MISMATCH", 409)
+            if assurance_review is not None:
+                if body["track"] != "performance":
+                    raise ReviewRejected("ASSURANCE_TRACK_MISMATCH")
+                statement = statement_for_build()
+                try:
+                    assurance_fact, assurance_receipt = derive_assurance_fact(
+                        inputs, assurance_review, statement
+                    )
+                except AssuranceLinkRejected as exc:
+                    raise ReviewRejected(str(exc), 409) from exc
+                if assurance_fact is None:
+                    raise ReviewRejected("ASSURANCE_NOT_COVERED")
+            elif (
+                isinstance(prior_assurance, dict)
+                and body["track"] == "performance"
+                and body_p4 is not None
+                and body_p4.state == "present"
+            ):
+                statement = statement_for_build()
+                try:
+                    assurance_fact, assurance_receipt = replay_assurance_receipt(
+                        inputs, prior_assurance, statement
+                    )
+                except AssuranceLinkRejected as exc:
+                    raise ReviewRejected("ASSURANCE_REPLAY_MISMATCH", 409) from exc
+                assurance_receipt = {
+                    **assurance_receipt,
+                    "carried_from": prior_assurance.get("carried_from", prior_provenance),
+                }
+            if assurance_fact is not None and (
+                body_p4 is None
+                or body_p4.state != "present"
+                or body_p4.reason_code != ASSURANCE_POLICY
+                or body_p4.credited_from is not None
+            ):
+                raise ReviewRejected("ASSURANCE_ELEMENT_MISMATCH")
+            # P6 (numeric-link-v1): only a replayed deterministic comparison over a
+            # verified table observation can supply the prior fact P6 requires.
+            # Undecided checks produce no fact; a carried receipt must replay exactly.
+            numeric_fact, numeric_receipt = None, None
+            body_p6 = next((e for e in elements if e.element_id == "P6"), None)
+            prior_numeric = initial.get("numeric_review")
+            if prior_numeric is not None and not reopen:
+                raise ReviewRejected("NUMERIC_REPLAY_MISMATCH", 409)
+            if numeric_review is not None:
+                if body["track"] != "performance":
+                    raise ReviewRejected("NUMERIC_TRACK_MISMATCH")
+                try:
+                    numeric_fact, numeric_receipt = derive_numeric_fact(inputs, numeric_review)
+                except NumericLinkRejected as exc:
+                    raise ReviewRejected(str(exc), 409) from exc
+                if numeric_fact is None:
+                    raise ReviewRejected("NUMERIC_NOT_DECIDED")
+            elif (
+                isinstance(prior_numeric, dict)
+                and body["track"] == "performance"
+                and body_p6 is not None
+                and body_p6.reason_code == NUMERIC_POLICY
+            ):
+                try:
+                    numeric_fact, numeric_receipt = replay_numeric_receipt(inputs, prior_numeric)
+                except NumericLinkRejected as exc:
+                    raise ReviewRejected("NUMERIC_REPLAY_MISMATCH", 409) from exc
+                numeric_receipt = {
+                    **numeric_receipt,
+                    "carried_from": prior_numeric.get("carried_from", prior_provenance),
+                }
+            if numeric_fact is not None and context_request is not None:
+                # A facility-context review forces P6 unknown (no bound table). A derived
+                # numeric fact on the same revision would publish a head whose receipt
+                # disagrees with P6, so the combination is refused before any write.
+                raise ReviewRejected("NUMERIC_CONFLICTS_CONTEXT_REVIEW", 409)
+            if numeric_fact is not None and (
+                body_p6 is None
+                or body_p6.state != numeric_fact.state
+                or body_p6.reason_code != NUMERIC_POLICY
+                or body_p6.credited_from is not None
+                or body_p6.normalized_value != numeric_fact.normalized_value
+            ):
+                raise ReviewRejected("NUMERIC_ELEMENT_MISMATCH")
+            absence_facts: dict = {}
+            absence_receipt = None
+            prior_absence = initial.get("absence_review")
+            if prior_absence is not None and not reopen:
+                raise ReviewRejected("ABSENCE_REPLAY_MISMATCH", 409)
+            body_states = {e.element_id: e for e in elements}
+            if "fresh" in absence_pre:
+                absence_facts, absence_receipt = absence_pre["fresh"]
+                if absence_review["track"] != body["track"]:
+                    raise ReviewRejected("ABSENCE_TRACK_MISMATCH")
+            elif prior_absence is not None:
+                items = [item["element_id"] for item in prior_absence.get("items", ())]
+                if body["track"] == prior_absence.get("request", {}).get("track") and all(
+                    body_states.get(e) is not None and body_states[e].state == "absent"
+                    for e in items
+                ):
+                    if "error" in absence_pre:
+                        raise ReviewRejected(absence_pre["error"], 409)
+                    carried_sha, (absence_facts, absence_receipt) = absence_pre["carried"]
+                    if carried_sha != prior_absence.get("receipt_sha256"):
+                        raise ReviewRejected("ABSENCE_REPLAY_MISMATCH", 409)
+                    absence_receipt = {
+                        **absence_receipt,
+                        "carried_from": prior_absence.get("carried_from", prior_provenance),
+                    }
+            for element_id in absence_facts:
+                element = body_states.get(element_id)
+                if (
+                    element is None
+                    or element.state != "absent"
+                    or element.reason_code != ABSENCE_POLICY
+                    or element.evidence_refs
+                    or element.normalized_value is not None
+                    or element.credited_from is not None
+                ):
+                    raise ReviewRejected("ABSENCE_ELEMENT_MISMATCH")
             checked_elements = []
             report_level_receipts = []
             prior_report_level = {
@@ -974,6 +1207,18 @@ class ReviewService:
                     )
                 names = MAPPINGS[body["track"]][element.element_id]
                 previous = [facts.get(name) for name in names]
+                if element.element_id == "P4" and assurance_fact is not None:
+                    previous = [assurance_fact]
+                if element.element_id in absence_facts:
+                    previous = list(absence_facts[element.element_id])
+                if element.element_id == "P6" and numeric_fact is not None:
+                    previous = [numeric_fact]
+                if element.reason_code == NUMERIC_POLICY and (
+                    element.element_id != "P6" or numeric_fact is None
+                ):
+                    # The policy marker is only valid on a derived P6 with its receipt;
+                    # otherwise every consumer would reject the head (NUMERIC_PROOF_MISSING).
+                    raise ReviewRejected("NUMERIC_PROOF_REQUIRED")
                 report_level = (
                     element.state == "present"
                     and element.reason_code is not None
@@ -1070,6 +1315,19 @@ class ReviewService:
                     ):
                         raise ReviewRejected("COVERAGE_OR_APPLICABILITY_REQUIRED")
                 scope = "local_claim"
+                if element.state == "conflict" and element.element_id == "P6":
+                    # A numeric conflict is a computed result, like present: only an
+                    # equal prior fact (numeric-link-v1 or an already-stored revision)
+                    # may carry it; a typed conflict is never accepted on its own.
+                    if not all(
+                        f
+                        and f.state == "conflict"
+                        and f.evidence_refs == refs
+                        and f.normalized_value == element.normalized_value
+                        for f in previous
+                    ):
+                        raise ReviewRejected("DETERMINISTIC_CHECK_REQUIRED")
+                    scope = previous[0].source_scope
                 if element.state == "present":
                     if element.element_id in ("P4", "P6"):
                         # Dedicated assurance/numeric results cannot be typed into existence.
@@ -1242,6 +1500,12 @@ class ReviewService:
                 tag["claim_context_review"] = context_receipt
             if report_level_receipts:
                 tag["report_level_review"] = report_level_receipts
+            if assurance_receipt is not None:
+                tag["assurance_review"] = assurance_receipt
+            if absence_receipt is not None:
+                tag["absence_review"] = absence_receipt
+            if numeric_receipt is not None:
+                tag["numeric_review"] = numeric_receipt
             if extra_tag:
                 tag.update(extra_tag)
             decision_record = dict(
@@ -1261,6 +1525,12 @@ class ReviewService:
                 trusted_options["category_review"] = category_review
             if context_review is not None:
                 trusted_options["context_review"] = context_review
+            if assurance_review is not None:
+                trusted_options["assurance_review"] = assurance_review
+            if absence_review is not None:
+                trusted_options["absence_review"] = absence_review
+            if numeric_review is not None:
+                trusted_options["numeric_review"] = numeric_review
             # Every supplied trusted option joins the retry identity on EVERY
             # callable surface, not only when an AI provenance label is present:
             # a same-key retry with a changed receipt must conflict, never replay.

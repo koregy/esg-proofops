@@ -88,7 +88,10 @@ FACT_KINDS = (
 #     contract forbids creating `implementation_scope` from a generic scope or
 #     region mention, and no producer emits `implementation_scope` itself.
 #   * `currency_amount` / `revenue_share` -- no producer emits these fact names
-#     at all, and no approved currency/revenue primitive exists to alias.
+#     at all, and no approved currency/revenue primitive exists to alias. They
+#     are reachable only through an explicit source-bound C3/C4 trigger review
+#     (`application/linkage_trigger_review.py`, `build_packet(trigger_review=...)`),
+#     never by renaming a fact.
 TRIGGER_TAG_MAP: dict[str, str] = {
     "org_boundary": "organizational_boundary",
     "organizational_boundary": "organizational_boundary",
@@ -335,6 +338,138 @@ class FinancialContext:
             raise DomainValidationError("c4_context must be C4Context or null")
 
 
+# Only the organisational-boundary facts can be reviewed into a C1 entity_set.
+# `implementation_scope`/facility_set has no producer and a generic GHG scope
+# or region mention must never be aliased into one, so no facility review type
+# exists here.
+C1_REVIEW_FACT_NAMES = ("org_boundary", "organizational_boundary")
+C1_REVIEW_RECEIPT_SCHEMA = "linkage-c1-entity-set-review-1"
+# R00 §6: an AI-delegated review is a recorded activation path, never presented
+# as human, legal or accounting approval or as independent gold.
+C1_REVIEW_ORIGINS = {
+    "human": "human_entity_set_review",
+    "ai_delegated": "ai_delegated_entity_set_review_not_independent_gold",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewedSourceBinding:
+    """One exact trigger evidence ref (raw SourceRef.source_id + its quote) the reviewer read."""
+
+    source_id: str
+    quote: str
+
+    def __post_init__(self) -> None:
+        _require_uuid("review source_id", self.source_id)
+        if not isinstance(self.quote, str) or not self.quote:
+            raise DomainValidationError("review source quote required")
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewedEntity:
+    """One identifier plus the literal label naming it inside a bound source quote."""
+
+    entity_id: str
+    source_label: str
+    source_id: str
+
+    def __post_init__(self) -> None:
+        for name in ("entity_id", "source_label", "source_id"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value.strip() or value != value.strip():
+                raise DomainValidationError(f"reviewed entity {name} must be trimmed nonempty text")
+
+
+@dataclass(frozen=True, slots=True)
+class C1EntitySetReview:
+    """Caller-reviewed, source-bound normalization of one confirmed boundary fact.
+
+    SCHEMA_GUIDE allows an entity-name -> ID mapping only with the source text and
+    an approval record. This is that record: it is pinned to one tenant, company,
+    run, claim, document version and accepted tag revision, and to the exact
+    confirmed value it normalizes. Every entity must be named by a literal label
+    inside a quote that is already a verified evidence ref of that fact. Nothing
+    here infers an entity, facility or period; a mismatch blocks, never repairs.
+    """
+
+    synthetic: bool
+    tenant_id: str
+    company_id: str
+    run_id: str
+    claim_id: str
+    document_version_id: str
+    tag_revision: int
+    fact_name: str
+    fact_value: str
+    kind: str
+    entities: tuple[ReviewedEntity, ...]
+    source_bindings: tuple[ReviewedSourceBinding, ...]
+    review_id: str
+    reviewed_by: str
+    reviewed_at: str
+    review_origin: str
+
+    def __post_init__(self) -> None:
+        if self.review_origin not in C1_REVIEW_ORIGINS:
+            raise DomainValidationError(f"review_origin must be one of {sorted(C1_REVIEW_ORIGINS)}")
+        if type(self.synthetic) is not bool:
+            raise DomainValidationError("review synthetic flag must be boolean")
+        for name in ("tenant_id", "claim_id", "document_version_id"):
+            _require_uuid(f"review {name}", getattr(self, name))
+        for name in ("company_id", "run_id", "fact_value", "review_id", "reviewed_by"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value:
+                raise DomainValidationError(f"review {name} required")
+        if type(self.tag_revision) is not int or self.tag_revision < 1:
+            raise DomainValidationError("review tag_revision must be a positive int")
+        if self.kind != "entity_set":
+            raise DomainValidationError(
+                "only entity_set review is authorized; facility_set/implementation_scope has no "
+                "producer and is not aliased from a generic scope"
+            )
+        if self.fact_name not in C1_REVIEW_FACT_NAMES:
+            raise DomainValidationError(f"review fact_name must be one of {C1_REVIEW_FACT_NAMES}")
+        date.fromisoformat(self.reviewed_at)
+        entities = tuple(self.entities)
+        bindings = tuple(self.source_bindings)
+        if not entities or any(not isinstance(e, ReviewedEntity) for e in entities):
+            raise DomainValidationError("review entities must be nonempty ReviewedEntity values")
+        if not bindings or any(not isinstance(b, ReviewedSourceBinding) for b in bindings):
+            raise DomainValidationError("review source_bindings must be nonempty")
+        if len({e.entity_id for e in entities}) != len(entities):
+            raise DomainValidationError("review entity_ids must be unique")
+        if len({b.source_id for b in bindings}) != len(bindings):
+            raise DomainValidationError("review source_bindings must be unique")
+        object.__setattr__(self, "entities", entities)
+        object.__setattr__(self, "source_bindings", bindings)
+
+    def normalized(self) -> str:
+        """Contract form: sorted unique IDs as a compact JSON array string."""
+        import json
+
+        return json.dumps(
+            sorted(e.entity_id for e in self.entities), ensure_ascii=False, separators=(",", ":")
+        )
+
+
+def c1_review_receipt(review: C1EntitySetReview, packet: dict[str, Any]) -> dict[str, Any]:
+    """Separate approval-record envelope; strict1.1 packets never carry extra fields."""
+    from proofops.domain.reconciliation.engine import canonical_sha256
+
+    return dict(
+        receipt_schema_version=C1_REVIEW_RECEIPT_SCHEMA,
+        packet_sha256=canonical_sha256(packet),
+        synthetic=review.synthetic,
+        review_kind=C1_REVIEW_ORIGINS[review.review_origin],
+        review=dict(
+            asdict(review),
+            entities=[asdict(e) for e in review.entities],
+            source_bindings=[asdict(b) for b in review.source_bindings],
+        ),
+        normalized=review.normalized(),
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class BlockedPacket:
     """Explicit refusal to build a packet; never a fabricated stand-in."""
@@ -376,6 +511,75 @@ def _verified_triggers(tags: ConfirmedTags) -> tuple[VerifiedTrigger, ...]:
     return tuple(sorted(triggers, key=lambda t: t.fact_name))
 
 
+def _check_c1_review(
+    review: C1EntitySetReview,
+    *,
+    claim: Claim,
+    tags: ConfirmedTags,
+    triggers: list[VerifiedTrigger],
+    tenant_id: str,
+    company_id: str,
+    run_id: str | None,
+    synthetic: bool,
+) -> tuple[str, str] | VerifiedTrigger:
+    """Return the reviewed trigger, or a (reason, detail) refusal. Never repairs a value."""
+    pins = (
+        ("review_synthetic_mismatch", review.synthetic, synthetic),
+        ("review_tenant_mismatch", review.tenant_id, tenant_id),
+        ("review_company_mismatch", review.company_id, company_id),
+        ("review_run_mismatch", review.run_id, run_id),
+        ("review_claim_mismatch", review.claim_id, claim.claim_id),
+        ("review_version_mismatch", review.document_version_id, claim.document_version_id),
+        ("review_revision_stale", review.tag_revision, tags.tag_revision),
+    )
+    for reason, pinned, trusted in pins:
+        if pinned != trusted:
+            return reason, f"review pins {pinned!r} but the trusted run has {trusted!r}"
+    trigger = next((t for t in triggers if t.fact_name == review.fact_name), None)
+    if trigger is None:
+        return (
+            "review_fact_not_verified_trigger",
+            f"{review.fact_name} is not a confirmed present, verified C1 trigger on this head",
+        )
+    if trigger.normalized_value != review.fact_value:
+        return (
+            "review_fact_value_mismatch",
+            "the confirmed fact value changed since review; re-review the current value",
+        )
+    evidence = {ref.source_id: ref.quote for ref in trigger.evidence_refs}
+    for binding in review.source_bindings:
+        if binding.source_id not in evidence:
+            return (
+                "review_source_not_trigger_evidence",
+                f"review source {binding.source_id} is not a verified evidence ref of "
+                f"{review.fact_name}",
+            )
+        if evidence[binding.source_id] != binding.quote:
+            return (
+                "review_quote_mismatch",
+                f"review quote for {binding.source_id} differs from the verified evidence quote",
+            )
+    bound = {b.source_id: b.quote for b in review.source_bindings}
+    for entity in review.entities:
+        if entity.source_id not in bound or entity.source_label not in bound[entity.source_id]:
+            return (
+                "review_entity_label_not_in_source",
+                f"entity {entity.entity_id!r} label is not literally present in a bound quote",
+            )
+    try:
+        from proofops.domain.reconciliation.common import parse_entity_set
+
+        existing = parse_entity_set(review.fact_value, "fact_value")
+    except DomainValidationError:
+        existing = None
+    if existing is not None and existing != {e.entity_id for e in review.entities}:
+        return (
+            "review_conflicts_typed_value",
+            "the confirmed fact already carries a different typed entity_set",
+        )
+    return trigger
+
+
 def _context_to_contract_dict(context: C3Context | C4Context | None) -> dict[str, Any] | None:
     """Emit tuple-backed context fields as arrays required by the packet contract."""
     if context is None:
@@ -398,6 +602,9 @@ def build_packet(
     sr_published_at: str | None,
     trusted_company_id: str | None = None,
     c2_period_context: C2PeriodContext | None = None,
+    run_id: str | None = None,
+    c1_entity_set_review: C1EntitySetReview | None = None,
+    trigger_review: Any = None,
 ) -> dict[str, Any] | BlockedPacket:
     """Build one strict1.1 input packet from a trusted claim + caller context.
 
@@ -499,6 +706,47 @@ def build_packet(
             f"match claim document_version_id ({claim.document_version_id})",
         )
     trigger_elements = _verified_triggers(tags)
+    reviewed_unit: str | None = None
+    if trigger_review is not None:
+        # C3/C4 only: a checked, source-bound review yields the missing trigger.
+        from proofops.application.linkage_trigger_review import check_trigger_review
+
+        if any(t.trigger_element in ITEM_TRIGGERS.get(item, ()) for t in trigger_elements):
+            return BlockedPacket(
+                claim.claim_id,
+                item,
+                "trigger_review_redundant",
+                f"a confirmed {item} trigger already exists; refusing a second, reviewed one",
+            )
+        c4_context = financial_context.c4_context
+        checked = check_trigger_review(
+            trigger_review,
+            item=item,
+            claim=claim,
+            tags=tags,
+            tenant_id=tenant_id,
+            company_id=company_id,
+            run_id=run_id,
+            synthetic=financial_context.synthetic,
+            classification_name=None if c4_context is None else c4_context.classification_name,
+        )
+        if isinstance(checked, tuple):
+            return BlockedPacket(claim.claim_id, item, *checked)
+        reviewed_unit = checked.unit
+        trigger_elements = tuple(
+            sorted(
+                (
+                    *trigger_elements,
+                    VerifiedTrigger(
+                        checked.fact_name,
+                        checked.trigger_element,
+                        checked.evidence_refs,
+                        checked.normalized_value,
+                    ),
+                ),
+                key=lambda t: t.fact_name,
+            )
+        )
     if not trigger_elements:
         return BlockedPacket(
             claim.claim_id,
@@ -517,6 +765,27 @@ def build_packet(
             f"one of {allowed_triggers})",
         )
     primary_trigger = matching_triggers[0]
+    if c1_entity_set_review is not None:
+        if item != "C1" or not isinstance(c1_entity_set_review, C1EntitySetReview):
+            return BlockedPacket(
+                claim.claim_id,
+                item,
+                "invalid_c1_entity_set_review",
+                "a C1EntitySetReview applies only to C1 boundary facts",
+            )
+        reviewed = _check_c1_review(
+            c1_entity_set_review,
+            claim=claim,
+            tags=tags,
+            triggers=matching_triggers,
+            tenant_id=tenant_id,
+            company_id=company_id,
+            run_id=run_id,
+            synthetic=financial_context.synthetic,
+        )
+        if not isinstance(reviewed, VerifiedTrigger):
+            return BlockedPacket(claim.claim_id, item, *reviewed)
+        primary_trigger = reviewed
 
     if item == "C3" and financial_context.c3_context is None:
         return BlockedPacket(claim.claim_id, item, "missing_c3_context", "C3 requires c3_context")
@@ -723,8 +992,16 @@ def build_packet(
             )
         sustainability_kind = sustainability_kind_opt
         primary_evidence = primary_trigger.evidence_refs[0]
-        sustainability_source_id = "sr-" + primary_evidence.source_id
         sustainability_normalized = primary_trigger.normalized_value
+        if c1_entity_set_review is not None:
+            # Source-bound reviewed IDs replace the confirmed sentence; the raw
+            # side stays the reviewed evidence quote, byte-verified downstream.
+            first = c1_entity_set_review.source_bindings[0].source_id
+            primary_evidence = next(
+                r for r in primary_trigger.evidence_refs if r.source_id == first
+            )
+            sustainability_normalized = c1_entity_set_review.normalized()
+        sustainability_source_id = "sr-" + primary_evidence.source_id
         primary_evidence_quote = primary_evidence.quote
 
     claim_source = claim.source_refs[0]
@@ -758,7 +1035,7 @@ def build_packet(
             raw=primary_evidence_quote,
             normalized=sustainability_normalized,
             kind=sustainability_kind,
-            unit=None,
+            unit=reviewed_unit,
             source_id=sustainability_source_id,
         ),
         financial=dict(
@@ -798,6 +1075,11 @@ def build_packet(
             claim.claim_id,
             item,
             "invalid_reconciliation_packet",
-            f"packet violates the shared reconciliation contract: {exc}",
+            f"packet violates the shared reconciliation contract: {exc}"
+            + (
+                "; a source-bound C1EntitySetReview is required to type a boundary sentence"
+                if item == "C1" and c1_entity_set_review is None
+                else ""
+            ),
         )
     return packet

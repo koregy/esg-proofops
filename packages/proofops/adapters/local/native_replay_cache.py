@@ -33,8 +33,19 @@ _CLAIM_PROJECTION_VERIFIER = "8b95383c73d76b2bf838e51f208448c8b1995271a6639e5726
 _BULLET_ALIGNMENT_WRAPPER = "b82a2023b0a42d3868fd21868fb3494c27a14f774a0479a3e20da6b1a1e4185d"
 _BULLET_ALIGNMENT_POLICY_SCHEMA = "claim_span_bullet_alignment_policy_v1"
 _BULLET_ALIGNMENT_SCHEMA = "claim_span_bullet_alignment_attestation_v1"
+# The byte-pinned typography wrapper (R24) has the same replay tail; any other
+# build of it replays normally.
+_TYPOGRAPHY_WRAPPER = "58086038813acfca0e5d40108f7bf49863b11ecf5ceff56c91ca4989a82b98de"
+_TYPOGRAPHY_POLICY_SCHEMA = "claim_span_typography_policy_v1"
+_TYPOGRAPHY_SCHEMA = "claim_span_typography_attestation_v1"
 # A reader that could not read at all, as opposed to a content verdict.
 _UNREADABLE_REASONS = frozenset({"rendered_reader_unavailable", "render_limit"})
+# The exact verdict both rendered readers return off macOS before touching any
+# pixel. It is fixed by ``sys.platform``, which every key here pins, so it is
+# not a transient failure; any other error (or render_limit) still retries.
+_PLATFORM_UNSUPPORTED = dict(
+    status="unresolved", reason="rendered_reader_unavailable", error="UnsupportedPlatform"
+)
 
 
 def _claim_attestation_key(reader, policy, graph, source, tenant_id):
@@ -275,33 +286,85 @@ def _project_attested_claims(expected, graph, discovery, tenant_id):
     return _promote_claims(discovery, scoped, tenant_id), scoped
 
 
+def _unreadable_marks(value):
+    """Every nested dict reporting a reader that could not read at all."""
+    if isinstance(value, dict):
+        if value.get("reason") in _UNREADABLE_REASONS or "error" in value:
+            yield value
+        for item in value.values():
+            yield from _unreadable_marks(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _unreadable_marks(item)
+
+
 def _unavailable_read(value):
     """True when any nested reading reports a reader that could not read at all.
 
     Such a receipt is never remembered or reused, so the next replay retries the
-    reader instead of freezing a transient failure.
+    reader instead of freezing a transient failure. The one exception is off
+    macOS when every reader error is exactly the platform refusal: re-running
+    cannot change that verdict under the same ``sys.platform`` key.
+
+    Reason-only marks carry no error of their own, so each must be tied to a
+    platform-refused reading: a reading whose own rendered read and every
+    attempt are exactly that refusal, or a record whose ``ref.source_id`` names
+    such a reading in the same receipt. Any other reason-only mark retries.
     """
-    if isinstance(value, dict):
-        if value.get("reason") in _UNREADABLE_REASONS or "error" in value:
-            return True
-        return any(_unavailable_read(item) for item in value.values())
-    if isinstance(value, list):
-        return any(_unavailable_read(item) for item in value)
+    marks = list(_unreadable_marks(value))
+    if not marks:
+        return False
+    if sys.platform == "darwin":
+        return True
+    readings = value.get("readings") if isinstance(value, dict) else None
+    refused = {
+        source_id: reading
+        for source_id, reading in (readings.items() if isinstance(readings, dict) else ())
+        if isinstance(reading, dict)
+        and reading.get("reason") == "rendered_reader_unavailable"
+        and reading.get("rendered") == _PLATFORM_UNSUPPORTED
+        and reading.get("rendered_attempts") == [_PLATFORM_UNSUPPORTED]
+    }
+    refused_ids = {id(reading) for reading in refused.values()}
+    for mark in marks:
+        if "error" in mark:
+            if mark != _PLATFORM_UNSUPPORTED:
+                return True
+            continue
+        if mark.get("reason") != "rendered_reader_unavailable":
+            return True  # render_limit and anything else
+        if id(mark) in refused_ids:
+            continue
+        ref = mark.get("ref")
+        if isinstance(ref, dict) and ref.get("source_id") in refused:
+            continue
+        return True
     return False
 
 
 def _wrapper_projection_pinned(reader, policy, receipt):
-    """Only the byte-pinned bullet-alignment wrapper and its own receipt schema."""
-    from proofops.adapters.local import claim_span_bullet_alignment
+    """Only the byte-pinned bullet-alignment or typography wrapper, each with its
+    own policy schema, wrapper bytes and receipt schema."""
+    from proofops.adapters.local import claim_span_bullet_alignment, claim_span_typography
 
+    if reader is claim_span_bullet_alignment:
+        pinned = (
+            _BULLET_ALIGNMENT_POLICY_SCHEMA,
+            _BULLET_ALIGNMENT_WRAPPER,
+            _BULLET_ALIGNMENT_SCHEMA,
+        )
+    elif reader is claim_span_typography:
+        pinned = (_TYPOGRAPHY_POLICY_SCHEMA, _TYPOGRAPHY_WRAPPER, _TYPOGRAPHY_SCHEMA)
+    else:
+        pinned = None
     return (
-        reader is claim_span_bullet_alignment
+        pinned is not None
         and isinstance(policy, dict)
-        and policy.get("schema") == _BULLET_ALIGNMENT_POLICY_SCHEMA
-        and policy.get("wrapper_sha256") == _BULLET_ALIGNMENT_WRAPPER
+        and policy.get("schema") == pinned[0]
+        and policy.get("wrapper_sha256") == pinned[1]
         and policy == reader.claim_source_policy()
         and isinstance(receipt, dict)
-        and receipt.get("schema") == _BULLET_ALIGNMENT_SCHEMA
+        and receipt.get("schema") == pinned[2]
         and isinstance(receipt.get("base_records"), list)
         and isinstance(receipt.get("records"), list)
         and isinstance(receipt.get("artifact_sha256"), str)
@@ -352,7 +415,11 @@ def remember_wrapper_attestation(*, reader, policy, graph, source, tenant_id, re
 
 
 def _project_bullet_alignment(receipt, graph, discovery, tenant_id):
-    """The pinned wrapper's own replay tail, after its recompute was matched."""
+    """The pinned wrapper's own replay tail, after its recompute was matched.
+
+    Bullet alignment and typography share this tail verbatim: base_records refs
+    must equal the discovery refs, verified records are unioned into existing
+    spans, and a claim is promoted only when all its refs verify."""
     from proofops.adapters.local import claim_source_verification
     from proofops.application.evidence import span_citations
     from proofops.domain.values import SourceRef

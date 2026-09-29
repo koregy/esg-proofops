@@ -14,3 +14,15 @@
 *.pdf
 .venv/
 node_modules/
+.local/
+.git/
+.env
+.env.*
+*.sqlite
+*.sqlite3
+*.pem
+*.key
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

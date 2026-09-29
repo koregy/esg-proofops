@@ -1,0 +1,80 @@
+{
+  "schema": "proofops-real-validation-summary-v1",
+  "recorded_date": "2026-09-29",
+  "source_sha256": "d0d814d98c4aeedbbdb2bf8631b8981ae5cde94dec32aa32c57510420274da1f",
+  "source_pages": 134,
+  "source_body_included": false,
+  "implementation_commit": "3ab69d6561fba148d5682bb7534a4b1138d3dd2a",
+  "execution_platform": "Windows",
+  "extraction_model": "solar-pro3",
+  "tagging_model": "solar-pro3",
+  "ocr_model": "document-parse-260128",
+  "ocr_mode": "standard",
+  "whole_report_complete": false,
+  "accuracy_evaluated": false,
+  "production_ready": false,
+  "runs": [
+    {
+      "run_id": "6bea1f09-32f7-43b6-bd3e-336227f19418",
+      "purpose": "bounded technical trial; company registration not configured",
+      "selected_pages": [28],
+      "ocr": {
+        "eligible": 28,
+        "requested": 28,
+        "skipped": 0,
+        "corroborated": 15,
+        "unresolved": 13,
+        "requested_coverage_complete": true,
+        "calls": 3,
+        "gross_standard_price_estimate_usd": "0.308",
+        "short_labels_among_corroborated": 10
+      },
+      "claims_discovered": 8,
+      "claims_source_verified": 4,
+      "claims_source_unverified": 4,
+      "claims_needing_review": 8,
+      "tag_stage_status": "needs_review",
+      "offline_replay_with_network_blocked": {
+        "graph_blocks": 48,
+        "verified_blocks": 15,
+        "verified_kind": "paragraph",
+        "matches_recorded_result": true
+      }
+    },
+    {
+      "run_id": "1fc1c004-6a29-45e5-a656-5731b30ef707",
+      "purpose": "bounded assurance-page reader trial; company registration not configured",
+      "selected_pages": [130, 131, 132, 133],
+      "ocr": {
+        "eligible": 152,
+        "requested": 100,
+        "skipped": 52,
+        "corroborated": 27,
+        "requested_unresolved": 73,
+        "unresolved_including_skipped": 125,
+        "requested_coverage_complete": false,
+        "calls": 10,
+        "gross_standard_price_estimate_usd": "1.100"
+      },
+      "claims_discovered": 3,
+      "tag_stage_status": "blocked",
+      "tag_block_reasons": {
+        "SOURCE_VALIDATION_REQUIRED": 2,
+        "PRELIMINARY_TAGS_UNRESOLVED": 1
+      },
+      "offline_replay_with_network_blocked": {
+        "graph_blocks": 349,
+        "verified_blocks": 27,
+        "verified_kind": "paragraph",
+        "matches_recorded_result": true
+      }
+    }
+  ],
+  "limits": [
+    "Crop agreement does not establish complete document readability or absence of evidence.",
+    "Source verification does not establish an evidence grade or assurance coverage.",
+    "Whitespace, character and reading-order differences remain unresolved.",
+    "Windows-produced receipts currently refuse replay on macOS.",
+    "Cost values are standard-price gross estimates, not student-account invoices."
+  ]
+}

@@ -12,6 +12,7 @@ import math
 import os
 import stat
 import sys
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -89,7 +90,50 @@ def parser() -> argparse.ArgumentParser:
         "--coverage-registry", type=Path, help="Trusted coverage receipt registry JSON"
     )
     cli.add_argument("--explanations", type=Path, help="Candidate sources JSON: {sources: [...]}")
+    # Opt-in adopted revision (R00 section 12). Without it the output is unchanged.
+    cli.add_argument(
+        "--adopted-revision",
+        choices=("rec-002-006-v1", "rec-002-006-v2"),
+        help="v2 writes output schema 1.2 (explicit REC-006 not_applicable reason)",
+    )
+    cli.add_argument(
+        "--revision-receipt", type=Path, help="Trusted, reviewer-confirmed revision receipt JSON"
+    )
+    cli.add_argument(
+        "--filing-pages",
+        type=Path,
+        help="Directory of raw OpenDART list pages named <sha256>.json",
+    )
+    cli.add_argument(
+        "--evaluation-date",
+        type=date.fromisoformat,
+        help="v2 only: evaluation date that closes the filing cutoff (default: today)",
+    )
+    cli.add_argument(
+        "--filing-collection",
+        type=Path,
+        help="v2 only: collector record (opendart-list-history-2) supplied by the local"
+        " operator as trusted evidence, like the registry files. Its clock-stamped pages are"
+        " the only accepted retrieval times, but this file is operator-supplied evidence,"
+        " never cryptographic proof of a server fetch; only the store's own collection is.",
+    )
     return cli
+
+
+def _page_reader(root: Path | None) -> Any:
+    """Read a raw filing page by digest; the gate re-hashes every returned byte."""
+    if root is None:
+        return None
+
+    def read(digest: str) -> bytes:
+        if len(digest) != 64 or not all(char in "0123456789abcdef" for char in digest):
+            raise InputRejected("filing_page_digest_invalid")
+        path = root / f"{digest}.json"
+        if path.stat().st_size > MAX_JSON_BYTES:
+            raise InputRejected("filing_page_too_large")
+        return path.read_bytes()
+
+    return read
 
 
 def _optional(path: Path | None) -> dict[str, Any]:
@@ -124,6 +168,29 @@ def main(argv: list[str] | None = None) -> int:
             from proofops.adapters.reconciliation import FileSourceReader
 
             reader = FileSourceReader(args.artifacts, artifact_index)
+        revision_kwargs: dict[str, Any] = {}
+        if args.adopted_revision is not None:
+            revision_kwargs = {
+                "adopted_revision": args.adopted_revision,
+                "revision_receipt": (
+                    None if args.revision_receipt is None else load_json(args.revision_receipt)
+                ),
+                "filing_page_reader": _page_reader(args.filing_pages),
+            }
+            if args.evaluation_date is not None:
+                revision_kwargs["evaluation_date"] = args.evaluation_date
+            if args.filing_collection is not None:
+                revision_kwargs["filing_collection"] = load_json(args.filing_collection)
+        elif any(
+            value is not None
+            for value in (
+                args.revision_receipt,
+                args.filing_pages,
+                args.evaluation_date,
+                args.filing_collection,
+            )
+        ):
+            raise InputRejected("revision_inputs_without_adopted_revision")
         try:
             result = reconcile(
                 packet,
@@ -133,6 +200,7 @@ def main(argv: list[str] | None = None) -> int:
                 policy_registry=policies,
                 coverage_registry=coverage,
                 document_registry=documents,
+                **revision_kwargs,
             )
         except NotImplementedError:
             if packet.get("item") != "C5":

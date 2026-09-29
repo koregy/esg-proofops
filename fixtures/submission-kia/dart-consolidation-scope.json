@@ -1,0 +1,232 @@
+{
+  "note": "Public DART text (rcept_no 20250313001390): the verified subsidiaries-detail annex quote, its 24 parsed rows and the 합계 summary-row quote. Used offline by tests.",
+  "annex_source": {
+    "document_id": "kia-fs-2024-20250313001390-subsidiaries-detail",
+    "artifact_sha256": "1c99c114561f6c596745a53b2f6217198653ac59aaf1f7970209cf88021abd00",
+    "locator": "chars:0:3982",
+    "quote": "1. 연결대상 종속회사 현황(상세)\r\n☞ 본문 위치로 이동\r\n(단위 : 백만원)\r\n상호\r\n설립일\r\n주소\r\n주요사업\r\n최근사업연도말\r\n자산총액\r\n지배관계 근거\r\n주요종속\r\n회사 여부\r\nKia America, Inc.\r\n(KUS)\r\n1992년 10월\r\n111 Peters Canyon Road Irvine, CA 92606-1790, USA\r\n완성차 및 부품 해외판매\r\n13,038,247\r\n지배력 기준\r\n(기업회계기준서 1110호)\r\n최근 사업년도말 자산총액이\r\n750억원 이상인 종속회사\r\nKia Deutschland GmbH\r\n(KDE)\r\n1995년 7월\r\nTheodor-Heuss-Allee 11, 60486,Frankfurt am Main, Germany\r\n완성차 및 부품 해외판매\r\n1,033,134\r\n위와 동일\r\n최근 사업년도말 자산총액이\r\n750억원 이상인 종속회사\r\nKia Polska Sp. z o.o.\r\n(KPL)\r\n1997년 8월\r\nul. Puławska 366, 02-819 Warsaw, Poland\r\n완성차 및 부품 해외판매\r\n338,071\r\n위와 동일\r\n최근 사업년도말 자산총액이\r\n750억원 이상인 종속회사\r\nKia Canada, Inc.\r\n(KCA)\r\n1998년 2월\r\n180 Foster Crescent, Mississauga, ON, L5R 4J5, Canada\r\n완성차 및 부품 해외판매\r\n1,269,937\r\n위와 동일\r\n최근 사업년도말 자산총액이\r\n750억원 이상인 종속회사\r\nKia Belgium N.V.\r\n(KBE)\r\n2002년 4월\r\nRue Colonel Bourg 109, 1140 Evere, Belgium\r\n완성차 및 부품 해외판매\r\n213,325\r\n위와 동일\r\n최근 사업년도말 자산총액이\r\n750억원 이상인 종속회사\r\nKia Europe GmbH\r\n(Kia EU)\r\n2002년 5월\r\nTheodor-Heuss-Allee 11, 60486 Frankfurt am Main, Germany\r\n지주회사\r\n5,729,864\r\n위와 동일\r\n최근 사업년도말 자산총액이\r\n750억원 이상인 종속회사\r\nKia Czech s.r.o.\r\n(KCZ)\r\n2002년 5월\r\nJihlavska 1558/21, 140 00 Praha 4, Czech Republic\r\n완성차 및 부품 해외판매\r\n69,703\r\n위와 동일\r\n-\r\nKia Austria GmbH\r\n(KAT)\r\n2002년 5월\r\nSverigestrasse  5,  1220  Vienna, Austria\r\n완성차 및 부품 해외판매\r\n111,632\r\n위와 동일\r\n최근 사업년도말 자산총액이\r\n750억원 이상인 종속회사\r\nKia Hungary k.f.t.\r\n(KHU)\r\n2002년 5월\r\n1117 Budapest , Budafoki ut 56, Hungary\r\n완성차 및 부품 해외판매\r\n76,676\r\n위와 동일\r\n최근 사업년도말 자산총액이\r\n750억원 이상인 종속회사\r\nKia UK Limited\r\n(KUK)\r\n2002년 8월\r\nWalton Green, Walton-On-Thames, Surrey KT12 1FJ\r\n완성차 및 부품 해외판매\r\n1,991,191\r\n위와 동일\r\n최근 사업년도말 자산총액이\r\n750억원 이상인 종속회사\r\nKia Iberia S.L.\r\n(KES)\r\n2004년 1월\r\nCalle Anabel Segura 16. Edificio Vega Norte II. Alcobendas, 28108 Madrid, Spain\r\n완성차 및 부품 해외판매\r\n687,802\r\n위와 동일\r\n최근 사업년도말 자산총액이\r\n750억원 이상인 종속회사\r\nKia Sweden AB\r\n(KSE)\r\n2004년 1월\r\nKanalvagen 10A, 194 61 Upplands Vasby, Sweden\r\n완성차 및 부품 해외판매\r\n294,031\r\n위와 동일\r\n최근 사업년도말 자산총액이\r\n750억원 이상인 종속회사\r\nKia Slovakia s.r.o.\r\n(KaSK)\r\n2004년 3월\r\nSv. Jana Nepomuckeho 1282/1, 013 01 Teplika nad Vahom,\r\nSlovakia\r\n완성차 제조 및 판매\r\n5,868,154\r\n위와 동일\r\n최근 사업년도말 자산총액이\r\n750억원 이상인 종속회사\r\nKia France\r\n(KFR)\r\n2004년 6월\r\n2 rue des Martinets 92500 RUEIL-MALMAISON, France\r\n완성차 및 부품 해외판매\r\n449,944\r\n위와 동일\r\n최근 사업년도말 자산총액이\r\n750억원 이상인 종속회사\r\nKia Australia Pty Ltd.\r\n(KAU)\r\n2004년 8월\r\n67 Epping Rd, Macquarie Park NSW 2113, Australia\r\n완성차 및 부품 해외판매\r\n1,084,598\r\n위와 동일\r\n최근 사업년도말 자산총액이\r\n750억원 이상인 종속회사\r\nKia Sales Slovensko s.r.o. (KSK)\r\n2005년 10월\r\nKia Sales Slovakia s. r. o. , Einsteinova 19,\r\nSlovakia\r\n완성차 및 부품 해외판매\r\n87,097\r\n위와 동일\r\n최근 사업년도말 자산총액이\r\n750억원 이상인 종속회사\r\nKia New Zealand Limited\r\n(KNZ)\r\n2006년 1월\r\nLevel 3, Building 6, 64 Highbrook Drive, East Tamaki, Auckland 2013, New Zealand\r\n완성차 및 부품 해외판매\r\n124,425\r\n위와 동일\r\n최근 사업년도말 자산총액이\r\n750억원 이상인 종속회사\r\nKia Georgia, Inc.\r\n(KaGA)\r\n2006년 10월\r\n7777 Kia Parkway, West Point, Georgia 31833, USA\r\n완성차 제조 및 판매\r\n5,901,156\r\n위와 동일\r\n최근 사업년도말 자산총액이\r\n750억원 이상인 종속회사\r\nKia Russia & CIS\r\n(Kia RUS&CIS)\r\n2008년 10월\r\n115054, Russia, Moscow, Valovaya str. 26 , Business center ≪Light House≫, floor 9\r\n완성차 및 부품 해외판매\r\n1,204,716\r\n위와 동일\r\n최근 사업년도말 자산총액이\r\n750억원 이상인 종속회사\r\nKia Nederland B.V.\r\n(KNL)\r\n2009년 6월\r\nDe Corridor 25, 3621 ZA Breukelen, Netherlands\r\n완성차 및 부품 해외판매\r\n427,393\r\n위와 동일\r\n최근 사업년도말 자산총액이\r\n750억원 이상인 종속회사\r\nKia Italia S.r.l\r\n(KIT)\r\n2011년 6월\r\nMILANO (MI) VIA GALLARATE 184 CAP 20151, Italy\r\n완성차 및 부품 해외판매\r\n347,149\r\n위와 동일\r\n최근 사업년도말 자산총액이\r\n750억원 이상인 종속회사\r\nKia Mexico, S.A. de C.V.\r\n(KMX)\r\n2014년 8월\r\nBoulevard KIA No.777, Pesqueria, N.L. Mexico. C.P. 66679\r\n완성차 제조 및 판매\r\n3,514,417\r\n위와 동일\r\n최근 사업년도말 자산총액이\r\n750억원 이상인 종속회사\r\nKia India Private Limited\r\n(KIN)\r\n2017년 5월\r\nN.H.44, Sy. No.151-2, Erramanchi, Penukonda(M), Anantapur District  515 164, India\r\n완성차 제조 및 판매\r\n3,165,735\r\n위와 동일\r\n최근 사업년도말 자산총액이\r\n750억원 이상인 종속회사\r\nKia Malaysia Sdn Bhd\r\n(KMY)\r\n2021년 4월\r\nNo. 1, Jalan Pelukis U1/46, Temasya Industrial Park, Seksyen U1, 40150 Shah Alam, Selangor, Malaysia\r\n완성차 제조 및 판매\r\n95,608\r\n위와 동일\r\n최근 사업년도말 자산총액이\r\n750억원 이상인 종속회사\r\n* 2021년 3월 22일 정기주주총회 시 사명 변경(기아자동차 주식회사 → 기아 주식회사)에 따라 해외 종속회사 상호가 변경되었습니다."
+  },
+  "annex_rows": [
+    [
+      "Kia America, Inc. (KUS)",
+      "1992년 10월",
+      "111 Peters Canyon Road Irvine, CA 92606-1790, USA",
+      "완성차 및 부품 해외판매",
+      "13,038,247",
+      "지배력 기준 (기업회계기준서 1110호)",
+      "최근 사업년도말 자산총액이 750억원 이상인 종속회사"
+    ],
+    [
+      "Kia Deutschland GmbH (KDE)",
+      "1995년 7월",
+      "Theodor-Heuss-Allee 11, 60486,Frankfurt am Main, Germany",
+      "완성차 및 부품 해외판매",
+      "1,033,134",
+      "위와 동일",
+      "최근 사업년도말 자산총액이 750억원 이상인 종속회사"
+    ],
+    [
+      "Kia Polska Sp. z o.o. (KPL)",
+      "1997년 8월",
+      "ul. Puławska 366, 02-819 Warsaw, Poland",
+      "완성차 및 부품 해외판매",
+      "338,071",
+      "위와 동일",
+      "최근 사업년도말 자산총액이 750억원 이상인 종속회사"
+    ],
+    [
+      "Kia Canada, Inc. (KCA)",
+      "1998년 2월",
+      "180 Foster Crescent, Mississauga, ON, L5R 4J5, Canada",
+      "완성차 및 부품 해외판매",
+      "1,269,937",
+      "위와 동일",
+      "최근 사업년도말 자산총액이 750억원 이상인 종속회사"
+    ],
+    [
+      "Kia Belgium N.V. (KBE)",
+      "2002년 4월",
+      "Rue Colonel Bourg 109, 1140 Evere, Belgium",
+      "완성차 및 부품 해외판매",
+      "213,325",
+      "위와 동일",
+      "최근 사업년도말 자산총액이 750억원 이상인 종속회사"
+    ],
+    [
+      "Kia Europe GmbH (Kia EU)",
+      "2002년 5월",
+      "Theodor-Heuss-Allee 11, 60486 Frankfurt am Main, Germany",
+      "지주회사",
+      "5,729,864",
+      "위와 동일",
+      "최근 사업년도말 자산총액이 750억원 이상인 종속회사"
+    ],
+    [
+      "Kia Czech s.r.o. (KCZ)",
+      "2002년 5월",
+      "Jihlavska 1558/21, 140 00 Praha 4, Czech Republic",
+      "완성차 및 부품 해외판매",
+      "69,703",
+      "위와 동일",
+      "-"
+    ],
+    [
+      "Kia Austria GmbH (KAT)",
+      "2002년 5월",
+      "Sverigestrasse 5, 1220 Vienna, Austria",
+      "완성차 및 부품 해외판매",
+      "111,632",
+      "위와 동일",
+      "최근 사업년도말 자산총액이 750억원 이상인 종속회사"
+    ],
+    [
+      "Kia Hungary k.f.t. (KHU)",
+      "2002년 5월",
+      "1117 Budapest , Budafoki ut 56, Hungary",
+      "완성차 및 부품 해외판매",
+      "76,676",
+      "위와 동일",
+      "최근 사업년도말 자산총액이 750억원 이상인 종속회사"
+    ],
+    [
+      "Kia UK Limited (KUK)",
+      "2002년 8월",
+      "Walton Green, Walton-On-Thames, Surrey KT12 1FJ",
+      "완성차 및 부품 해외판매",
+      "1,991,191",
+      "위와 동일",
+      "최근 사업년도말 자산총액이 750억원 이상인 종속회사"
+    ],
+    [
+      "Kia Iberia S.L. (KES)",
+      "2004년 1월",
+      "Calle Anabel Segura 16. Edificio Vega Norte II. Alcobendas, 28108 Madrid, Spain",
+      "완성차 및 부품 해외판매",
+      "687,802",
+      "위와 동일",
+      "최근 사업년도말 자산총액이 750억원 이상인 종속회사"
+    ],
+    [
+      "Kia Sweden AB (KSE)",
+      "2004년 1월",
+      "Kanalvagen 10A, 194 61 Upplands Vasby, Sweden",
+      "완성차 및 부품 해외판매",
+      "294,031",
+      "위와 동일",
+      "최근 사업년도말 자산총액이 750억원 이상인 종속회사"
+    ],
+    [
+      "Kia Slovakia s.r.o. (KaSK)",
+      "2004년 3월",
+      "Sv. Jana Nepomuckeho 1282/1, 013 01 Teplika nad Vahom, Slovakia",
+      "완성차 제조 및 판매",
+      "5,868,154",
+      "위와 동일",
+      "최근 사업년도말 자산총액이 750억원 이상인 종속회사"
+    ],
+    [
+      "Kia France (KFR)",
+      "2004년 6월",
+      "2 rue des Martinets 92500 RUEIL-MALMAISON, France",
+      "완성차 및 부품 해외판매",
+      "449,944",
+      "위와 동일",
+      "최근 사업년도말 자산총액이 750억원 이상인 종속회사"
+    ],
+    [
+      "Kia Australia Pty Ltd. (KAU)",
+      "2004년 8월",
+      "67 Epping Rd, Macquarie Park NSW 2113, Australia",
+      "완성차 및 부품 해외판매",
+      "1,084,598",
+      "위와 동일",
+      "최근 사업년도말 자산총액이 750억원 이상인 종속회사"
+    ],
+    [
+      "Kia Sales Slovensko s.r.o. (KSK)",
+      "2005년 10월",
+      "Kia Sales Slovakia s. r. o. , Einsteinova 19, Slovakia",
+      "완성차 및 부품 해외판매",
+      "87,097",
+      "위와 동일",
+      "최근 사업년도말 자산총액이 750억원 이상인 종속회사"
+    ],
+    [
+      "Kia New Zealand Limited (KNZ)",
+      "2006년 1월",
+      "Level 3, Building 6, 64 Highbrook Drive, East Tamaki, Auckland 2013, New Zealand",
+      "완성차 및 부품 해외판매",
+      "124,425",
+      "위와 동일",
+      "최근 사업년도말 자산총액이 750억원 이상인 종속회사"
+    ],
+    [
+      "Kia Georgia, Inc. (KaGA)",
+      "2006년 10월",
+      "7777 Kia Parkway, West Point, Georgia 31833, USA",
+      "완성차 제조 및 판매",
+      "5,901,156",
+      "위와 동일",
+      "최근 사업년도말 자산총액이 750억원 이상인 종속회사"
+    ],
+    [
+      "Kia Russia & CIS (Kia RUS&CIS)",
+      "2008년 10월",
+      "115054, Russia, Moscow, Valovaya str. 26 , Business center ≪Light House≫, floor 9",
+      "완성차 및 부품 해외판매",
+      "1,204,716",
+      "위와 동일",
+      "최근 사업년도말 자산총액이 750억원 이상인 종속회사"
+    ],
+    [
+      "Kia Nederland B.V. (KNL)",
+      "2009년 6월",
+      "De Corridor 25, 3621 ZA Breukelen, Netherlands",
+      "완성차 및 부품 해외판매",
+      "427,393",
+      "위와 동일",
+      "최근 사업년도말 자산총액이 750억원 이상인 종속회사"
+    ],
+    [
+      "Kia Italia S.r.l (KIT)",
+      "2011년 6월",
+      "MILANO (MI) VIA GALLARATE 184 CAP 20151, Italy",
+      "완성차 및 부품 해외판매",
+      "347,149",
+      "위와 동일",
+      "최근 사업년도말 자산총액이 750억원 이상인 종속회사"
+    ],
+    [
+      "Kia Mexico, S.A. de C.V. (KMX)",
+      "2014년 8월",
+      "Boulevard KIA No.777, Pesqueria, N.L. Mexico. C.P. 66679",
+      "완성차 제조 및 판매",
+      "3,514,417",
+      "위와 동일",
+      "최근 사업년도말 자산총액이 750억원 이상인 종속회사"
+    ],
+    [
+      "Kia India Private Limited (KIN)",
+      "2017년 5월",
+      "N.H.44, Sy. No.151-2, Erramanchi, Penukonda(M), Anantapur District 515 164, India",
+      "완성차 제조 및 판매",
+      "3,165,735",
+      "위와 동일",
+      "최근 사업년도말 자산총액이 750억원 이상인 종속회사"
+    ],
+    [
+      "Kia Malaysia Sdn Bhd (KMY)",
+      "2021년 4월",
+      "No. 1, Jalan Pelukis U1/46, Temasya Industrial Park, Seksyen U1, 40150 Shah Alam, Selangor, Malaysia",
+      "완성차 제조 및 판매",
+      "95,608",
+      "위와 동일",
+      "최근 사업년도말 자산총액이 750억원 이상인 종속회사"
+    ]
+  ],
+  "summary_total_row": {
+    "source_id": "kia-fs-2024-20250313001390:document:a36deb4628ef:row:187-192",
+    "locator": "chars:12132:12537",
+    "quote": "/document/body/section-1/section-2/table-group/table/tbody/tr/td\t합계\n/document/body/section-1/section-2/table-group/table/tbody/tr/te\t24\n/document/body/section-1/section-2/table-group/table/tbody/tr/te\t-\n/document/body/section-1/section-2/table-group/table/tbody/tr/te\t-\n/document/body/section-1/section-2/table-group/table/tbody/tr/te\t24\n/document/body/section-1/section-2/table-group/table/tbody/tr/te\t23"
+  }
+}

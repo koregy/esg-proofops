@@ -1,0 +1,14 @@
+.kia-validation h1 { font-size: clamp(2rem, 4vw, 3.5rem); line-height: 1.2; max-width: 1100px; word-break: keep-all; }
+.kia-trials { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; margin: 28px 0; }
+.kia-trials .xd-card { min-width: 0; }
+.kia-bars { display: flex; height: 18px; gap: 3px; margin: 24px 0 16px; overflow: hidden; border-radius: 5px; }
+.kia-bars .matched { background: #267562; }
+.kia-bars .unresolved { background: #c68953; }
+.kia-bars .skipped { background: #cbd3cc; }
+.kia-counts { display: flex; justify-content: space-between; gap: 12px; }
+.kia-counts dt { font-size: 14px; color: #52655c; }
+.kia-counts dd { margin: 4px 0 20px; font-size: 32px; font-weight: 700; }
+.kia-validation details { margin: 14px 0; }
+.kia-validation code { overflow-wrap: anywhere; font-size: 12px; }
+.kia-source p { max-width: 900px; }
+@media (max-width: 760px) { .kia-trials { grid-template-columns: 1fr; } }

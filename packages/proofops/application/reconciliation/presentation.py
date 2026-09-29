@@ -35,7 +35,7 @@ def project_result(
                 "verification_state": "verified" if completed else "not_verified",
             }
         )
-    return {
+    projection = {
         "projection_schema_version": "reconciliation-presentation-1",
         "claim_id": result.get("claim_id"),
         "item": result.get("item"),
@@ -58,3 +58,19 @@ def project_result(
         "notice": "본 기능은 회계 처리의 적정성을 판단하지 않으며, "
         "공시 간 차이에 대한 설명의 존재 여부만 점검합니다.",
     }
+    if result.get("schema_version") != "1.2":
+        return projection
+    # Output 1.2 (revision rec-002-006-v2) only; 1.1 projections are unchanged.
+    reason = result.get("not_applicable_reason")
+    projection.update(
+        projection_schema_version="reconciliation-presentation-2",
+        result_schema_version="1.2",
+        not_applicable_reason=reason,
+        filing_lookup=result.get("filing_lookup"),
+        result=result,
+        # Strict 1.1 readers (e.g. the HTTP result field) see a downgraded view.
+        http_result_view="output-1.1-downgrade",
+    )
+    if reason == "financial_filing_not_available_as_of":
+        projection["difference_note"] = "평가 기준일까지 같은 기간 재무제표 공시 없음(완결 조회)"
+    return projection

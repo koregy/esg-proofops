@@ -32,7 +32,11 @@ from proofops.application.mode_gate import select_mode_rulepack
 from proofops.application.ports.jobs import JobConflict, JobMessage
 from proofops.application.registry import artifact_sha256
 from proofops.application.rulepacks import RunSnapshot
-from proofops.application.runs import RunRejected, validate_raster_snapshot
+from proofops.application.runs import (
+    RunRejected,
+    validate_raster_snapshot,
+    validate_upstage_ocr_snapshot,
+)
 from proofops.domain.audit import ChangeSet
 from proofops.domain.provenance import canonical_hash
 from proofops.domain.rulepacks import canonical_json
@@ -105,6 +109,7 @@ class LocalSQLiteRunStore:
                 return replay
             try:
                 validate_raster_snapshot(snapshot)
+                validate_upstage_ocr_snapshot(snapshot)
                 if snapshot.get("fact_assembly_profile", "strict-v1") not in (
                     "strict-v1",
                     "partial-facts-v1",

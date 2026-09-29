@@ -1,0 +1,72 @@
+{
+  "schema": "opendart-filing-collection-evidence-v1",
+  "captured_at": "2026-09-29T09:06:09.131119+00:00",
+  "company": "Kia",
+  "corp_code": "00106641",
+  "official_endpoint": "https://opendart.fss.or.kr/api/list.json",
+  "request": {
+    "corp_code": "00106641",
+    "bgn_de": "20240101",
+    "end_de": "20260929",
+    "last_reprt_at": "N",
+    "pblntf_ty": null,
+    "pblntf_detail_ty": "A001",
+    "page_count": 100
+  },
+  "search_state": "complete",
+  "raw_page_sha256": [
+    "276ea83a2411b15fe74786f66e97819ccb0516afdae9e470955c0e01fa7159db"
+  ],
+  "record_sha256": "59ef6f2f5459de23ee31c9960c34b60daa4f3ebb933acc3ee6c3070a6bc966d5",
+  "filings": [
+    {
+      "corp_code": "00106641",
+      "corp_name": "기아",
+      "report_nm": "사업보고서 (2025.12)",
+      "rcept_no": "20260312001224",
+      "flr_nm": "기아",
+      "rcept_dt": "20260312",
+      "rm": "연"
+    },
+    {
+      "corp_code": "00106641",
+      "corp_name": "기아",
+      "report_nm": "[기재정정]사업보고서 (2024.12)",
+      "rcept_no": "20250313001390",
+      "flr_nm": "기아",
+      "rcept_dt": "20250313",
+      "rm": "연"
+    },
+    {
+      "corp_code": "00106641",
+      "corp_name": "기아",
+      "report_nm": "사업보고서 (2024.12)",
+      "rcept_no": "20250306000691",
+      "flr_nm": "기아",
+      "rcept_dt": "20250306",
+      "rm": "정연"
+    },
+    {
+      "corp_code": "00106641",
+      "corp_name": "기아",
+      "report_nm": "[기재정정]사업보고서 (2023.12)",
+      "rcept_no": "20240312000909",
+      "flr_nm": "기아",
+      "rcept_dt": "20240312",
+      "rm": "연"
+    },
+    {
+      "corp_code": "00106641",
+      "corp_name": "기아",
+      "report_nm": "사업보고서 (2023.12)",
+      "rcept_no": "20240307000911",
+      "flr_nm": "기아",
+      "rcept_dt": "20240307",
+      "rm": "정연"
+    }
+  ],
+  "lineage_classification": "not_reviewed",
+  "actual_financial_dates": "not_verified_by_list_response",
+  "latest_same_period_filing_verdict": "not_run",
+  "cutoff_caution": "Collection during 2026-09-29 is not proof of that days end-of-day completeness."
+}

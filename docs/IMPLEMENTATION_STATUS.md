@@ -1,3 +1,200 @@
+## 2026-09-29 22:20 KST · Actual POSCO browser analysis
+
+> 2026-09-29 23:05 KST: 개발자 A 공개 화면을 통합해 https://esg-proofops-koregy.vercel.app 에 배포했습니다. 실제 POSCO PDF 업로드와 후보 5건 표시를 확인했습니다. 최신 공개 배포 범위와 제한은 [VERCEL_SUBMISSION.md](VERCEL_SUBMISSION.md)를 참고하세요. 이전의 배포 미정 기록은 과거 작업 기록입니다.
+
+The local browser now starts declared-subset analyses explicitly, shows preflight
+failures, and retains recent runs with links to their claims. The bootstrap seed
+is cancelled before any model calls. Whole-document processing is not offered by
+this local launcher. The full web build and 13 focused navigation/scope tests pass.
+
+An opt-in policy for new runs permits non-overlapping static PDF navigation
+buttons only after the existing glyph/geometry checks and image-only Upstage
+corroboration. Dynamic controls, overlapping appearances and mismatched text
+remain unresolved. The original pinned verifiers are unchanged. The new gate
+and launcher passed 28 focused checks.
+
+Actual POSCO International report page 35 (1 of 133 pages) completed as a partial
+run: 28 eligible paragraphs were compared, 10 corroborated and 18 unresolved.
+Extraction produced 34 claims; 25 require source validation and 9 require
+preliminary-tag resolution. No final E grade was assigned. This is a working
+partial analysis and review flow, not a complete report or an accuracy result.
+The original browser test also rendered the original PDF page in a claim detail.
+
+REC-006 v2 now represents proven no-timely-filing as an explicit not-applicable
+outcome with immutable collector provenance. Its HTTP collection wiring and
+real source-bound examples remain separate work. Numeric P6 implementation and
+independent review are complete; verified real table-cell application remains.
+The combined Kia trial ended with 56 blocked claims (37 source, 19 preliminary),
+not completed assurance linkage.
+
+Push and PR CI passed at `fa65336`. The subsequent `d490eb8` CI found one missing
+set type annotation; its correction and another real run are being verified.
+No AWS deployment has been made. PPT is outside the current development task.
+
+## Earlier 2026-09-29 19:18 KST · Source review paths and actual API trials
+
+Whole-document search coverage now checks every original word and requires an
+explicit review before an absence fact can enter an immutable review revision.
+Consumers replay the current source and receipt; incomplete or changed sources
+are refused. Safe-harbor checklist production accepts verified evidence but does
+not manufacture legal effect, E grades or absence receipts. The combined producer,
+absence, checklist and P4 regression run passed 135 checks.
+
+Industry topic review is a project-only CLI report. Topics cannot disappear or be
+relabelled in a later universe revision; an explicit approval of the exact current
+not-applicable review is needed to exclude one. Same-actor delegated approval is
+recorded honestly. No official industry mapping or satisfaction score is invented.
+Independent review accepted the six files in `2a9f035`; coordinator rerun passed
+37 new checks (worker additionally passed six existing acceptance checks).
+
+Actual private-Kia trials and their limits are recorded, without source body, in
+`evidence/kia-native-api-validation-20260929.json`. The p28 trial corroborated
+15 of 28 blocks and found eight claims, four source-verified, all needing review.
+The assurance-page trial corroborated 27 of 152 eligible blocks, left 52 uncalled,
+and did not complete tagging. Both replayed with the network blocked. A new
+same-company run spanning p28/p35 and p130–133 is still processing; no complete
+Kia report, assurance linkage or accuracy result is claimed.
+
+Both GitHub CI events passed at `ca797fb`, including the launcher options for
+table-role and position-context ordering. Later industry/UI changes require their
+own CI. Numeric P6 integration passed independent review and was committed in
+`47087cc`. The 39-test producer/review run passed; the mixed-CLI loader follow-up
+passed 87 scoped checks, with coordinator rerun of its changed 20-test suite.
+The public Kia metadata page passed 14 extended browser checks, including mobile
+layout and no API/write requests. Commit `b9d5d06` updates the navigation regression
+for its additional menu item. The ten-slide PPT v3 is
+prepared, with deployment still pending. No AWS deployment was made.
+
+## Earlier 2026-09-29 18:28 KST · Native API OCR and Solar Pro 3 integrated
+
+Commit `3ab69d6` adds a NEW-run native paragraph corroboration path using rendered
+image-only crops and stored Document Parse receipts, plus explicit Solar Pro 3
+selection for all live tagging roles. It preserves source glyph/geometry checks,
+the existing shared ledger, immutable snapshots and offline receipt replay.
+An unmatched crop stays unresolved. Windows/Linux-produced proofs currently
+refuse replay on macOS; the documented alternative is a new macOS run.
+
+The OCR worker passed 631 related regressions and 17 integration/17 unit checks;
+the model worker passed 30 new checks and 499 regression checks. Its one Windows
+test-fixture unlink failure was corrected without changing production receipt
+protection; the coordinator reran that case successfully. Coordinator lint,
+new-module mypy and architecture checks passed. A combined fake-provider rerun
+and real private-Kia p28 execution are underway; no actual full-run result is
+claimed yet. CI now runs the new model/OCR suites on all three operating systems
+(the off-macOS OCR suite is explicitly skipped on macOS).
+
+Commit `14dcac2` added full-source P4 consumer proofs and opt-in REC-002/006
+explanation/filing-lineage guards. Both its push and PR CI workflows succeeded.
+Actual DART collection returned five Kia annual filings with raw-response hashes;
+this does not establish reviewed correction lineage or source-verified financial
+periods. New OCR/model CI is pending. Whole-document absence review and the
+safe-harbor checklist producer remain active work. No AWS deployment was made.
+
+## Earlier 2026-09-29 17:52 KST · Implemented and under integration
+
+The submission branch now includes the immutable API candidate importer, Kia
+followup exporter (29 checks, 28 literal matches; six candidate records including
+the 2024 revenue share), opt-in Windows OCR, faster byte-pinned typography replay,
+and paired grade agreement evaluation (linear and quadratic weighted kappa).
+Targeted coordinator checks passed: followup 13, Windows OCR 24, replay reuse 18,
+agreement evaluation 13. The Windows reader's real Korean crop samples contain
+OCR differences; no full 61-block Windows re-evaluation or real Kia P4 completion
+is claimed. API parsing and candidate integrity do not establish citation quality.
+
+Full-source verification for P4 consumers, full-document search coverage receipts,
+the Upstage raster corroboration runtime, and versioned REC-002/006 guards remain
+in active integration. Uncommitted code is not release validation. The existing
+public-PDF run is still extracting; a new reader requires a new run.
+
+Both CI events passed for `7cdb473` and `563fedd`; one event also passed for
+`73839d2`. Later Windows/replay/agreement commits are undergoing CI. PR #1 remains
+draft with a readable UTF-8 description. No AWS deployment has been performed.
+
+## Earlier 2026-09-29 17:13 KST · Actual parsing and remaining source verification
+
+The reviewer's private Kia PDF was received and matched the reply's complete
+SHA-256 `d0d814d98c4aeedbbdb2bf8631b8981ae5cde94dec32aa32c57510420274da1f`.
+It differs from the public download, including text on page 111. The private PDF
+and derived contents stay outside Git; the two document versions are not merged.
+
+Document Parse Standard actually completed all 134 pages in 14 batches: 2,536
+elements, including 1,107 paragraphs and 264 tables. The ordinary-price gross
+estimate is USD1.474, not a verified student-account invoice. The replayable
+candidate import preserves request/response/source hashes and physical page
+mapping. All candidates remain unverified; table boxes are not cell boxes.
+The user reports unlimited student access to Solar Pro 2/3 and Document Parse.
+Accounting preserves that declaration separately from estimated usage.
+
+The existing public-PDF run passed parsing and is extracting claims, but its
+macOS-only rendered reader returns UnsupportedPlatform on Windows. In particular,
+all 61 inspected assurance blocks on pages 132–133 remain unverified. Windows OCR
+support and reuse of unchanged verification results are in development. Neither
+full-report tagging, assurance coverage nor C1–C4 completion is claimed.
+
+The shared session ledger was amended from USD10 to USD20 without resetting
+usage/reservations or extending the original midnight KST expiry. At amendment:
+128 calls, no unsettled reservations, gross estimated usage USD1.5476583100.
+The original grant and amendment chain are preserved. This local cap is still
+finite; the student entitlement has not been converted into an unlimited mode.
+
+CI passed both push and PR workflows for `f36ddc1`. Later parser/import/budget
+changes have targeted tests; their release CI must be checked separately.
+
+## Earlier 2026-09-29 · Submission integration checkpoint
+
+The submission branch now includes source-bound C1 entity-set review, exact-date
+assurance interval matching, report preview with export integrity checks, and
+Windows process locks for paid dispatch exclusion. The existing upload/run/review
+pipeline is retained. CI at commit `000ed9e` passed all nine jobs, including
+Windows, Linux and macOS 15; this is software validation, not model accuracy.
+
+Public routes `/guide`, `/replay`, `/review` and `/report/naver` show sourced
+decision rules, a stored replay, a clearly labelled local simulator and an
+immutable snapshot report. Twelve browser checks passed locally. The simulator
+uses 8,960 scenarios generated by the Python rule engine; it does not publish
+accepted reviews. The NAVER snapshot remains a partial run (54/244 pages), with
+314 null grades preserved. It is not a completed whole-document assessment.
+
+`python -m evaluation.retrieval_eval --input INPUT.json --output NEW.json`
+scores supplied, source-version-bound retrieval cases at K=10 and K=20. Missing
+rankings and unreadable cases remain in the end-to-end denominator; readable-only
+metrics are separate. Nine unit tests passed. No new real recall or independent
+gold accuracy result is claimed: real reviewed reference cases are still needed.
+
+The additional Upstage grant for 2026-09-29 is USD10, including VAT allowance and
+unsettled reservations. Historical usage is unknown on this PC. This grant must
+be explicitly recorded in a separate session ledger; it does not reset or extend
+any historical cumulative authorization. The new Kia run and AWS deployment
+remain in progress at this checkpoint. The public Vercel address does not yet
+serve this branch's changes.
+
+`scripts/build_kia_submission_case.py` prepares pinned Kia SR/DART input
+candidates. Twelve DART sources passed hash/quote verification; 38/44 SR evidence
+quotes were found and six ambiguous quotes refused. These are review inputs,
+not accepted tag revisions or completed C1–C4 packets. The new official SR PDF
+has a different hash from Developer A's earlier copy, so old run identities are
+not reused. The Windows contained-parser failure remains under investigation.
+
+The assurance producer is now importable from
+`proofops.adapters.local.assurance_producer`; the evaluation import remains
+compatible. `scripts/produce_assurance.py` can inspect committed source blocks
+(`--list-page`), dry-plan an explicit opinion boundary (`--source-id`) and invoke
+it only with an existing ledger, key file, receipt directory and stable request
+UUID. It never creates a budget pool, and publication does not assert claim
+coverage. Five integration checks passed using a stub provider and real parser
+artifacts; new live assurance extraction has not yet run.
+
+Editors can now request a SHA-pinned environmental section proposal from an
+uploaded ready document and explicitly apply/edit a declared subset in RunForm.
+Unknown/conflicting pages remain visible; proposal discovery does not establish
+complete coverage or evidence absence. Inspection runs in a killable child with
+time/memory/output limits. Twenty worker/API checks and 21 browser checks passed;
+the coordinator also checked types and ran 24 section/API checks (one missing
+external fixture skipped). The scope request remains synchronous and concurrency
+is limited per API process. Deployment must retain container resource limits.
+The upload callback reset that previously removed RunForm is fixed. See
+[scope contract](submission-scope-discovery.md).
+
 ## 2026-09-19 · 로컬 근거 검색 어댑터 재사용
 
 기존 한글 BM25 검색을 `LocalEvidenceSearch`로 옮기고 섹션 평가/데모 경로에서

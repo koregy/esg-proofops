@@ -20,7 +20,7 @@ class SchemaValidationError(ValueError):
 
 
 def _load(name: str) -> dict[str, Any]:
-    if name not in {"input", "policy", "output"}:
+    if name not in {"input", "input-1.2", "policy", "output", "output-1.2"}:
         raise ValueError("unknown_reconciliation_schema")
     target = resources.files(__package__).joinpath("schemas", f"{name}.schema.json")
     return json.loads(target.read_text(encoding="utf-8"))

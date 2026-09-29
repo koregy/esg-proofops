@@ -14,7 +14,11 @@ from proofops.application.budget import BudgetLimits, RoleLimit
 from proofops.application.claims import ExtractionProfile
 from proofops.application.ingest.graph_fusion import ParserProfile
 from proofops.application.ports.models import ModelBinding
-from proofops.application.runs import validate_raster_policy
+from proofops.application.runs import (
+    validate_raster_policy,
+    validate_upstage_ocr_policy,
+    validate_upstage_ocr_widget_policy,
+)
 from proofops.application.supply_chain import verify_supply_chain
 from proofops.application.tagging.service import TaggingSettings
 
@@ -41,6 +45,9 @@ _SETTINGS_FIELDS = frozenset(
         "claim_source_policy",
         "raster_runtime_binding_id",
         "raster_policy",
+        "upstage_ocr_runtime_binding_id",
+        "upstage_ocr_policy",
+        "upstage_ocr_widget_visibility",
         "report_level_link",
     }
 )
@@ -75,6 +82,7 @@ _EXTRACTION_FIELDS = frozenset(
     }
 )
 _RASTER_FIELDS = frozenset({"raster_runtime_binding_id", "raster_policy"})
+_UPSTAGE_OCR_FIELDS = frozenset({"upstage_ocr_runtime_binding_id", "upstage_ocr_policy"})
 
 
 def _invalid() -> ValueError:
@@ -238,6 +246,42 @@ def _raster(settings: Mapping[str, Any], extraction_mode: str) -> dict[str, Any]
     return {"raster_runtime_binding_id": binding_id, "raster_policy": policy}
 
 
+def _upstage_ocr(settings: Mapping[str, Any], extraction_mode: str) -> dict[str, Any]:
+    """NEW-run native Upstage OCR settings; exclusive with v1 raster settings."""
+    present = _UPSTAGE_OCR_FIELDS & set(settings)
+    if not present:
+        if "upstage_ocr_widget_visibility" in settings:
+            raise _invalid()
+        return {}
+    if (
+        present != _UPSTAGE_OCR_FIELDS
+        or extraction_mode != "upstage_probe"
+        or _RASTER_FIELDS & set(settings)
+    ):
+        raise _invalid()
+    binding_id = settings["upstage_ocr_runtime_binding_id"]
+    try:
+        if (
+            not isinstance(binding_id, str)
+            or not binding_id
+            or str(UUID(binding_id)) != binding_id.lower()
+        ):
+            raise ValueError
+        policy = validate_upstage_ocr_policy(settings["upstage_ocr_policy"])
+        widget = (
+            {}
+            if "upstage_ocr_widget_visibility" not in settings
+            else {
+                "upstage_ocr_widget_visibility": validate_upstage_ocr_widget_policy(
+                    settings["upstage_ocr_widget_visibility"]
+                )
+            }
+        )
+    except (TypeError, ValueError):
+        raise _invalid() from None
+    return {"upstage_ocr_runtime_binding_id": binding_id, "upstage_ocr_policy": policy, **widget}
+
+
 def load_local_runtime(env: Mapping[str, str]) -> dict[str, Any]:
     """Return only trusted RunService kwargs; no config leaves its gate closed."""
     parser_path = env.get("LOCAL_PARSER_PROFILE_PATH")
@@ -274,6 +318,7 @@ def load_local_runtime(env: Mapping[str, str]) -> dict[str, Any]:
     ):
         raise _invalid()
     runtime.update(_raster(settings, extraction_mode))
+    runtime.update(_upstage_ocr(settings, extraction_mode))
     if "report_level_link" in settings:
         from proofops.application.tagging.report_level_link import validate_config
 

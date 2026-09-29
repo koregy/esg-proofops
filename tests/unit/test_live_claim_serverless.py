@@ -1,8 +1,10 @@
 """One fake-call path through the serverless claim demo; no network or paid model."""
 
+import http.client
 import importlib.util
 import json
 import threading
+import urllib.error
 import urllib.request
 from http.server import HTTPServer
 from pathlib import Path
@@ -18,10 +20,12 @@ SPEC.loader.exec_module(live)
 
 def test_rule_pack_snapshot_matches_repo_config():
     root = MODULE.parents[1]
-    manifest = yaml.safe_load((root / "config/rule_pack_manifest.yaml").read_text())
+    manifest = yaml.safe_load((root / "config/rule_pack_manifest.yaml").read_text(encoding="utf-8"))
     assert set(live.PACK.files) == set(manifest["files"])
     for name in manifest["files"]:
-        assert live.PACK.file_content(name) == yaml.safe_load((root / "config" / name).read_text())
+        assert live.PACK.file_content(name) == yaml.safe_load(
+            (root / "config" / name).read_text(encoding="utf-8")
+        )
 
 
 def test_fake_pipeline_and_guards(monkeypatch):
@@ -252,3 +256,275 @@ def test_http_handler_with_fake_model(monkeypatch):
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+
+
+def _post(port, body, code="local-only"):
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/api/live-claim",
+        body,
+        {"Content-Type": "application/json", "X-Demo-Access-Code": code},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=2) as response:
+            return response.status, json.load(response)
+    except urllib.error.HTTPError as error:
+        return error.code, json.load(error)
+
+
+def test_non_ascii_access_code_is_denied_not_internal_error(monkeypatch):
+    monkeypatch.setenv("DEMO_ACCESS_CODE", "local-only")
+    with pytest.raises(live.LiveError) as error:
+        live.run_claim({"claim": "2030년 배출을 줄입니다"}, access_code="코드é", call_model=None)
+    assert (error.value.status, error.value.code) == (403, "ACCESS_DENIED")
+
+
+def test_provider_connection_drop_maps_to_unavailable(monkeypatch):
+    monkeypatch.setenv("UPSTAGE_API_KEY", "test-key-not-real")
+
+    def drop(*args, **kwargs):
+        raise http.client.RemoteDisconnected("closed")
+
+    monkeypatch.setattr(live.urllib.request, "urlopen", drop)
+    with pytest.raises(live.LiveError) as error:
+        live._provider("system", {"x": 1}, 10)
+    assert (error.value.status, error.value.code) == (502, "UPSTAGE_UNAVAILABLE")
+
+    def reset(*args, **kwargs):
+        raise ConnectionResetError("reset")
+
+    monkeypatch.setattr(live.urllib.request, "urlopen", reset)
+    with pytest.raises(live.LiveError) as error:
+        live._provider("system", {"x": 1}, 10)
+    assert error.value.code == "UPSTAGE_UNAVAILABLE"
+
+
+def test_provider_rate_limit_is_distinct_and_key_not_leaked(monkeypatch):
+    monkeypatch.setenv("UPSTAGE_API_KEY", "test-key-not-real")
+
+    def limited(*args, **kwargs):
+        raise urllib.error.HTTPError("https://api.upstage.ai", 429, "Too Many", {}, None)
+
+    monkeypatch.setattr(live.urllib.request, "urlopen", limited)
+    with pytest.raises(live.LiveError) as error:
+        live._provider("system", {"x": 1}, 10)
+    assert (error.value.status, error.value.code) == (503, "UPSTAGE_RATE_LIMITED")
+    assert "test-key-not-real" not in repr(error.value.__dict__)
+
+
+def test_case_variant_track_is_normalized(monkeypatch):
+    monkeypatch.setenv("DEMO_ACCESS_CODE", "local-only")
+
+    def fake(system, user, max_tokens):
+        content = (
+            {"claim_id": user["claim_id"], "track": " Goal ", "safe_harbor_category": "NULL"}
+            if "sources" in user
+            else {"elements": []}
+        )
+        return {
+            "choices": [{"message": {"content": json.dumps(content)}}],
+            "usage": {"prompt_tokens": 100, "completion_tokens": 40},
+        }
+
+    result = live.run_claim(
+        {"claim": "2030년 배출량을 줄이겠다."}, access_code="local-only", call_model=fake
+    )
+    assert result["steps"][0]["track"] == "goal"
+    assert result["steps"][0]["safe_harbor_category"] is None
+    assert result["decision"]["evidence_grade"] is None
+
+
+def test_second_paid_call_skipped_when_time_budget_would_be_exceeded(monkeypatch):
+    monkeypatch.setenv("DEMO_ACCESS_CODE", "local-only")
+    clock = iter([0.0, 0.0, 34.0, 34.0, 34.0, 34.0])
+    monkeypatch.setattr(live, "monotonic", lambda: next(clock))
+    called = []
+
+    def fake(system, user, max_tokens):
+        called.append(max_tokens)
+        content = {"claim_id": user["claim_id"], "track": "goal", "safe_harbor_category": None}
+        return {
+            "choices": [{"message": {"content": json.dumps(content)}}],
+            "usage": {"prompt_tokens": 100, "completion_tokens": 40},
+        }
+
+    with pytest.raises(live.LiveError) as error:
+        live.run_claim(
+            {"claim": "2030년 배출을 줄입니다"}, access_code="local-only", call_model=fake
+        )
+    assert (error.value.status, error.value.code) == (504, "TIME_BUDGET_EXCEEDED")
+    assert called == [384]
+
+
+def test_http_handler_rejects_bad_bodies_without_model_call(monkeypatch):
+    monkeypatch.setenv("DEMO_ACCESS_CODE", "local-only")
+    called = []
+    monkeypatch.setattr(live, "_provider", lambda *args: called.append(args))
+    server = HTTPServer(("127.0.0.1", 0), live.handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        port = server.server_port
+        assert _post(port, b"") == (400, {"error": "INVALID_INPUT"})
+        assert _post(port, b"{not json") == (400, {"error": "INVALID_JSON"})
+        assert _post(port, b"[]") == (400, {"error": "INVALID_INPUT"})
+        too_long = json.dumps({"claim": "가" * 501}).encode()
+        assert _post(port, too_long) == (400, {"error": "INVALID_INPUT"})
+        multi_line = json.dumps({"claim": "첫 줄\n둘째 줄"}).encode()
+        assert _post(port, multi_line) == (400, {"error": "INVALID_INPUT"})
+        extra = json.dumps({"claim": "문장", "grade": "E4"}).encode()
+        assert _post(port, extra) == (400, {"error": "INVALID_INPUT"})
+        assert _post(port, b"x" * (live.MAX_BODY + 1)) == (413, {"error": "BODY_TOO_LARGE"})
+        assert _post(port, json.dumps({"claim": "문장"}).encode(), code="wrong") == (
+            403,
+            {"error": "ACCESS_DENIED"},
+        )
+        assert not called
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def _reply(content, output_tokens=40, finish_reason="stop"):
+    return {
+        "choices": [{"message": {"content": content}, "finish_reason": finish_reason}],
+        "usage": {"prompt_tokens": 100, "completion_tokens": output_tokens},
+    }
+
+
+def _classified(user, track="management"):
+    return _reply(json.dumps({"claim_id": user["claim_id"], "track": track}))
+
+
+EXAMPLE_CLAIM = "• ESG위원회는 환경 및 기후 관련 안건을 포함해 최소 연3회 이상 정기적으로 개최"
+
+
+def test_truncated_tagging_returns_explicit_partial_without_retry(monkeypatch):
+    monkeypatch.setenv("DEMO_ACCESS_CODE", "local-only")
+    called = []
+
+    def fake(system, user, max_tokens):
+        called.append(max_tokens)
+        if "sources" in user:
+            return _classified(user)
+        cut = '{"elements": [{"name": "responsible_organization", "state": "present", "quo'
+        return _reply(cut, output_tokens=max_tokens, finish_reason="length")
+
+    result = live.run_claim(
+        {"claim": EXAMPLE_CLAIM, "page_label": "83"}, access_code="local-only", call_model=fake
+    )
+    assert called == [live.CLASSIFY_MAX_TOKENS, live.TAG_MAX_TOKENS]
+    assert result["status"] == "partial"
+    assert result["partial"] == {"stage": "element_tagging", "reason": "UPSTAGE_OUTPUT_TRUNCATED"}
+    assert result["decision"] is None and result["replicas"] == 0
+    assert "원문 PDF 검증 없음" in result["notice"]
+    tagging = result["steps"][1]
+    assert tagging["status"] == "failed"
+    names = set().union(*live.MAPPINGS["management"].values())
+    assert {item["name"] for item in tagging["elements"]} == names
+    assert all(
+        item["engine_state"] == "unknown" and item["quote"] is None and item["page_label"] is None
+        for item in tagging["elements"]
+    )
+    assert result["steps"][2] == {
+        "name": "python_rule_engine",
+        "status": "not_run",
+        "duration_ms": 0,
+    }
+    # Truncated output was still billed; the reported cost includes it.
+    billed = (200 * live.INPUT_RATE + (40 + live.TAG_MAX_TOKENS) * live.OUTPUT_RATE) * 1.1
+    assert result["cost_estimate_usd"] == round(billed, 6)
+
+
+def test_unavailable_tagging_reports_upper_bound_cost(monkeypatch):
+    monkeypatch.setenv("DEMO_ACCESS_CODE", "local-only")
+    called = []
+
+    def fake(system, user, max_tokens):
+        called.append(max_tokens)
+        if "sources" in user:
+            return _classified(user, "goal")
+        raise live.LiveError(502, "UPSTAGE_UNAVAILABLE")
+
+    result = live.run_claim(
+        {"claim": "2030년 배출량을 줄이겠다."}, access_code="local-only", call_model=fake
+    )
+    assert len(called) == 2
+    assert result["partial"]["reason"] == "UPSTAGE_UNAVAILABLE"
+    assert result["decision"] is None
+    classify_cost = (100 * live.INPUT_RATE + 40 * live.OUTPUT_RATE) * 1.1
+    assert classify_cost < result["cost_estimate_usd"] <= live.MAX_ESTIMATE_USD
+
+
+def test_invalid_tagging_json_is_partial_but_cost_guard_still_raises(monkeypatch):
+    monkeypatch.setenv("DEMO_ACCESS_CODE", "local-only")
+
+    def not_json(system, user, max_tokens):
+        return _classified(user) if "sources" in user else _reply("elements: none")
+
+    result = live.run_claim({"claim": EXAMPLE_CLAIM}, access_code="local-only", call_model=not_json)
+    assert result["partial"]["reason"] == "UPSTAGE_RESPONSE_INVALID"
+
+    def overbilled(system, user, max_tokens):
+        return _classified(user) if "sources" in user else _reply("{}", output_tokens=max_tokens)
+
+    monkeypatch.setattr(live, "OUTPUT_RATE", 20 / 1_000_000)
+    with pytest.raises(live.LiveError) as error:
+        live.run_claim({"claim": EXAMPLE_CLAIM}, access_code="local-only", call_model=overbilled)
+    assert error.value.code in ("REQUEST_COST_CAP", "ACTUAL_COST_CAP_EXCEEDED")
+
+
+def test_unbound_or_truncated_classification_is_needs_review_not_502(monkeypatch):
+    monkeypatch.setenv("DEMO_ACCESS_CODE", "local-only")
+    called = []
+
+    def wrong_id(system, user, max_tokens):
+        called.append(max_tokens)
+        return _reply(json.dumps({"claim_id": "copied-wrong", "track": "goal"}))
+
+    result = live.run_claim({"claim": EXAMPLE_CLAIM}, access_code="local-only", call_model=wrong_id)
+    assert called == [live.CLASSIFY_MAX_TOKENS]
+    assert result["partial"] == {
+        "stage": "preliminary_classification",
+        "reason": "CLASSIFICATION_INVALID",
+    }
+    assert result["status"] == "partial" and result["steps"][0]["status"] == "failed"
+    assert result["steps"][0]["track"] is None and result["decision"] is None
+
+    def truncated(system, user, max_tokens):
+        return _reply('{"claim_id": "', output_tokens=max_tokens, finish_reason="length")
+
+    result = live.run_claim(
+        {"claim": EXAMPLE_CLAIM}, access_code="local-only", call_model=truncated
+    )
+    assert result["partial"]["reason"] == "UPSTAGE_OUTPUT_TRUNCATED"
+    assert result["decision"] is None
+
+    def down(system, user, max_tokens):
+        raise live.LiveError(502, "UPSTAGE_UNAVAILABLE")
+
+    with pytest.raises(live.LiveError) as error:
+        live.run_claim({"claim": EXAMPLE_CLAIM}, access_code="local-only", call_model=down)
+    assert error.value.code == "UPSTAGE_UNAVAILABLE"
+
+
+def test_fenced_json_and_hyphenated_category_are_accepted(monkeypatch):
+    monkeypatch.setenv("DEMO_ACCESS_CODE", "local-only")
+
+    def fake(system, user, max_tokens):
+        if "sources" in user:
+            content = {
+                "claim_id": user["claim_id"],
+                "track": "goal",
+                "safe_harbor_category": "forward-looking",
+            }
+            return _reply("```json\n" + json.dumps(content) + "\n```")
+        return _reply('```\n{"elements": []}\n```')
+
+    result = live.run_claim(
+        {"claim": "2030년 배출량을 줄이겠다."}, access_code="local-only", call_model=fake
+    )
+    assert "partial" not in result
+    assert result["steps"][0]["safe_harbor_category"] == "forward_looking"
+    assert result["decision"]["evidence_grade"] is None

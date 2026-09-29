@@ -145,6 +145,9 @@ export function UploadForm({
   const controller = useRef<AbortController | null>(null);
   const inFlight = useRef(false);
   const previousTenant = useRef(tenantKey);
+  // Parents may pass a new callback each render; only a tenant change may reset the form.
+  const readyVersionCallback = useRef(onReadyVersion);
+  readyVersionCallback.current = onReadyVersion;
 
   useEffect(() => () => controller.current?.abort(), []);
 
@@ -166,9 +169,9 @@ export function UploadForm({
     setBusy(false);
     setError(null);
     setVersion(null);
-    onReadyVersion(null);
+    readyVersionCallback.current(null);
     setPhase(changed ? "테넌트가 변경되었습니다. PDF와 메타데이터를 다시 확인해 주세요." : "PDF와 메타데이터를 선택해 주세요.");
-  }, [onReadyVersion, tenantKey]);
+  }, [tenantKey]);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();

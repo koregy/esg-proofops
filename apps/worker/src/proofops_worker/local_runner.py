@@ -60,6 +60,9 @@ class LocalParserRunner:
         raster_probe=None,
         raster_ledger=None,
         native_typography_tolerance: bool = False,
+        native_windows_ocr: bool = False,
+        upstage_ocr_probe=None,
+        upstage_ocr_ledger=None,
     ):
         if not uploads.local_synthetic or not isinstance(profile, ParserProfile):
             raise ValueError("local parser requires local storage and executable configuration")
@@ -69,6 +72,10 @@ class LocalParserRunner:
             raise ValueError("native_typography_tolerance must be a boolean")
         if native_typography_tolerance and not verify_paragraphs:
             raise ValueError("native_typography_tolerance requires verify_paragraphs")
+        if type(native_windows_ocr) is not bool:
+            raise ValueError("native_windows_ocr must be a boolean")
+        if native_windows_ocr and (not verify_paragraphs or native_typography_tolerance):
+            raise ValueError("native_windows_ocr requires verify_paragraphs without typography")
         self.store, self.uploads, self.parser = store, uploads, parser
         self.profile, self.telemetry, self.clock = profile, telemetry, clock
         self.verify_paragraphs = verify_paragraphs
@@ -80,11 +87,18 @@ class LocalParserRunner:
         # native_paragraph_typography.py) after the unchanged base replay.
         self.native_typography_tolerance = native_typography_tolerance
         self.last_typography_proof = None
+        # Opt-in NEW-run Windows.Media.Ocr corroboration (windows_rendered_verification.py):
+        # a separately hashed proof beside the unchanged base receipt and policy.
+        self.native_windows_ocr = native_windows_ocr
+        self.last_windows_ocr_proof = None
         self.note_client = note_client
         self.note_ledger = (
             note_ledger if note_ledger is not None else getattr(note_client, "ledger", None)
         )
         self.raster_probe, self.raster_ledger = raster_probe, raster_ledger
+        # NEW-run native Upstage OCR (native_upstage_ocr.py): enabled only by the run
+        # snapshot's own policy, with a probe on the same shared ledger.
+        self.upstage_ocr_probe, self.upstage_ocr_ledger = upstage_ocr_probe, upstage_ocr_ledger
 
     def _raster_enabled(self, snapshot):
         raster_keys = {key for key in snapshot if key.startswith("raster_ocr_")}
@@ -108,6 +122,34 @@ class LocalParserRunner:
             )
         ):
             raise ValueError("RASTER_OCR_RUNTIME_NOT_SUPPORTED")
+        return True
+
+    def _upstage_ocr_enabled(self, snapshot):
+        keys = {key for key in snapshot if key.startswith("native_upstage_ocr_")}
+        if not keys:
+            if self.upstage_ocr_probe is not None or self.upstage_ocr_ledger is not None:
+                raise ValueError("UPSTAGE_OCR_RUNTIME_NOT_SUPPORTED")
+            return False
+        from proofops.adapters.local.upstage_parse import UpstageParseProbe
+
+        if (
+            not self.verify_paragraphs
+            or self.native_typography_tolerance
+            or self.native_windows_ocr
+            or self.raster_probe is not None
+            or not isinstance(self.upstage_ocr_probe, UpstageParseProbe)
+            or self.upstage_ocr_ledger is None
+            or Path(self.upstage_ocr_probe.ledger).resolve()
+            != Path(self.upstage_ocr_ledger).resolve()
+            or (
+                self.note_client is not None
+                and (
+                    self.note_ledger is None
+                    or Path(self.note_ledger).resolve() != Path(self.upstage_ocr_ledger).resolve()
+                )
+            )
+        ):
+            raise ValueError("UPSTAGE_OCR_RUNTIME_NOT_SUPPORTED")
         return True
 
     def _note_policy(self):
@@ -151,6 +193,7 @@ class LocalParserRunner:
         # No tenant discovery or implicit live-provider selection.
         snapshot = self.store.snapshot(tenant_id, run_id)
         raster_enabled = self._raster_enabled(snapshot)
+        upstage_enabled = self._upstage_ocr_enabled(snapshot)
         run = self.store.jobs.get_run(tenant_id, run_id)
         native_policy = native_paragraph_policy() if self.verify_paragraphs else None
         if (
@@ -212,6 +255,8 @@ class LocalParserRunner:
                         # promotions, so committing both would publish a
                         # checkpoint no reader can reproduce. Fail closed.
                         raise StageFailure("NATIVE_TYPOGRAPHY_RASTER_UNSUPPORTED", usage=usage)
+                    if raster_enabled and self.native_windows_ocr:
+                        raise StageFailure("NATIVE_WINDOWS_OCR_RASTER_UNSUPPORTED", usage=usage)
                     if (
                         message.tenant_id,
                         message.run_id,
@@ -308,12 +353,94 @@ class LocalParserRunner:
                                 source.content,
                                 tenant_id=tenant_id,
                             )
+                        elif self.native_windows_ocr:
+                            from proofops.adapters.local.windows_ocr import (
+                                WindowsOcrUnavailable,
+                            )
+                            from proofops.adapters.local.windows_rendered_verification import (
+                                apply_windows_ocr,
+                            )
+
+                            # Like typography: start from the attested-input graph.
+                            try:
+                                graph, self.last_windows_ocr_proof = apply_windows_ocr(
+                                    native_receipt, graph, source.content, tenant_id=tenant_id
+                                )
+                            except WindowsOcrUnavailable:
+                                raise StageFailure(
+                                    "NATIVE_WINDOWS_OCR_UNAVAILABLE", usage=usage
+                                ) from None
                         else:
                             graph = replay_native_sources(
                                 native_receipt, graph, source.content, tenant_id=tenant_id
                             )
                     raster_coverage = None
                     raster_refs = None
+                    upstage_result = None
+                    if upstage_enabled:
+                        from proofops.adapters.local import native_upstage_ocr_store as records
+                        from proofops.adapters.local.native_upstage_ocr_widget import (
+                            compose_checkpoint,
+                            eligible_words,
+                        )
+
+                        from proofops_worker.native_upstage_ocr_runtime import (
+                            dispatch_authorized_upstage_ocr,
+                        )
+
+                        pages = set(snapshot["selected_pages"])
+                        blocks = {block.source_id: block for block in pre_native_graph.blocks}
+                        eligible = tuple(
+                            sorted(
+                                (
+                                    source_id
+                                    for source_id in eligible_words(
+                                        snapshot,
+                                        native_receipt,
+                                        pre_native_graph,
+                                        source.content,
+                                        tenant_id=tenant_id,
+                                    )
+                                    if blocks[source_id].page_num in pages
+                                ),
+                                key=lambda source_id: paragraph_priority(blocks[source_id]),
+                            )
+                        )
+                        limits = snapshot["native_upstage_ocr_policy"]
+                        # A retried job reuses its own registered requests, never re-sends.
+                        prior = records.requests_for(self.store.jobs, message)
+                        sent = {
+                            sid for item in prior for sid in item["request"]["requested_source_ids"]
+                        }
+                        remaining = tuple(sid for sid in eligible if sid not in sent)
+                        for start in range(0, len(remaining), limits["max_pages"]):
+                            if len(prior) + start // limits["max_pages"] >= limits["max_calls"]:
+                                break
+                            request, _saved = dispatch_authorized_upstage_ocr(
+                                self,
+                                lease,
+                                pre_native_graph,
+                                native_receipt,
+                                remaining[start : start + limits["max_pages"]],
+                                probe=self.upstage_ocr_probe,
+                                ledger=self.upstage_ocr_ledger,
+                            )
+                            raster_attempted.append(request["request_id"])
+                        raster_registrations = records.requests_for(self.store.jobs, message)
+                        entries, upstage_refs = records.stored_entries(self.store.jobs, message)
+                        raster_receipts = {ref["request_id"]: ref for ref in upstage_refs}
+                        graph, upstage_coverage, upstage_refs, upstage_policy_hash = (
+                            compose_checkpoint(
+                                snapshot,
+                                message,
+                                native_receipt,
+                                pre_native_graph,
+                                source.content,
+                                entries,
+                                upstage_refs,
+                            )
+                        )
+                        upstage_result = (upstage_policy_hash, upstage_refs, upstage_coverage)
                     if raster_enabled:
                         from proofops.adapters.local.raster_job_store import (
                             raster_receipt,
@@ -444,6 +571,19 @@ class LocalParserRunner:
                                 ),
                                 native_paragraph_typography_proof=self.last_typography_proof,
                             )
+                        if upstage_result is not None:
+                            payload.update(
+                                graph_sha256=canonical_hash(asdict(graph)),
+                                native_paragraph_upstage_ocr_policy_sha256=upstage_result[0],
+                                native_paragraph_upstage_ocr_artifacts=upstage_result[1],
+                                native_paragraph_upstage_ocr_coverage=upstage_result[2],
+                            )
+                        if self.native_windows_ocr:
+                            proof = self.last_windows_ocr_proof
+                            payload.update(
+                                native_paragraph_windows_ocr_policy_sha256=proof["policy_sha256"],
+                                native_paragraph_windows_ocr_proof=proof,
+                            )
                     if raster_enabled:
                         payload.update(
                             schema="local_parser_checkpoint_v5",
@@ -463,9 +603,16 @@ class LocalParserRunner:
                         from proofops.adapters.local.raster_job_store import raster_requests
 
                         raster_registrations = raster_requests(self.store.jobs, message)
+                    if upstage_enabled:
+                        from proofops.adapters.local.native_upstage_ocr_store import (
+                            requests_for,
+                        )
+
+                        # Same shared ledger and the same raster usage fields.
+                        raster_registrations = requests_for(self.store.jobs, message)
                     raster_identifiers = (
                         tuple(item["request"]["request_id"] for item in raster_registrations)
-                        if raster_enabled
+                        if raster_enabled or upstage_enabled
                         else ()
                     )
                     identifiers = tuple(dict.fromkeys(note_identifiers + raster_identifiers))
@@ -502,7 +649,11 @@ class LocalParserRunner:
                             # ponytail: per-request reads; batch if ledger latency matters.
                             for identifier in unreported:
                                 item = request_usage(
-                                    self.raster_ledger if raster_enabled else self.note_ledger,
+                                    self.raster_ledger
+                                    if raster_enabled
+                                    else self.upstage_ocr_ledger
+                                    if upstage_enabled
+                                    else self.note_ledger,
                                     [identifier],
                                 )
                                 if item["unsettled_calls"] or (
@@ -511,7 +662,13 @@ class LocalParserRunner:
                                     pending.append(identifier)
                                 else:
                                     finalized.append(identifier)
-                            ledger = self.raster_ledger if raster_enabled else self.note_ledger
+                            ledger = (
+                                self.raster_ledger
+                                if raster_enabled
+                                else self.upstage_ocr_ledger
+                                if upstage_enabled
+                                else self.note_ledger
+                            )
                             usage.update(request_usage(ledger, finalized))
                             if pending:
                                 usage["note_pending_request_ids"] = [

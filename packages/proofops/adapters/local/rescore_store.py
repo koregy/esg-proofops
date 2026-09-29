@@ -10,6 +10,7 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from uuid import uuid4
 
+from proofops.adapters.local.assurance_head import assurance_proofs
 from proofops.adapters.local.audit_store import append_audit_transaction, read_audit_head
 from proofops.adapters.local.rulepack_store import RulePackNotFound
 from proofops.application.rescores import RescoreRejected
@@ -93,6 +94,15 @@ class LocalSQLiteRescoreStore:
                 )
             except KeyError:
                 raise RescoreRejected("RETAG_REQUIRED") from None
+            from proofops.adapters.local.assurance_head import (
+                AssuranceHeadRejected,
+                check_assurance_tag,
+            )
+
+            try:
+                check_assurance_tag(db, self.jobs, tenant, run, tag)
+            except AssuranceHeadRejected as exc:
+                raise RescoreRejected(str(exc), 409) from None
             claims[claim_id] = dict(head=head, tag=tag, decision=decision)
         if not claims:
             raise RescoreRejected("RETAG_REQUIRED")
@@ -102,7 +112,7 @@ class LocalSQLiteRescoreStore:
         tenant = actor.tenant_id
         replay_key = canonical_hash([actor.user_sub, "rescore", key])
         request_hash = canonical_hash([run_id, body, expected])
-        with self.jobs._transaction() as db:
+        with assurance_proofs(self.jobs, tenant, run_id), self.jobs._transaction() as db:
             run = self._run(db, tenant, run_id)
             replay = self._replay(db, tenant, replay_key, request_hash)
             if replay is not None:
@@ -125,7 +135,7 @@ class LocalSQLiteRescoreStore:
 
     def commit(self, actor, run_id, body, captured, prepared):
         tenant = actor.tenant_id
-        with self.jobs._transaction() as db:
+        with assurance_proofs(self.jobs, tenant, run_id), self.jobs._transaction() as db:
             run = self._run(db, tenant, run_id)
             replay = self._replay(db, tenant, captured["replay_key"], captured["request_hash"])
             if replay is not None:

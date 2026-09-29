@@ -11,19 +11,30 @@ Guards enforced before any paid side effect:
 * A new run refuses ANY non-empty state directory (never overwrites stored data).
 * ``--invoke`` requires the shared budget ledger to already exist; we never mint
   or reset it. The dry plan needs no secrets and runs no subprocess.
+* ``--invoke`` also requires the ledger to validate (legacy history or one
+  explicit session grant from ``scripts/authorize_upstage_session.py``) with at
+  least one USD1 reservation of headroom, and ``--key-file`` to exist (its
+  content is never read here). The plan reports the ledger state read-only.
+* ``--budget-ledger`` names an explicit session-grant ledger; it is forwarded to
+  the pilot, which freezes it in pilot.json and exports it to every paid stage
+  (parse/OCR, extract, tag, serve-worker) with no fallback pool. Omitted, the
+  legacy checkout ledger is used exactly as before. ``--java-path`` pins a NEW
+  run's parser Java; ``--company-name``/``--company-registration`` forward an
+  explicit company identity (both or neither).
 
 Delegation reuses the reviewed pilot flags: verify-paragraphs, verify-claim-spans,
 one of verify-merged-tables (legacy default) / --verify-selected-cells,
 repair-table-headers, model ``solar-pro3``, extraction ``--max-calls 8`` with an
 optional ``--extraction-total-calls`` cap, ``--live-tagging --tagging-max-calls 48``
-with optional ``--native-quote-typography``, ``--live-relations`` (aliased as
+with optional ``--native-quote-typography`` or (Windows) ``--native-windows-ocr``,
+``--live-relations`` (aliased as
 ``--evidence-relations``), ``--preliminary-context``, and ``--ai-project-review``, plus opt-in
 ``--extraction-year-notation`` (off by default).
 ``--serve`` is a separate explicit opt-in (never auto-enabled) to avoid hanging
 an integration run. New-run caps reuse the pilot's own validators
 (``extraction_budget_settings`` for the batch 1..20 / total ..2000 bound,
-6..2000 for tagging); no budget framework is duplicated here and the shared
-USD20 ledger ceiling is unchanged.
+6..2000 for tagging); no budget framework is duplicated here and the run's
+ledger ceiling (legacy USD20 or an explicit session grant) is unchanged.
 
 Optional ``--auto-scope`` (opt-in, off by default): instead of a manual
 ``--pages``, discover E-narrative / environmental-Data / Appendix candidate
@@ -80,17 +91,29 @@ class PlanError(ValueError):
 
 
 def parse_pages(raw: str) -> list[int]:
-    """Sorted, de-duplicated 1-based page list; reject non-positive/non-int entries."""
+    """Expand explicit 1-based pages/ranges with a bounded allocation."""
     pages: set[int] = set()
     for chunk in raw.split(","):
         token = chunk.strip()
         if not token:
             continue
+        if "-" in token and not token.startswith("-"):
+            bounds = token.split("-")
+            try:
+                if len(bounds) != 2:
+                    raise ValueError
+                first, last = (int(bound.strip()) for bound in bounds)
+            except ValueError as exc:
+                raise PlanError(f"invalid page range {token!r}; use e.g. 1-3") from exc
+            if not 1 <= first <= last <= 1000:
+                raise PlanError(f"page range {token!r} must be ascending within 1..1000")
+            pages.update(range(first, last + 1))
+            continue
         try:
             value = int(token)
         except ValueError as exc:
             raise PlanError(
-                f"invalid page value {token!r}; use comma-separated 1-based ints"
+                f"invalid page value {token!r}; use comma-separated pages or ranges"
             ) from exc
         if value < 1:
             raise PlanError(f"page numbers are 1-based; {value} is out of range")
@@ -300,7 +323,7 @@ def _validate_extraction_total(batch_calls: int, total: int | None) -> None:
 
     This reuses ``evaluation.local_upstage_pilot.extraction_budget_settings``
     (batch 1..20, total batch..2000) instead of duplicating the bound here; the
-    shared USD20 money ceiling still fences every provider dispatch.
+    run's ledger money ceiling still fences every provider dispatch.
     """
     if total is None:
         return
@@ -320,6 +343,53 @@ def _validate_tagging_max_calls(value: int) -> None:
         raise PlanError(f"--tagging-max-calls must be an integer in 6..2000; got {value!r}")
 
 
+def describe_ledger(ledger: Path) -> dict:
+    """Read-only ledger state for the plan; never creates or modifies the file."""
+    if not ledger.is_file():
+        return {"state": "absent"}
+    import sqlite3
+    from decimal import Decimal
+
+    from proofops.adapters.local.upstage import (
+        POLICY,
+        UpstageProbe,
+        read_session_grant,
+        session_grant_expired,
+    )
+
+    try:
+        with sqlite3.connect(ledger.resolve().as_uri() + "?mode=ro", uri=True) as db:
+            limit = UpstageProbe._authorized_limit(db)
+            committed = UpstageProbe._call_total(db)
+            grant = read_session_grant(db)
+            unsettled = db.execute(
+                "SELECT COUNT(*) FROM probe_calls WHERE receipt IS NULL"
+            ).fetchone()[0]
+    except (sqlite3.Error, ValueError) as exc:
+        code = str(exc) if isinstance(exc, ValueError) else "BUDGET_LEDGER_UNREADABLE"
+        return {"state": "invalid", "error": code}
+    result = {
+        "state": "legacy" if grant is None else "session_grant",
+        "authorized_limit_usd": str(limit),
+        "committed_or_reserved_usd": str(committed),
+        "unsettled_reservations": unsettled,
+        "headroom_usd": str(limit - committed),
+        "can_reserve": limit - committed >= Decimal(POLICY["reservation_usd"]),
+    }
+    if grant is not None:
+        expired = session_grant_expired(grant)
+        result.update(
+            scope=grant["scope"],
+            amount_basis=grant["amount_basis"],
+            authorized_at=grant["authorized_at"],
+            expires_at=grant["expires_at"],
+            expired=expired,
+            prior_cumulative_usage=grant["prior_cumulative_usage"],
+        )
+        result["can_reserve"] = result["can_reserve"] and not expired
+    return result
+
+
 def build_pilot_argv(
     *,
     pdf: Path,
@@ -337,10 +407,17 @@ def build_pilot_argv(
     tagging_max_calls: int = TAGGING_MAX_CALLS,
     verify_selected_cells: bool = False,
     native_quote_typography: bool = False,
+    native_windows_ocr: bool = False,
+    native_upstage_ocr: bool = False,
+    upstage_ocr_max_calls: int | None = None,
     claim_span_typography: bool = False,
     live_relations: bool = False,
+    capacity_refresh: bool = False,
+    tagging_model: str | None = None,
     preliminary_context: bool = False,
     preliminary_actor_role: bool = False,
+    preliminary_table_role: bool = False,
+    position_context_order: bool = False,
     ai_project_review: bool = False,
     extraction_year_notation: bool = False,
     extraction_context: bool = False,
@@ -349,6 +426,12 @@ def build_pilot_argv(
     extraction_complete_selection: bool = False,
     extraction_content_bounds: bool = False,
     parser_max_output_bytes: int | None = None,
+    parser_timeout_seconds: int | None = None,
+    parser_memory_bytes: int | None = None,
+    java_path: Path | None = None,
+    budget_ledger: Path | None = None,
+    company_name: str | None = None,
+    company_registration: str | None = None,
 ) -> list[str]:
     """Assemble the exact argv driving ``evaluation.local_upstage_pilot``."""
     table_flag = "--verify-selected-cells" if verify_selected_cells else "--verify-merged-tables"
@@ -384,19 +467,61 @@ def build_pilot_argv(
     ]
     if parser_max_output_bytes is not None:
         argv += ["--parser-max-output-bytes", str(parser_max_output_bytes)]
+    if parser_timeout_seconds is not None:
+        argv += ["--parser-timeout-seconds", str(parser_timeout_seconds)]
+    if parser_memory_bytes is not None:
+        argv += ["--parser-memory-bytes", str(parser_memory_bytes)]
+    if java_path is not None:
+        argv += ["--java-path", str(java_path)]
+    if budget_ledger is not None:
+        argv += ["--budget-ledger", str(budget_ledger)]
+    if company_name is not None:
+        if company_registration is None:
+            raise PlanError("company name and registration must be supplied together")
+        argv += ["--company-name", company_name, "--company-registration", company_registration]
     if extraction_total_calls is not None:
         argv += ["--extraction-total-calls", str(extraction_total_calls)]
+    if native_quote_typography and native_windows_ocr:
+        raise PlanError("--native-windows-ocr cannot be combined with --native-quote-typography")
     if native_quote_typography:
         argv.append("--native-quote-typography")
+    if native_windows_ocr:
+        argv.append("--native-windows-ocr")
+    if native_upstage_ocr and (native_quote_typography or native_windows_ocr):
+        raise PlanError(
+            "--native-upstage-ocr cannot be combined with --native-quote-typography "
+            "or --native-windows-ocr"
+        )
+    if upstage_ocr_max_calls is not None and (
+        not native_upstage_ocr
+        or type(upstage_ocr_max_calls) is not int
+        or not 1 <= upstage_ocr_max_calls <= 20
+    ):
+        raise PlanError("--upstage-ocr-max-calls needs --native-upstage-ocr and 1..20")
+    if native_upstage_ocr:
+        argv.append("--native-upstage-ocr")
+        if upstage_ocr_max_calls is not None:
+            argv += ["--upstage-ocr-max-calls", str(upstage_ocr_max_calls)]
     if claim_span_typography:
         argv += [
             "--claim-span-render-resolution",
             "--claim-span-bullet-spacing",
             "--claim-span-typography",
         ]
+    if capacity_refresh:
+        argv.append("--capacity-policy-refresh")
+    if tagging_model is not None:
+        # Explicit only; omission keeps the pilot's legacy solar-pro4 tagging argv.
+        argv += ["--tagging-model", tagging_model]
     if live_relations:
         argv.append("--live-relations")
-    if preliminary_context or preliminary_actor_role:
+    if position_context_order and (not extraction_context or not preliminary_table_role):
+        raise PlanError(
+            "--position-context-order requires --extraction-context and --preliminary-table-role"
+        )
+    if position_context_order and preliminary_actor_role:
+        raise PlanError("--position-context-order cannot be combined with --preliminary-actor-role")
+    if preliminary_context or preliminary_actor_role or preliminary_table_role:
         argv.append("--preliminary-context")
     if preliminary_actor_role:
         argv += [
@@ -405,6 +530,10 @@ def build_pilot_argv(
             "--preliminary-goal-role",
             "--preliminary-actor-role",
         ]
+    elif preliminary_table_role:
+        argv += ["--preliminary-table-context", "--preliminary-table-role"]
+    if position_context_order:
+        argv.append("--position-context-order")
     if ai_project_review:
         argv.append("--ai-project-review")
     if extraction_year_notation:
@@ -434,6 +563,13 @@ def plan_run(args: argparse.Namespace) -> dict:
     auto_scope_proposal: dict | None = None
     auto_scope_applied: dict | None = None
     auto_scope_artifact: Path | None = None
+    all_pages = bool(getattr(args, "all_pages", False))
+    if all_pages and (args.pages is not None or getattr(args, "auto_scope", False)):
+        raise PlanError("--all-pages cannot be combined with --pages or --auto-scope")
+    if getattr(args, "auto_scope_max_pages", None) is not None and not getattr(
+        args, "auto_scope", False
+    ):
+        raise PlanError("--auto-scope-max-pages requires --auto-scope")
     if getattr(args, "auto_scope", False):
         if args.pages is not None:
             raise PlanError("--auto-scope cannot be combined with an explicit --pages")
@@ -451,9 +587,13 @@ def plan_run(args: argparse.Namespace) -> dict:
             pdf, auto_scope_proposal, auto_scope_applied
         )
     else:
-        if args.pages is None:
-            raise PlanError("--pages is required unless --auto-scope is set")
-        pages = parse_pages(args.pages)
+        if all_pages:
+            _validate_pdf_file(pdf)
+            pages = list(range(1, _pdf_page_count(pdf) + 1))
+        else:
+            if args.pages is None:
+                raise PlanError("--pages is required unless --auto-scope or --all-pages is set")
+            pages = parse_pages(args.pages)
         claim_pages = None
         raw_claim_pages = getattr(args, "claim_pages", None)
         if raw_claim_pages is not None:
@@ -476,16 +616,50 @@ def plan_run(args: argparse.Namespace) -> dict:
             f"--period-end {args.period_end}"
         )
     state = resolve_state(args.state)
-    if args.invoke and not BUDGET_LEDGER.is_file():
+    requested_ledger = getattr(args, "budget_ledger", None)
+    ledger = BUDGET_LEDGER if requested_ledger is None else requested_ledger.expanduser().resolve()
+    company_name = getattr(args, "company_name", None)
+    company_registration = getattr(args, "company_registration", None)
+    if (company_name is None) != (company_registration is None) or any(
+        value is not None and not value.strip() for value in (company_name, company_registration)
+    ):
+        raise PlanError("--company-name and --company-registration are required together")
+    java_path = getattr(args, "java_path", None)
+    if java_path is not None:
+        java_path = java_path.expanduser().resolve()
+        if not java_path.is_file():
+            raise PlanError(f"--java-path not found: {java_path}")
+    if (args.invoke or requested_ledger is not None) and not ledger.is_file():
         raise PlanError(
-            f"shared budget ledger not found: {BUDGET_LEDGER}. It must already exist; "
+            f"shared budget ledger not found: {ledger}. It must already exist; "
             "we never create or reset an independent budget."
         )
+    ledger_status = describe_ledger(ledger)
+    if requested_ledger is not None and ledger_status["state"] != "session_grant":
+        raise PlanError(
+            "--budget-ledger must be an explicit session-grant ledger; got "
+            f"{ledger_status['state']} ({ledger_status.get('error', 'no grant')})"
+        )
+    if args.invoke:
+        if ledger_status["state"] == "invalid":
+            raise PlanError(f"budget ledger invalid: {ledger_status['error']}")
+        if ledger_status.get("expired"):
+            raise PlanError(f"budget ledger session grant expired at {ledger_status['expires_at']}")
+        if not ledger_status["can_reserve"]:
+            raise PlanError(
+                "budget ledger has no USD1 reservation headroom "
+                f"({ledger_status['headroom_usd']} left); a new grant needs user approval"
+            )
+        if not args.key_file.expanduser().resolve().is_file():
+            raise PlanError(f"--key-file not found: {args.key_file}")
     parser_max_output_bytes = getattr(args, "parser_max_output_bytes", None)
-    from evaluation.local_upstage_pilot import parser_output_limit
+    parser_timeout_seconds = getattr(args, "parser_timeout_seconds", None)
+    parser_memory_bytes = getattr(args, "parser_memory_bytes", None)
+    from evaluation.local_upstage_pilot import parser_output_limit, parser_resource_limits
 
     try:
         parser_output_limit(parser_max_output_bytes)
+        parser_resource_limits(parser_timeout_seconds, parser_memory_bytes)
     except ValueError as exc:
         raise PlanError(str(exc)) from exc
     tagging_max_calls = getattr(args, "tagging_max_calls", TAGGING_MAX_CALLS)
@@ -494,11 +668,18 @@ def plan_run(args: argparse.Namespace) -> dict:
     _validate_extraction_total(EXTRACTION_MAX_CALLS, extraction_total_calls)
     verify_selected_cells = bool(getattr(args, "verify_selected_cells", False))
     native_quote_typography = bool(getattr(args, "native_quote_typography", False))
+    native_windows_ocr = bool(getattr(args, "native_windows_ocr", False))
+    native_upstage_ocr = bool(getattr(args, "native_upstage_ocr", False))
+    upstage_ocr_max_calls = getattr(args, "upstage_ocr_max_calls", None)
     claim_span_typography = bool(getattr(args, "claim_span_typography", False))
     live_relations = bool(getattr(args, "live_relations", False))
     preliminary_actor_role = bool(getattr(args, "preliminary_actor_role", False))
+    preliminary_table_role = bool(getattr(args, "preliminary_table_role", False))
+    position_context_order = bool(getattr(args, "position_context_order", False))
     preliminary_context = (
-        bool(getattr(args, "preliminary_context", False)) or preliminary_actor_role
+        bool(getattr(args, "preliminary_context", False))
+        or preliminary_actor_role
+        or preliminary_table_role
     )
     ai_project_review = bool(getattr(args, "ai_project_review", False))
     extraction_year_notation = bool(getattr(args, "extraction_year_notation", False))
@@ -523,10 +704,17 @@ def plan_run(args: argparse.Namespace) -> dict:
         tagging_max_calls=tagging_max_calls,
         verify_selected_cells=verify_selected_cells,
         native_quote_typography=native_quote_typography,
+        native_windows_ocr=native_windows_ocr,
+        native_upstage_ocr=native_upstage_ocr,
+        upstage_ocr_max_calls=upstage_ocr_max_calls,
         claim_span_typography=claim_span_typography,
         live_relations=live_relations,
+        capacity_refresh=bool(getattr(args, "capacity_refresh", False)),
+        tagging_model=getattr(args, "tagging_model", None),
         preliminary_context=preliminary_context,
         preliminary_actor_role=preliminary_actor_role,
+        preliminary_table_role=preliminary_table_role,
+        position_context_order=position_context_order,
         ai_project_review=ai_project_review,
         extraction_year_notation=extraction_year_notation,
         extraction_context=extraction_context,
@@ -535,6 +723,14 @@ def plan_run(args: argparse.Namespace) -> dict:
         extraction_complete_selection=extraction_complete_selection,
         extraction_content_bounds=extraction_content_bounds,
         parser_max_output_bytes=parser_max_output_bytes,
+        parser_timeout_seconds=parser_timeout_seconds,
+        parser_memory_bytes=parser_memory_bytes,
+        java_path=java_path,
+        budget_ledger=None if requested_ledger is None else ledger,
+        company_name=None if company_name is None else company_name.strip(),
+        company_registration=(
+            None if company_registration is None else company_registration.strip()
+        ),
     )
     return {
         "argv": argv,
@@ -543,18 +739,31 @@ def plan_run(args: argparse.Namespace) -> dict:
         "pages": pages,
         "claim_pages": claim_pages,
         "page_count": page_count,
+        "all_pages": all_pages,
         "invoke": bool(args.invoke),
         "serve": bool(args.serve),
         "port": args.port,
         "parser_max_output_bytes": parser_max_output_bytes,
+        "parser_timeout_seconds": parser_timeout_seconds,
+        "parser_memory_bytes": parser_memory_bytes,
+        "java_path": java_path,
+        "budget_ledger": ledger,
+        "ledger_status": ledger_status,
         "extraction_total_calls": extraction_total_calls,
         "tagging_max_calls": tagging_max_calls,
         "verify_selected_cells": verify_selected_cells,
         "native_quote_typography": native_quote_typography,
+        "native_windows_ocr": native_windows_ocr,
+        "native_upstage_ocr": native_upstage_ocr,
+        "upstage_ocr_max_calls": upstage_ocr_max_calls,
         "claim_span_typography": claim_span_typography,
         "live_relations": live_relations,
+        "capacity_refresh": bool(getattr(args, "capacity_refresh", False)),
+        "tagging_model": getattr(args, "tagging_model", None) or "solar-pro4",
         "preliminary_context": preliminary_context,
         "preliminary_actor_role": preliminary_actor_role,
+        "preliminary_table_role": preliminary_table_role,
+        "position_context_order": position_context_order,
         "ai_project_review": ai_project_review,
         "extraction_year_notation": extraction_year_notation,
         "extraction_context": extraction_context,
@@ -590,6 +799,11 @@ def print_plan(plan: dict) -> None:
             print("    Full proposed scope is used (no --auto-scope-max-pages exclusion).")
         print(f"  auto-scope artifact:          {plan['auto_scope_artifact']}")
     print(f"  pages:     {plan['pages']}")
+    if plan.get("all_pages"):
+        print(
+            "  Full-document page selection; this is not proof of completed processing. "
+            "Call budgets, source verification and review gates remain unchanged."
+        )
     claim_scope = plan["claim_pages"] if plan["claim_pages"] is not None else "(all selected pages)"
     print(f"  claim_pages: {claim_scope}")
     table_mode = (
@@ -600,10 +814,14 @@ def print_plan(plan: dict) -> None:
         pilot_opts.append(f"extraction-total-calls={plan['extraction_total_calls']}")
     for flag in (
         "native_quote_typography",
+        "native_windows_ocr",
+        "native_upstage_ocr",
         "claim_span_typography",
         "live_relations",
         "preliminary_context",
         "preliminary_actor_role",
+        "preliminary_table_role",
+        "position_context_order",
         "ai_project_review",
         "extraction_year_notation",
         "extraction_context",
@@ -613,6 +831,13 @@ def print_plan(plan: dict) -> None:
             pilot_opts.append(flag.replace("_", "-"))
     print(f"  pilot options: {', '.join(pilot_opts)} (extraction batch={EXTRACTION_MAX_CALLS})")
     print(f"  invoke:    {plan['invoke']}   serve: {plan['serve']}   port: {plan['port']}")
+    print(f"  budget ledger: {plan['budget_ledger']}")
+    print("  ledger state:  " + json.dumps(plan["ledger_status"], sort_keys=True))
+    if plan["ledger_status"]["state"] == "absent":
+        print(
+            "    --invoke is refused until an operator records an explicit grant with "
+            "scripts/authorize_upstage_session.py (prior usage stays unknown)."
+        )
     print("  exact argv:")
     print("    " + shlex.join(plan["argv"]))
     if not plan["invoke"]:
@@ -639,14 +864,33 @@ def build_parser() -> argparse.ArgumentParser:
         help="NEW run parser artifact cap (default 20000000; max 128 MiB).",
     )
     parser.add_argument(
+        "--parser-timeout-seconds",
+        type=int,
+        default=None,
+        help="NEW run only: 1..900 seconds; default remains 120.",
+    )
+    parser.add_argument(
+        "--parser-memory-bytes",
+        type=int,
+        default=None,
+        help="NEW run only: 128MiB..4GiB; default remains 768MiB.",
+    )
+    parser.add_argument(
         "--pages",
         default=None,
-        help="Comma-separated 1-based pages, e.g. '30,31'. Required unless --auto-scope.",
+        help="1-based pages/ranges, e.g. '30-35,84'. Required unless --auto-scope/--all-pages.",
+    )
+    parser.add_argument(
+        "--all-pages",
+        action="store_true",
+        help="Explicitly select every physical page for parsing/evidence. Optional "
+        "--claim-pages limits extraction only. Does not raise call or money budgets, "
+        "approve evidence, or imply full processing completion.",
     )
     parser.add_argument(
         "--claim-pages",
         default=None,
-        help="Optional comma-separated 1-based subset of --pages to extract claims from. "
+        help="Optional 1-based pages/ranges within the selected pages to extract claims from. "
         "Parsing and evidence still cover all --pages; omit to keep legacy behaviour. "
         "Not compatible with --auto-scope (which derives both scopes itself).",
     )
@@ -687,13 +931,34 @@ def build_parser() -> argparse.ArgumentParser:
         help="Pilot API key file (default: <root>/.env.upstage.local)",
     )
     parser.add_argument(
+        "--java-path",
+        type=Path,
+        default=None,
+        help="NEW run parser Java 21 executable, forwarded as the pilot's --java-path "
+        "(omit to keep the pilot default).",
+    )
+    parser.add_argument(
+        "--budget-ledger",
+        type=Path,
+        default=None,
+        help="Explicit session-grant ledger (scripts/authorize_upstage_session.py), "
+        "forwarded to the pilot and every paid stage. Omit for the legacy ledger "
+        "<checkout>/.local/upstage/budget.sqlite3.",
+    )
+    parser.add_argument("--company-name", default=None, help="Explicit legal name (NEW run)")
+    parser.add_argument(
+        "--company-registration",
+        default=None,
+        help="Verified company identifier, e.g. DART:<code>; required with --company-name",
+    )
+    parser.add_argument(
         "--extraction-total-calls",
         type=int,
         default=None,
         help="Optional total-run extraction allowance across continuation batches "
         f"(at least the legacy batch {EXTRACTION_MAX_CALLS}, at most 2000; omit to keep "
         "the one-batch allowance). Validated by the pilot's own "
-        "extraction_budget_settings; the shared USD20 ceiling still applies.",
+        "extraction_budget_settings; the run's ledger ceiling still applies.",
     )
     parser.add_argument(
         "--tagging-max-calls",
@@ -716,10 +981,44 @@ def build_parser() -> argparse.ArgumentParser:
         "--verify-paragraphs without raster OCR, which this launcher always uses).",
     )
     parser.add_argument(
+        "--native-windows-ocr",
+        action="store_true",
+        help="Windows NEW runs: pass the pilot's --native-windows-ocr so native paragraphs "
+        "are corroborated by the pinned Korean Windows.Media.Ocr engine (macOS Vision is "
+        "unavailable off macOS). Not combinable with --native-quote-typography.",
+    )
+    parser.add_argument(
+        "--native-upstage-ocr",
+        action="store_true",
+        help="NEW runs: pass the pilot's --native-upstage-ocr so native paragraphs with no "
+        "rendered reader (UnsupportedPlatform) are corroborated by Upstage Document Parse "
+        "crops on the same shared ledger. Not combinable with --native-quote-typography or "
+        "--native-windows-ocr. Uncovered paragraphs are reported, never assumed checked.",
+    )
+    parser.add_argument(
+        "--upstage-ocr-max-calls",
+        type=int,
+        help="Document Parse calls (10 crops each) for --native-upstage-ocr, 1..20 "
+        "(pilot default 1).",
+    )
+    parser.add_argument(
         "--claim-span-typography",
         action="store_true",
         help="Opt a new run into rendered quote/middle-dot comparison, including "
         "the required render-resolution and bullet-spacing wrappers.",
+    )
+    parser.add_argument(
+        "--capacity-policy-refresh",
+        dest="capacity_refresh",
+        action="store_true",
+        help="NEW run: opt into the existing 2026-09-25 capacity policy (expires 2026-10-02).",
+    )
+    parser.add_argument(
+        "--tagging-model",
+        choices=["solar-pro4", "solar-pro3"],
+        default=None,
+        help="NEW run: one model for live preliminary/tagging/relation calls "
+        "(default solar-pro4). Extraction stays on the fixed extraction model.",
     )
     parser.add_argument(
         "--live-relations",
@@ -743,6 +1042,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Use the actor/goal-period classification profile for a NEW run. "
         "Includes its required context/table/goal options; no rule approval or paid "
         "call is enabled by this flag. Existing saved runs are unchanged.",
+    )
+    parser.add_argument(
+        "--preliminary-table-role",
+        action="store_true",
+        help="NEW run: classify table roles with the required preliminary/table context.",
+    )
+    parser.add_argument(
+        "--position-context-order",
+        action="store_true",
+        help="NEW run: preserve positional context ordering; requires --extraction-context "
+        "and --preliminary-table-role, excludes --preliminary-actor-role.",
     )
     parser.add_argument(
         "--ai-project-review",
@@ -796,7 +1106,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--invoke",
         action="store_true",
-        help="Delegate to the pilot (paid; shared budget ledger must exist)",
+        help="Delegate to the pilot (paid; the budget ledger must exist and be valid)",
     )
     parser.add_argument(
         "--serve",

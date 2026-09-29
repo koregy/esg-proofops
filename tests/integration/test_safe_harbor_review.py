@@ -120,7 +120,8 @@ def safe_record(ws):
     "states,expected",
     [
         (("present", "present"), True),
-        (("absent", "present"), False),
+        # ("absent", ...) -> False is unreachable until a trusted checklist coverage
+        # proof exists; see test_supplied_true_boolean_alone_never_promotes_absence.
         (("unknown", "present"), None),
     ],
 )
@@ -205,3 +206,56 @@ def test_existing_human_review_path_stays_compatible(tmp_path, monkeypatch):
     assert response.status_code == 200
     assert response.json()["decision"]["review_status"] == "human_confirmed"
     assert safe_record(ws).reasonable_basis_documented is None
+
+
+def test_supplied_true_boolean_alone_never_promotes_absence(tmp_path, monkeypatch):
+    """R00 §12: a client ``search_coverage_verified=True`` is not a full-document proof."""
+    ws = safe_harbor_workspace(tmp_path, monkeypatch)
+    review = checklist_review(ws, ("absent", "present"))
+    assert review["facts"][0]["search_coverage_verified"] is True
+    before = ws[1].store.history(TENANT, RUN, ws[3]["claim_id"])
+
+    with pytest.raises(ReviewRejected) as error:
+        resolve(ws, review)
+
+    assert error.value.code == "SAFE_HARBOR_ABSENCE_RECEIPT_REQUIRED"
+    assert ws[1].store.history(TENANT, RUN, ws[3]["claim_id"]) == before
+
+
+def test_stored_absent_checklist_is_preserved_but_never_carried(tmp_path, monkeypatch):
+    """A revision stored before the guard stays as recorded; re-review cannot re-assert it."""
+    from dataclasses import replace
+
+    from proofops.application import reviews
+
+    ws = safe_harbor_workspace(tmp_path, monkeypatch)
+    guarded = reviews._review_safe_harbor
+
+    def pre_guard(inputs, review, *, carried=False):
+        # Reproduces the pre-guard acceptance of a client boolean absence.
+        shadow = copy.deepcopy(review)
+        shadow["facts"][0].update(state="present", search_coverage_verified=False)
+        facts, receipt = guarded(inputs, shadow, carried=carried)
+        facts[0] = replace(facts[0], state="absent", search_coverage_verified=True)
+        return facts, dict(receipt, request=review)
+
+    monkeypatch.setattr(reviews, "_review_safe_harbor", pre_guard)
+    resolve(ws, checklist_review(ws, ("absent", "present")))
+    monkeypatch.setattr(reviews, "_review_safe_harbor", guarded)
+    before = ws[1].store.history(TENANT, RUN, ws[3]["claim_id"])
+
+    with pytest.raises(ReviewRejected) as error:
+        ws[1].resolve_review(
+            _actor(),
+            ws[3]["review_id"],
+            ws[4] | {"base_tag_revision": 2},
+            '"2"',
+            str(uuid4()),
+            reopen=True,
+        )
+
+    assert error.value.code == "SAFE_HARBOR_ABSENCE_CARRY_REQUIRES_RECEIPT"
+    after = ws[1].store.history(TENANT, RUN, ws[3]["claim_id"])
+    assert after == before  # the stored revision is untouched and nothing new is written
+    stored = after["tags"][-1]["safe_harbor_review"]["request"]["facts"][0]
+    assert stored["state"] == "absent"

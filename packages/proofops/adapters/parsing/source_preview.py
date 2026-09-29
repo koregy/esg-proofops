@@ -4,18 +4,26 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import subprocess
 import sys
+import tempfile
 from dataclasses import asdict
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
-from proofops.adapters.parsing.opendataloader import OpenDataLoaderParser, ParseFailure
+from proofops.adapters.parsing.opendataloader import (
+    OpenDataLoaderParser,
+    ParseFailure,
+    _child_limits,
+    _parser_work_directory,
+)
 from proofops.domain.documents import PageGeometry
 
 _MAX_SOURCE_BYTES = 100 * 1024 * 1024
 _MAX_OUTPUT_BYTES = 16 * 1024 * 1024
+_TIMEOUT_SECONDS = 15
+_MEMORY_BYTES = 512 * 1024 * 1024
 _MAX_DIMENSION = 2000
 _MAX_PIXELS = 4_000_000
 
@@ -39,33 +47,35 @@ def render_page_preview(
     if type(include_annotations_and_forms) is not bool:
         raise SourcePreviewFailure("SOURCE_PREVIEW_MODE_INVALID")
     profile = SimpleNamespace(
-        timeout_seconds=15,
-        memory_bytes=512 * 1024 * 1024,
+        timeout_seconds=_TIMEOUT_SECONDS,
+        memory_bytes=_MEMORY_BYTES,
         max_output_bytes=_MAX_OUTPUT_BYTES,
     )
-    with TemporaryDirectory(prefix=".source-preview-") as temporary:
-        work = Path(temporary)
-        (work / "source.pdf").write_bytes(source)
-        (work / "request.json").write_text(
-            json.dumps(
-                {
-                    "physical_page": physical_page,
-                    "geometry": asdict(geometry),
-                    "include_annotations_and_forms": include_annotations_and_forms,
-                }
+    try:
+        # Owned scratch; cleanup retries briefly while a killed Windows child releases handles.
+        with _parser_work_directory(Path(tempfile.gettempdir())) as work:
+            (work / "source.pdf").write_bytes(source)
+            (work / "request.json").write_text(
+                json.dumps(
+                    {
+                        "physical_page": physical_page,
+                        "geometry": asdict(geometry),
+                        "include_annotations_and_forms": include_annotations_and_forms,
+                    }
+                )
             )
-        )
-        try:
+            # Containment (Job Object on Windows, new session on POSIX), wall-clock
+            # timeout, memory and output watchdogs all come from the shared executor.
             OpenDataLoaderParser._execute(
                 [sys.executable, "-I", str(Path(__file__).resolve()), str(work)],
                 work,
-                {"PATH": "/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE": "1"},
+                _child_environment(work),
                 profile,
             )
             result = json.loads((work / "result.json").read_bytes())
             png = (work / "output.png").read_bytes()
-        except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError, ParseFailure):
-            raise SourcePreviewFailure("SOURCE_PREVIEW_FAILED") from None
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError, ParseFailure):
+        raise SourcePreviewFailure("SOURCE_PREVIEW_FAILED") from None
     if (
         not isinstance(result, dict)
         or set(result) != {"width_pt", "height_pt"}
@@ -83,9 +93,26 @@ def render_page_preview(
     return png, float(result["width_pt"]), float(result["height_pt"])
 
 
-def _child(work: Path) -> None:
-    import resource
+def _child_environment(work: Path) -> dict[str, str]:
+    """Minimal, never-inherited child environment for this platform.
 
+    POSIX is unchanged. Windows needs ``SystemRoot`` to start Python/PDFium, and pins
+    TEMP inside the watched work directory so scratch output stays under the limit.
+    """
+    if sys.platform != "win32":
+        return {"PATH": "/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE": "1"}
+    system_root = os.environ.get("SystemRoot", r"C:\Windows")
+    return {
+        "PATH": os.pathsep.join([str(Path(system_root) / "System32"), system_root]),
+        "SystemRoot": system_root,
+        "TEMP": str(work),
+        "TMP": str(work),
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONUTF8": "1",
+    }
+
+
+def _child(work: Path) -> None:
     import pypdfium2 as pdfium
 
     request = json.loads((work / "request.json").read_bytes())
@@ -93,9 +120,11 @@ def _child(work: Path) -> None:
     expected = PageGeometry(**request["geometry"])
     if type(page_number) is not int or page_number < 1:
         raise ValueError("invalid page")
-    resource.setrlimit(resource.RLIMIT_CPU, (15, 15))
-    resource.setrlimit(resource.RLIMIT_FSIZE, (_MAX_OUTPUT_BYTES, _MAX_OUTPUT_BYTES))
-    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    # POSIX: the same hard RLIMIT_CPU(15)/RLIMIT_FSIZE(output cap)/RLIMIT_CORE(0) as before.
+    # Windows: CPU and memory are enforced by the Job Object the parent assigned before
+    # this process was resumed, bytes by the parent's output watchdog; this only
+    # suppresses crash dialogs that would otherwise hold a killed render open.
+    _child_limits({"timeout_seconds": _TIMEOUT_SECONDS, "max_output_bytes": _MAX_OUTPUT_BYTES})
     document = pdfium.PdfDocument(work / "source.pdf")
     page = None
     bitmap = None

@@ -12,6 +12,7 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from uuid import uuid4
 
+from proofops.adapters.local.assurance_head import assurance_proofs
 from proofops.adapters.local.audit_store import append_audit_transaction, read_audit_head
 from proofops.adapters.local.job_store import LocalSQLiteJobStore
 from proofops.application.authorization import AuthContext
@@ -365,6 +366,17 @@ class LocalSQLiteReviewStore:
         with self.jobs._transaction() as db:
             return self._lookup(db, tenant_id, review_id)
 
+    def head_tag(self, tenant_id, run_id, claim_id):
+        """Current head tag (read-only) so trusted replays can run before resolve's writer."""
+        with self.jobs._transaction() as db:
+            raw = self.jobs._raw(db, tenant_id, run_id, "claim_head", claim_id)
+            if raw is None:
+                return None
+            head = json.loads(raw)
+            return self.jobs._get(
+                db, tenant_id, run_id, "tag_revision", f'{claim_id}:{head["tag_revision"]:010}'
+            )
+
     def publish(self, inputs, review):
         with self.jobs._transaction() as db:
             tenant, run_id = inputs.context.claim.tenant_id, inputs.run_id
@@ -527,7 +539,11 @@ class LocalSQLiteReviewStore:
         return review
 
     def resolve(self, actor, review_id, body, expected, key, build, *, reopen=False):
-        with self.jobs._transaction() as db:
+        target = self.get(actor.tenant_id, review_id)
+        with (
+            assurance_proofs(self.jobs, actor.tenant_id, target["run_id"], (target["claim_id"],)),
+            self.jobs._transaction() as db,
+        ):
             review = self._lookup(db, actor.tenant_id, review_id)
             tenant, run_id, claim_id = actor.tenant_id, review["run_id"], review["claim_id"]
             replay_key = canonical_hash([actor.user_sub, "review_resolve", key])
@@ -572,6 +588,15 @@ class LocalSQLiteReviewStore:
             initial = self.jobs._get(
                 db, tenant, run_id, "tag_revision", f'{claim_id}:{head["tag_revision"]:010}'
             )
+            from proofops.adapters.local.assurance_head import (
+                AssuranceHeadRejected,
+                check_assurance_tag,
+            )
+
+            try:
+                check_assurance_tag(db, self.jobs, tenant, run_id, initial)
+            except AssuranceHeadRejected as exc:
+                raise ReviewRejected(str(exc), 409) from None
             tag, decision = build(review, initial, head["decision_revision"] + 1)
             now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
             tag["created_at"] = now

@@ -14,10 +14,16 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
 from proofops.adapters.local.analysis_store import LocalAnalysisStore
+from proofops.adapters.local.assurance_head import (
+    AbsenceProofVerifier,
+    AssuranceProofVerifier,
+    NumericProofVerifier,
+)
 from proofops.adapters.local.assurance_store import LocalAssuranceStore
 from proofops.adapters.local.claim_store import LocalClaimStore
 from proofops.adapters.local.classification_store import LocalSQLiteClassificationStore
@@ -136,6 +142,33 @@ def build_composition() -> ApiComposition:
     tags = LocalTagStore(runs.store, uploads, parser)
     claims = LocalClaimStore(runs.store, uploads, parser)
     assurance = LocalAssuranceStore(runs.store, uploads, parser)
+    # P4 receipt heads are fully re-derived (original bytes, inputs, statement) before
+    # every consumer read transaction; without this verifier they fail closed.
+    runs.store.jobs.assurance_verifier = AssuranceProofVerifier(
+        runs.store.jobs,
+        load_inputs=tags.load_inputs,
+        load_statement=assurance.load,
+        source_digest=lambda tenant, version: sha256(
+            uploads.read_original(tenant, version)
+        ).hexdigest(),
+    )
+    # Reviewed whole-document absences replay the producer's receipt/review files
+    # (beside the run DB) from the original PDF, graph and claim on every head read.
+    from proofops.adapters.local.search_coverage_store import (
+        LocalSearchCoverageStore,
+        run_loader,
+    )
+
+    search_coverage = LocalSearchCoverageStore(
+        database_path.parent / "search-coverage", run_loader(runs.store, uploads, parser)
+    )
+    runs.store.jobs.absence_verifier = AbsenceProofVerifier(
+        runs.store.jobs, load_inputs=tags.load_inputs, evidence=search_coverage
+    )
+    # numeric-link-v1 P6 heads replay the table observation + numeric check from source.
+    runs.store.jobs.numeric_verifier = NumericProofVerifier(
+        runs.store.jobs, load_inputs=tags.load_inputs
+    )
     return ApiComposition(
         proofops=proofops_composition,
         auth_store=auth_store,
@@ -152,6 +185,8 @@ def build_composition() -> ApiComposition:
             load_inputs=tags.load_inputs,
             verify_context_sources=tags.verify_context_sources,
             load_run_snapshot=runs.store.snapshot,
+            load_assurance_statement=assurance.load,
+            search_coverage=search_coverage,
         ),
         source_conditions=LocalSourceConditionReview(runs.store, uploads, parser),
         rescores=RescoreService(

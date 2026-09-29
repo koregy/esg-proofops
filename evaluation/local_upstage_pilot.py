@@ -1,7 +1,8 @@
 """Authorized local PDF→real extraction→review pilot; no production or grading approval.
 
 Use --invoke explicitly for model calls; reuse a state directory to view stored results.
-All model calls share the existing ledger, extended explicitly to USD20 on 2026-09-18.
+All model calls share one ledger: the existing one (extended explicitly to USD20 on
+2026-09-18) or, with --budget-ledger, an explicit session-grant ledger frozen per run.
 No automatic retries.
 """
 
@@ -25,9 +26,10 @@ import yaml  # type: ignore[import-untyped]
 from fastapi import Request
 
 ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_JAVA = "/opt/homebrew/opt/openjdk@21/bin/java"
 
 
-def local_login_response(sessions, user: str, tenant: str, run_id: str):
+def local_login_response(sessions, user: str, tenant: str, run_id: str, landing: str | None = None):
     """The secret loopback login link renews an expired demo session on each visit."""
     from fastapi.responses import RedirectResponse
     from proofops.adapters.local.auth_store import hash_token, new_session_id
@@ -38,11 +40,79 @@ def local_login_response(sessions, user: str, tenant: str, run_id: str):
     sessions.put_with_token(
         SessionRecord(session, user, tenant, hash_token(csrf), now + 3600, now + 3600, False), csrf
     )
-    response = RedirectResponse(f"/runs/{run_id}/claims", status_code=303)
+    response = RedirectResponse(landing or f"/runs/{run_id}/claims", status_code=303)
     response.set_cookie(
         SESSION_COOKIE_NAME, session, secure=True, httponly=True, samesite="strict", path="/"
     )
     return response
+
+
+# Seed states that never produced a stage artifact: claims are unavailable only
+# because nothing ran, so there is no stored claim artifact whose integrity could fail.
+_BOOTSTRAP_SEED_STATUSES = {"queued", "cancelled"}
+
+
+def serve_refusal(
+    claims_status: int, run_meta: dict, *, bootstrap: bool, worker: bool, pipeline_status: str
+) -> str | None:
+    """Why --serve must refuse this run, or None to serve.
+
+    Ordinary serving still requires the saved run's claims to read back HTTP 200.
+    ``--serve-bootstrap`` is an explicit opt-in that serves the upload/new-analysis
+    pages for a seed that never ran (no ``--invoke`` here, no completed stage). Any
+    run that advanced past parse keeps the fail-closed claims check, so integrity
+    errors in stored claims are never served. With the worker the seed must already
+    be cancelled, otherwise the worker would drive it without a user action.
+    """
+    if claims_status == 200:
+        return None
+    refusal = (
+        f"Cannot serve this run: claims HTTP {claims_status}; inspect the saved inspection JSON"
+    )
+    if not bootstrap:
+        return refusal
+    status = run_meta.get("status")
+    if (
+        pipeline_status != "not_run"
+        or status not in _BOOTSTRAP_SEED_STATUSES
+        or "current_stage" in run_meta
+        or "parse_job" in run_meta
+    ):
+        return refusal + " (--serve-bootstrap applies only to a seed that never ran)"
+    if worker and status != "cancelled":
+        return (
+            f"Cannot bootstrap-serve with --serve-worker: seed run is {status}; cancel it "
+            "first so the worker never drives it without a user action"
+        )
+    return None
+
+
+def local_submission_body(
+    *,
+    worker_enabled: bool,
+    candidate_rule_pack_id: str | None,
+    selected_pages: list[int],
+    claim_pages: list[int] | None,
+    bootstrap: bool,
+) -> dict:
+    """Local-only new-analysis hints for the web form; never an authorization.
+
+    The pilot always composes ``LOCAL_EXTRACTION_MODE=upstage_probe``, and run
+    creation rejects any non-``declared_subset`` scope there, so ``full`` is not
+    offered. A bootstrap seed never ran and its CLI default pages (``--pages 1``)
+    are not a reviewer choice, so they are withheld: the user must type pages or
+    apply a scope proposal. A frozen ``claim_pages`` pin must stay inside any new
+    run's declared pages. The run service still enforces every guard itself.
+    """
+    return dict(
+        worker_enabled=worker_enabled,
+        candidate_rule_pack_id=candidate_rule_pack_id,
+        selected_pages=[] if bootstrap else list(selected_pages),
+        supported_scopes=["declared_subset"],
+        scope_reason="upstage_probe_declared_subset_only",
+        page_selection="explicit_required" if bootstrap else "saved_run_pages",
+        required_pages=list(claim_pages or []),
+    )
 
 
 def pilot_company_body(legal_name, registration_identifier, *, existing: bool) -> dict:
@@ -60,11 +130,44 @@ def pilot_company_body(legal_name, registration_identifier, *, existing: bool) -
     )
 
 
+def session_ledger_authorization(ledger: Path) -> dict:
+    """Audit record of an explicit session-grant ledger; read-only, fail closed.
+
+    Only a ledger created by scripts/authorize_upstage_session.py qualifies, so a
+    new run never records the historical USD20 authorization for a new grant.
+    """
+    import sqlite3
+
+    from proofops.adapters.local.upstage import (
+        UpstageProbe,
+        read_session_grant,
+        session_grant_expired,
+    )
+
+    ledger = ledger.resolve()
+    if not ledger.is_file():
+        raise ValueError(f"--budget-ledger not found: {ledger}")
+    try:
+        with sqlite3.connect(ledger.as_uri() + "?mode=ro", uri=True) as db:
+            UpstageProbe._authorized_limit(db)
+            grant = read_session_grant(db)
+    except (sqlite3.Error, ValueError) as exc:
+        raise ValueError(f"--budget-ledger invalid: {exc}") from None
+    if grant is None:
+        raise ValueError("--budget-ledger must hold an explicit session grant")
+    return dict(
+        kind="upstage_session_grant",
+        ledger=str(ledger),
+        expired_now=session_grant_expired(grant),
+        **{key: grant[key] for key in sorted(grant)},
+    )
+
+
 def extraction_budget_settings(batch_calls: int, total_calls: int | None = None) -> dict:
     """Freeze a finite run allowance independently of each 1..20-source batch.
 
     Omitting total_calls preserves the legacy one-batch allowance. This grants
-    no money: the shared USD20 ledger still fences every provider dispatch.
+    no money: the run's shared ledger still fences every provider dispatch.
     """
     if type(batch_calls) is not int or not 1 <= batch_calls <= 20:
         raise ValueError("invalid extraction batch call limit")
@@ -100,8 +203,14 @@ def live_tagging_settings(
     compact_element_wire: bool = False,
     position_context_order: bool = False,
     capacity_refresh: bool = False,
+    tagging_model: str = "solar-pro4",
 ) -> dict:
-    """Explicit bounded pilot config; grants are registered separately by main."""
+    """Explicit bounded pilot config; grants are registered separately by main.
+
+    ``tagging_model`` selects one model for every live tagging role (NEW run
+    only). The default keeps the historical Pro 4 settings and policy byte-for-
+    byte; ``solar-pro3`` pins the separately versioned Pro 3 reservation policy.
+    """
     from proofops.application.input_reservation import solar_pro4_capacity_policy
     from proofops.application.ports.models import ModelBinding
     from proofops.application.tagging.preliminary import (
@@ -127,6 +236,10 @@ def live_tagging_settings(
         or type(capacity_refresh) is not bool
     ):
         raise ValueError("relation/preliminary-context stage must be explicit boolean")
+    if tagging_model not in ("solar-pro4", "solar-pro3"):
+        raise ValueError("tagging model must be solar-pro4 or solar-pro3")
+    if tagging_model == "solar-pro3" and capacity_refresh:
+        raise ValueError("capacity refresh is a Pro 4 policy revision; not valid for solar-pro3")
     if preliminary_table_context and not preliminary_context:
         raise ValueError("preliminary table context requires preliminary context")
     if preliminary_table_role and not preliminary_table_context:
@@ -184,6 +297,12 @@ def live_tagging_settings(
         "contains an event year and a possibility, not a goal deadline; G1 stays unknown. "
         "'가상기업은 2035년까지 재생에너지 100% 전환을 목표로 한다.' explicitly provides "
         "a goal deadline; G1 may cite '2035년'. "
+        "For a ratio or intensity goal, G3 needs the literal baseline period and the literal "
+        "baseline ratio value in that period; the target ratio or reduction percentage alone "
+        "is not a baseline, so keep G3 unknown without them. "
+        "G5 is present only when the document directly states current progress toward this "
+        "goal; a progress figure you would have to calculate from other reported values is "
+        "derived, never present, so keep G5 unknown and do not compute it. "
         "M3 is external verification, distinct from M1's named means or standard. "
         "Naming or following a framework/standard does not by itself state that external "
         "verification or certification occurred. Require literal evidence of that external "
@@ -295,7 +414,7 @@ def live_tagging_settings(
         settings[prefix + "_settings"] = asdict(
             TaggingSettings(
                 ModelBinding(str(uuid4()), "tagger", False),
-                "solar-pro4",
+                tagging_model,
                 profile,
                 "provider-managed-unverified",
                 prompt,
@@ -303,7 +422,14 @@ def live_tagging_settings(
                 max_tokens=output,
             )
         )
-    settings["input_reservation_policy"] = solar_pro4_capacity_policy(refreshed=capacity_refresh)
+    if tagging_model == "solar-pro3":
+        from proofops.application.input_reservation_pro3 import solar_pro3_capacity_policy
+
+        settings["input_reservation_policy"] = solar_pro3_capacity_policy()
+    else:
+        settings["input_reservation_policy"] = solar_pro4_capacity_policy(
+            refreshed=capacity_refresh
+        )
     return settings
 
 
@@ -317,12 +443,42 @@ def raster_settings(*, max_pages: int, max_calls: int) -> dict:
     )
 
 
+def upstage_ocr_settings(
+    *, max_pages: int, max_calls: int, widget_visibility: bool = False
+) -> dict:
+    """Pin a NEW-run native Upstage OCR policy; exclusive with raster settings."""
+    from proofops.adapters.local.native_upstage_ocr import native_upstage_ocr_policy
+
+    if type(widget_visibility) is not bool:
+        raise ValueError("native widget visibility must be boolean")
+    settings = dict(
+        upstage_ocr_runtime_binding_id=str(uuid4()),
+        upstage_ocr_policy=native_upstage_ocr_policy(max_pages=max_pages, max_calls=max_calls),
+    )
+    if widget_visibility:
+        from proofops.adapters.local.native_widget_visibility import native_widget_visibility_policy
+
+        settings["upstage_ocr_widget_visibility"] = native_widget_visibility_policy()
+    return settings
+
+
 def parser_output_limit(value):
     if value is None:
         return 20_000_000
     if type(value) is not int or not 1 <= value <= 128 * 1024 * 1024:
         raise ValueError("--parser-max-output-bytes must be an integer in 1..134217728")
     return value
+
+
+def parser_resource_limits(timeout_seconds=None, memory_bytes=None) -> dict:
+    """Explicit new-run resource bounds; historical defaults stay unchanged."""
+    timeout = 120 if timeout_seconds is None else timeout_seconds
+    memory = 768 * 1024 * 1024 if memory_bytes is None else memory_bytes
+    if type(timeout) is not int or not 1 <= timeout <= 900:
+        raise ValueError("--parser-timeout-seconds must be an integer in 1..900")
+    if type(memory) is not int or not 128 * 1024 * 1024 <= memory <= 4 * 1024**3:
+        raise ValueError("--parser-memory-bytes must be an integer in 128MiB..4GiB")
+    return dict(timeout_seconds=timeout, memory_bytes=memory)
 
 
 def claim_source_policy_for(args):
@@ -347,6 +503,20 @@ def claim_source_policy_for(args):
     else:
         from proofops.adapters.local.claim_source_verification import claim_source_policy
     return claim_source_policy()
+
+
+def _upstage_ocr_option(args, stage: str) -> dict:
+    """Only a chosen NEW-run native Upstage OCR opt-in reaches the composition."""
+    if getattr(args, "native_upstage_ocr", False) and stage == "parse":
+        return {"native_upstage_ocr": True}
+    return {}
+
+
+def _windows_ocr_option(args, stage: str) -> dict:
+    """Only a chosen NEW-run Windows OCR opt-in reaches the composition."""
+    if getattr(args, "native_windows_ocr", False) and stage == "parse":
+        return {"native_windows_ocr": True}
+    return {}
 
 
 def apply_resume_metadata(args, saved: dict) -> None:
@@ -392,18 +562,37 @@ def apply_resume_metadata(args, saved: dict) -> None:
     if requested_output_limit is not None and requested_output_limit != saved_output_limit:
         raise ValueError("--resume cannot change parser-max-output-bytes; create a new run")
     args.parser_max_output_bytes = parser_output_limit(saved_output_limit)
+    for name in ("parser_timeout_seconds", "parser_memory_bytes"):
+        requested_resource = getattr(args, name, None)
+        saved_value = saved.get(name)
+        if requested_resource is not None and requested_resource != saved_value:
+            raise ValueError(f"--resume cannot change {name}; create a new run")
+        setattr(args, name, saved_value)
     args.model = saved.get("model", args.model)
+    # Legacy manifests carry no key and were created with Pro 4 tagging.
+    saved_tagging_model = saved.get("tagging_model", "solar-pro4")
+    requested_tagging_model = getattr(args, "tagging_model", None)
+    if requested_tagging_model is not None and requested_tagging_model != saved_tagging_model:
+        raise ValueError("--resume cannot change tagging-model; create a new run")
+    args.tagging_model = saved_tagging_model
     args.verify_paragraphs = bool(saved.get("verify_paragraphs", False))
     args.verify_tables = bool(saved.get("verify_tables", False))
     args.verify_merged_tables = bool(saved.get("verify_merged_tables", False))
     args.verify_selected_cells = bool(saved.get("verify_selected_cells", False))
     args.native_quote_typography = bool(saved.get("native_quote_typography", False))
+    args.native_windows_ocr = bool(saved.get("native_windows_ocr", False))
     args.repair_table_headers = bool(saved.get("repair_table_headers", False))
     args.verify_claim_spans = bool(saved.get("verify_claim_spans", False))
     args.claim_span_render_resolution = bool(saved.get("claim_span_render_resolution", False))
     args.claim_span_bullet_spacing = bool(saved.get("claim_span_bullet_spacing", False))
     args.claim_span_typography = bool(saved.get("claim_span_typography", False))
     args.raster_ocr = bool(saved.get("raster_ocr", False))
+    args.native_upstage_ocr = bool(saved.get("native_upstage_ocr", False))
+    if getattr(args, "native_widget_visibility", False) and not saved.get(
+        "native_widget_visibility", False
+    ):
+        raise ValueError("--resume cannot add native widget visibility; create a new run")
+    args.native_widget_visibility = bool(saved.get("native_widget_visibility", False))
     args.live_tagging = bool(saved.get("live_tagging", False))
     args.live_relations = bool(saved.get("live_relations", False))
     args.preliminary_context = bool(saved.get("preliminary_context", False))
@@ -436,6 +625,10 @@ def apply_resume_metadata(args, saved: dict) -> None:
         # dict matches the manifest's stored policy under the resume guard.
         args.raster_max_pages = saved["raster_policy"].get("max_pages", args.raster_max_pages)
         args.raster_max_calls = saved["raster_policy"].get("max_calls", args.raster_max_calls)
+    if getattr(args, "native_upstage_ocr", False) and saved.get("upstage_ocr_policy"):
+        stored = saved["upstage_ocr_policy"]
+        args.upstage_ocr_max_pages = stored.get("max_pages", args.upstage_ocr_max_pages)
+        args.upstage_ocr_max_calls = stored.get("max_calls", args.upstage_ocr_max_calls)
 
 
 def run_live_stages(args, *, tenant_id: str, run_id: str) -> dict:
@@ -450,6 +643,8 @@ def run_live_stages(args, *, tenant_id: str, run_id: str) -> dict:
             verify_paragraphs=args.verify_paragraphs and stage == "parse",
             native_typography_tolerance=args.native_quote_typography and stage == "parse",
             raster_ocr=args.raster_ocr and stage == "parse",
+            **_windows_ocr_option(args, stage),
+            **_upstage_ocr_option(args, stage),
         )
         try:
             outcome = worker.run_once(tenant_id=tenant, run_id=run_id)
@@ -542,13 +737,29 @@ def main():
         default=None,
         help="NEW run parser artifact cap (default 20000000; max 128 MiB).",
     )
+    parser.add_argument(
+        "--budget-ledger",
+        type=Path,
+        default=None,
+        help="Exact session-grant ledger (scripts/authorize_upstage_session.py) fencing "
+        "every paid stage of this run, including serve-worker. Frozen into pilot.json "
+        "for a NEW run; omit to keep the legacy checkout ledger.",
+    )
+    parser.add_argument(
+        "--java-path",
+        default=None,
+        help="NEW run parser Java 21 executable (default: the macOS Homebrew openjdk@21 "
+        "path). Frozen into parser.json; rejected when the state already exists.",
+    )
+    parser.add_argument("--parser-timeout-seconds", type=int, default=None)
+    parser.add_argument("--parser-memory-bytes", type=int, default=None)
     parser.add_argument("--max-calls", type=int, default=8)
     parser.add_argument(
         "--extraction-total-calls",
         type=int,
         default=None,
         help="NEW run's total extraction allowance across batches (max 2000); "
-        "defaults to --max-calls. The shared USD20 ceiling still applies.",
+        "defaults to --max-calls. The run's ledger ceiling still applies.",
     )
     parser.add_argument(
         "--claim-pages",
@@ -560,6 +771,13 @@ def main():
     parser.add_argument("--model", choices=["solar-pro3", "solar-pro4"], default="solar-pro3")
     parser.add_argument("--verify-paragraphs", action="store_true")
     parser.add_argument("--native-quote-typography", action="store_true")
+    parser.add_argument(
+        "--native-windows-ocr",
+        action="store_true",
+        help="NEW runs on Windows: corroborate native paragraphs with the pinned Korean "
+        "Windows.Media.Ocr engine (macOS Vision is unavailable off macOS); requires "
+        "--verify-paragraphs, excludes --native-quote-typography/--raster-ocr",
+    )
     table_checks = parser.add_mutually_exclusive_group()
     table_checks.add_argument("--verify-tables", action="store_true")
     table_checks.add_argument("--verify-merged-tables", action="store_true")
@@ -641,6 +859,22 @@ def main():
         "recorded under the delegated source authority, not human sign-off.",
     )
     parser.add_argument("--raster-ocr", action="store_true")
+    parser.add_argument(
+        "--native-upstage-ocr",
+        action="store_true",
+        help="NEW runs: corroborate native paragraphs whose rendered reader is unavailable "
+        "(UnsupportedPlatform) with Upstage Document Parse crops on the shared ledger; "
+        "requires --verify-paragraphs, excludes --raster-ocr, --native-quote-typography "
+        "and --native-windows-ocr",
+    )
+    parser.add_argument(
+        "--native-widget-visibility",
+        action="store_true",
+        help="NEW runs: opt into conservative per-paragraph static navigation widget "
+        "visibility checks; requires --native-upstage-ocr and preserves old receipts.",
+    )
+    parser.add_argument("--upstage-ocr-max-pages", type=int, default=10)
+    parser.add_argument("--upstage-ocr-max-calls", type=int, default=1)
     parser.add_argument("--raster-max-pages", type=int, default=4)
     parser.add_argument("--raster-max-calls", type=int, default=1)
     parser.add_argument("--invoke", action="store_true")
@@ -710,6 +944,13 @@ def main():
         help="Opt-in: use refreshed 2026-09-25 capacity reservation policy revision "
         "(expires 2026-10-02).",
     )
+    parser.add_argument(
+        "--tagging-model",
+        choices=["solar-pro4", "solar-pro3"],
+        default=None,
+        help="NEW run only (pinned on --resume): one model for every live tagging role "
+        "(preliminary/tagging/relation). Default solar-pro4. --model controls extraction only.",
+    )
 
     parser.add_argument(
         "--extraction-source-ids",
@@ -753,13 +994,25 @@ def main():
         "--serve-worker",
         action="store_true",
         help="Explicit paid consent to drive NEW web-queued runs in the same process "
-        "(parse/extract/tag via the shared USD20 ledger). Distinct from read-only "
+        "(parse/extract/tag via the run's shared ledger). Distinct from read-only "
         "--resume; requires --serve. Re-serving stored results alone never needs it.",
+    )
+    parser.add_argument(
+        "--serve-bootstrap",
+        action="store_true",
+        help="Explicit opt-in: serve the upload/new-analysis pages for a seed run that "
+        "never ran (queued or cancelled, no completed stage). Ordinary --serve still "
+        "requires stored claims to read back HTTP 200. Cannot be combined with --invoke; "
+        "with --serve-worker the seed must already be cancelled.",
     )
     parser.add_argument("--port", type=int, default=8766)
     args = parser.parse_args()
     if args.serve_worker and not args.serve:
         parser.error("--serve-worker requires --serve")
+    if args.serve_bootstrap and not args.serve:
+        parser.error("--serve-bootstrap requires --serve")
+    if args.serve_bootstrap and args.invoke:
+        parser.error("--serve-bootstrap never invokes models; omit --invoke")
     if args.serve:
         if not 1 <= args.port <= 65535:
             parser.error("--port must be between 1 and 65535")
@@ -770,6 +1023,7 @@ def main():
                 parser.error("Port is in use; use the existing review URL or another --port")
     try:
         parser_output_limit(args.parser_max_output_bytes)
+        parser_resource_limits(args.parser_timeout_seconds, args.parser_memory_bytes)
     except ValueError as exc:
         parser.error(str(exc))
     resume_state = args.state.resolve()
@@ -874,6 +1128,12 @@ def main():
         parser.error("--position-context-order requires --extraction-context")
     if args.position_context_order and args.live_tagging and not args.preliminary_table_role:
         parser.error("--position-context-order with live tagging requires --preliminary-table-role")
+    if getattr(args, "tagging_model", None) is None:
+        args.tagging_model = "solar-pro4"
+    if args.tagging_model == "solar-pro3" and not args.live_tagging:
+        parser.error("--tagging-model solar-pro3 requires --live-tagging")
+    if args.tagging_model == "solar-pro3" and getattr(args, "capacity_refresh", False):
+        parser.error("--capacity-policy-refresh is a Pro 4 policy; not valid with solar-pro3")
     if args.position_context_order and (args.preliminary_goal_role or args.preliminary_actor_role):
         parser.error("--position-context-order requires only preliminary table role")
     if args.claim_span_render_resolution and not args.verify_claim_spans:
@@ -897,9 +1157,51 @@ def main():
         parser.error("--raster-ocr requires --verify-paragraphs")
     if args.native_quote_typography and (not args.verify_paragraphs or args.raster_ocr):
         parser.error("--native-quote-typography requires --verify-paragraphs without --raster-ocr")
+    if getattr(args, "native_windows_ocr", False) and (
+        not args.verify_paragraphs or args.raster_ocr or args.native_quote_typography
+    ):
+        parser.error(
+            "--native-windows-ocr requires --verify-paragraphs without --raster-ocr "
+            "or --native-quote-typography"
+        )
+    if getattr(args, "native_windows_ocr", False) and sys.platform != "win32":
+        parser.error("--native-windows-ocr is only available on Windows")
+    if (
+        args.verify_paragraphs
+        and sys.platform == "win32"
+        and not getattr(args, "native_windows_ocr", False)
+        and not getattr(args, "native_upstage_ocr", False)
+    ):
+        print(
+            "note: --verify-paragraphs on Windows leaves rendered text unresolved "
+            "(macOS Vision only); choose --native-windows-ocr or --native-upstage-ocr "
+            "for a NEW run",
+            file=sys.stderr,
+        )
+    if getattr(args, "native_upstage_ocr", False) and (
+        not args.verify_paragraphs
+        or args.raster_ocr
+        or args.native_quote_typography
+        or getattr(args, "native_windows_ocr", False)
+    ):
+        parser.error(
+            "--native-upstage-ocr requires --verify-paragraphs without --raster-ocr, "
+            "--native-quote-typography or --native-windows-ocr"
+        )
+    if args.native_widget_visibility and not args.native_upstage_ocr:
+        parser.error("--native-widget-visibility requires --native-upstage-ocr")
     raster = (
         raster_settings(max_pages=args.raster_max_pages, max_calls=args.raster_max_calls)
         if args.raster_ocr
+        else {}
+    )
+    upstage_ocr = (
+        upstage_ocr_settings(
+            max_pages=args.upstage_ocr_max_pages,
+            max_calls=args.upstage_ocr_max_calls,
+            widget_visibility=args.native_widget_visibility,
+        )
+        if getattr(args, "native_upstage_ocr", False)
         else {}
     )
     pages = sorted(set(int(p) for p in args.pages.split(",")))
@@ -923,6 +1225,28 @@ def main():
         parser.error(f"Cannot read --pdf: {exc}")
     if source_size > limit:
         parser.error(f"--pdf exceeds the supported upload limit of {limit} bytes (100 MiB)")
+    # Resolve the one ledger for this process before any state is created.
+    budget_ledger: Path | None = None
+    session_authorization: dict | None = None
+    if resume_manifest.exists():
+        saved_ledger = json.loads(resume_manifest.read_text()).get("budget_ledger")
+        if args.budget_ledger is not None and (
+            saved_ledger is None or Path(saved_ledger) != args.budget_ledger.resolve()
+        ):
+            parser.error("--budget-ledger differs from the ledger frozen in this run")
+        budget_ledger = None if saved_ledger is None else Path(saved_ledger)
+    elif args.budget_ledger is not None:
+        try:
+            session_authorization = session_ledger_authorization(args.budget_ledger)
+        except ValueError as exc:
+            parser.error(str(exc))
+        if args.invoke and session_authorization["expired_now"]:
+            parser.error("--budget-ledger session grant has expired; no new paid run")
+        budget_ledger = Path(session_authorization["ledger"])
+    if budget_ledger is None:
+        os.environ.pop("LOCAL_UPSTAGE_LEDGER_PATH", None)
+    else:
+        os.environ["LOCAL_UPSTAGE_LEDGER_PATH"] = str(budget_ledger)
     state = args.state.resolve()
     state.mkdir(parents=True, exist_ok=True, mode=0o700)
     manifest_path = state / "pilot.json"
@@ -946,8 +1270,8 @@ def main():
 
         config = ParserProfile(
             str(uuid4()),
-            java_executable="/opt/homebrew/opt/openjdk@21/bin/java",
-            timeout_seconds=120,
+            java_executable=args.java_path or DEFAULT_JAVA,
+            **parser_resource_limits(args.parser_timeout_seconds, args.parser_memory_bytes),
             max_output_bytes=parser_output_limit(args.parser_max_output_bytes),
             table_source_policy_sha256=(
                 table_policy()
@@ -1010,6 +1334,7 @@ def main():
         if args.extraction_content_bounds:
             settings["extraction_content_bounds"] = True
         settings.update(raster)
+        settings.update(upstage_ocr)
         if args.verify_claim_spans:
             settings["claim_source_policy"] = claim_source_policy_for(args)
         if args.live_tagging:
@@ -1026,6 +1351,7 @@ def main():
                     compact_element_wire=args.compact_element_wire,
                     position_context_order=args.position_context_order,
                     capacity_refresh=getattr(args, "capacity_refresh", False),
+                    tagging_model=args.tagging_model,
                 )
             )
             bound = settings["input_reservation_policy"]["reservation_input_tokens"]
@@ -1166,6 +1492,32 @@ def main():
                     ),
                 )
             )
+        if upstage_ocr:
+            from proofops.domain.provenance import canonical_hash
+
+            # Same image-egress authorization shape as raster, pinned to the new policy.
+            profiles[-1][2]["allow_raster_upload"] = True
+            profiles.append(
+                (
+                    "runtime",
+                    upstage_ocr["upstage_ocr_runtime_binding_id"],
+                    dict(
+                        common,
+                        runtime_binding_id=upstage_ocr["upstage_ocr_runtime_binding_id"],
+                        schema="local_upstage_raster_binding_v1",
+                        role="vision",
+                        model_id="document-parse-260128",
+                        endpoint="https://api.upstage.ai/v1/document-digitization",
+                        budget_limit_usd="20.00",
+                        mode="standard",
+                        max_pages=args.upstage_ocr_max_pages,
+                        max_calls=args.upstage_ocr_max_calls,
+                        accepts_images=True,
+                        image_input_verified=True,
+                        raster_policy_sha256=canonical_hash(upstage_ocr["upstage_ocr_policy"]),
+                    ),
+                )
+            )
         if args.live_tagging:
             from proofops.domain.provenance import canonical_hash
 
@@ -1183,7 +1535,8 @@ def main():
                             common,
                             runtime_binding_id=identifier,
                             role="tagger",
-                            model_id="solar-pro4",
+                            # The pinned settings name the run's one tagging model.
+                            model_id=pinned["model_id"],
                             endpoint="https://api.upstage.ai/v1/chat/completions",
                             budget_limit_usd="20.00",
                             schema="local_upstage_tagger_binding_v1",
@@ -1298,7 +1651,11 @@ def main():
             extraction_batch_calls=args.max_calls,
             extraction_total_calls=args.extraction_total_calls,
             rulepack_approval="ai_delegated_review" if args.ai_project_review else None,
-            authorization="user request 2026-09-18: actual model integration; cumulative USD20",
+            authorization=(
+                "user request 2026-09-18: actual model integration; cumulative USD20"
+                if session_authorization is None
+                else {k: v for k, v in session_authorization.items() if k != "expired_now"}
+            ),
             production_ready=False,
             verify_paragraphs=args.verify_paragraphs,
             verify_tables=args.verify_tables,
@@ -1309,8 +1666,19 @@ def main():
             live_tagging=args.live_tagging,
             tagging_max_calls=args.tagging_max_calls if args.live_tagging else None,
         )
+        if budget_ledger is not None:
+            manifest["budget_ledger"] = str(budget_ledger)
         if args.raster_ocr:
             manifest.update(raster_ocr=True, raster_policy=raster["raster_policy"])
+        if upstage_ocr:
+            manifest.update(
+                native_upstage_ocr=True, upstage_ocr_policy=upstage_ocr["upstage_ocr_policy"]
+            )
+        if args.native_widget_visibility:
+            manifest.update(
+                native_widget_visibility=True,
+                upstage_ocr_widget_visibility=upstage_ocr["upstage_ocr_widget_visibility"],
+            )
         if args.live_relations:
             manifest["live_relations"] = True
         if args.preliminary_context:
@@ -1341,6 +1709,8 @@ def main():
             manifest["claim_span_typography"] = True
         if args.native_quote_typography:
             manifest["native_quote_typography"] = True
+        if getattr(args, "native_windows_ocr", False):
+            manifest["native_windows_ocr"] = True
         if args.extraction_year_notation:
             manifest["extraction_year_notation"] = True
         if args.extraction_context:
@@ -1357,10 +1727,21 @@ def main():
             manifest["extraction_content_bounds"] = True
         if args.capacity_refresh:
             manifest["capacity_refresh"] = True
+        if args.tagging_model != "solar-pro4":
+            # Absent key == legacy Pro 4 tagging, so earlier manifests stay unchanged.
+            manifest["tagging_model"] = args.tagging_model
+        for name in ("parser_timeout_seconds", "parser_memory_bytes"):
+            if getattr(args, name) is not None:
+                manifest[name] = getattr(args, name)
         with manifest_path.open("x") as stream:
             json.dump(manifest, stream, ensure_ascii=False, indent=2)
     else:
         manifest = json.loads(manifest_path.read_text())
+        if args.java_path is not None:
+            parser.error("--java-path applies to a NEW run only; the parser profile is frozen")
+        for name in ("parser_timeout_seconds", "parser_memory_bytes"):
+            if getattr(args, name) is not None and getattr(args, name) != manifest.get(name):
+                parser.error(f"{name} differs from the frozen parser profile")
         if manifest.get("capacity_refresh", False) != getattr(args, "capacity_refresh", False):
             raise ValueError("pilot capacity refresh policy changed; create a new state directory")
         if args.extraction_total_calls is not None and (
@@ -1371,6 +1752,14 @@ def main():
             args.raster_ocr and manifest.get("raster_policy") != raster["raster_policy"]
         ):
             raise ValueError("pilot raster policy changed; create a new state directory")
+        if manifest.get("native_upstage_ocr", False) != bool(upstage_ocr) or (
+            upstage_ocr and manifest.get("upstage_ocr_policy") != upstage_ocr["upstage_ocr_policy"]
+        ):
+            raise ValueError("pilot Upstage OCR policy changed; create a new state directory")
+        if manifest.get("upstage_ocr_widget_visibility") != upstage_ocr.get(
+            "upstage_ocr_widget_visibility"
+        ):
+            raise ValueError("pilot widget visibility policy changed; create a new state directory")
         if manifest.get("live_relations", False) != args.live_relations:
             raise ValueError("pilot relation policy changed; create a new state directory")
         if manifest.get("preliminary_context", False) != args.preliminary_context:
@@ -1410,6 +1799,8 @@ def main():
             raise ValueError("pilot selected cell policy changed; create a new state directory")
         if manifest.get("native_quote_typography", False) != args.native_quote_typography:
             raise ValueError("pilot quote typography policy changed; create a new state directory")
+        if manifest.get("native_windows_ocr", False) != getattr(args, "native_windows_ocr", False):
+            raise ValueError("pilot Windows OCR policy changed; create a new state directory")
         if manifest.get("extraction_year_notation", False) != args.extraction_year_notation:
             raise ValueError(
                 "pilot extraction year-notation policy changed; create a new state directory"
@@ -1446,6 +1837,8 @@ def main():
             raise ValueError("pilot verification policy changed; create a new state directory")
         if manifest.get("model", "solar-pro3") != args.model:
             raise ValueError("pilot model changed; create a new state directory")
+        if manifest.get("tagging_model", "solar-pro4") != args.tagging_model:
+            raise ValueError("pilot tagging model changed; create a new state directory")
     run_id = manifest["run_id"]
     pipeline_outcome = dict(stage=None, status="not_run", exit_code=0)
     if args.invoke:
@@ -1507,11 +1900,16 @@ def main():
         flush=True,
     )
     if args.serve:
-        if response.status_code != 200:
-            raise SystemExit(
-                f"Cannot serve this run: claims HTTP {response.status_code}; "
-                "inspect the saved inspection JSON"
-            )
+        refusal = serve_refusal(
+            response.status_code,
+            c.runs.store.jobs.get_run(tenant, run_id),
+            bootstrap=args.serve_bootstrap,
+            worker=args.serve_worker,
+            pipeline_status=pipeline_outcome["status"],
+        )
+        if refusal is not None:
+            raise SystemExit(refusal)
+        bootstrap_landing = "/documents/new" if response.status_code != 200 else None
         import uvicorn
         from fastapi import HTTPException
         from fastapi.responses import FileResponse
@@ -1521,7 +1919,9 @@ def main():
 
         @app.get("/__local/" + login_token, include_in_schema=False)
         def login():
-            return local_login_response(c.auth_store.sessions, user, tenant, run_id)
+            return local_login_response(
+                c.auth_store.sessions, user, tenant, run_id, bootstrap_landing
+            )
 
         app.mount("/assets", StaticFiles(directory=ROOT / "apps/web/dist/assets"))
 
@@ -1532,6 +1932,7 @@ def main():
         run_meta = c.runs.store.jobs.get_run(tenant, run_id)
         candidate_rule_pack_id = run_meta.get("rule_pack_id")
         served_pages = list(manifest.get("selected_pages", []))
+        served_claim_pages = manifest.get("claim_pages")
 
         @app.get("/local/submission", include_in_schema=False)
         def local_submission(request: Request):
@@ -1549,10 +1950,12 @@ def main():
                     status_code=404,
                 )
             return JSONResponse(
-                dict(
+                local_submission_body(
                     worker_enabled=bool(worker_thread and worker_thread.is_alive()),
                     candidate_rule_pack_id=candidate_rule_pack_id,
                     selected_pages=served_pages,
+                    claim_pages=served_claim_pages,
+                    bootstrap=bootstrap_landing is not None,
                 ),
                 headers={"Cache-Control": "no-store"},
             )
@@ -1565,7 +1968,7 @@ def main():
 
         worker_thread = worker_stop = None
         if args.serve_worker:
-            # Paid consent: reuse the same Upstage key + shared USD20 ledger the
+            # Paid consent: reuse the same Upstage key + the run's ledger the
             # one-shot --invoke path uses; the loop mints no new allowance.
             key_lines = args.key_file.read_text().splitlines()
             os.environ["UPSTAGE_API_KEY"] = next(
@@ -1583,6 +1986,8 @@ def main():
                     verify_paragraphs=args.verify_paragraphs and stage == "parse",
                     native_typography_tolerance=args.native_quote_typography and stage == "parse",
                     raster_ocr=args.raster_ocr and stage == "parse",
+                    **_windows_ocr_option(args, stage),
+                    **_upstage_ocr_option(args, stage),
                 )
 
             worker_thread, worker_stop = start_background(build_stage, c.runs, tenant)

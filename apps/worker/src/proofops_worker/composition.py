@@ -23,6 +23,21 @@ from proofops_worker.local_runner import LocalParserRunner
 from proofops_worker.tag_runner import LocalTagRunner
 
 
+def budget_ledger_path() -> Path:
+    """The one ledger fencing every paid stage of this process.
+
+    ``LOCAL_UPSTAGE_LEDGER_PATH`` (set by the local pilot for an explicit session
+    grant) selects an exact absolute ledger with no fallback; unset keeps the
+    legacy checkout ledger. Existence is still checked by each paid path.
+    """
+    explicit = os.environ.get("LOCAL_UPSTAGE_LEDGER_PATH")
+    if explicit is None:
+        return Path(__file__).resolve().parents[4] / ".local/upstage/budget.sqlite3"
+    if not explicit or not Path(explicit).is_absolute():
+        raise ValueError("SHARED_BUDGET_LEDGER_REQUIRED")
+    return Path(explicit)
+
+
 def build_composition(
     *,
     stage: str = "parse",
@@ -30,11 +45,35 @@ def build_composition(
     verify_paragraphs: bool = False,
     native_typography_tolerance: bool = False,
     raster_ocr: bool = False,
+    native_windows_ocr: bool = False,
+    native_upstage_ocr: bool = False,
 ) -> LocalParserRunner | LocalExtractRunner | LocalTagRunner:
     if type(native_typography_tolerance) is not bool or (
         native_typography_tolerance and (not verify_paragraphs or stage != "parse" or raster_ocr)
     ):
         raise ValueError("NATIVE_TYPOGRAPHY_REQUIRE_NATIVE_PARSE_WITHOUT_RASTER")
+    if type(native_windows_ocr) is not bool or (
+        native_windows_ocr
+        and (
+            not verify_paragraphs
+            or stage != "parse"
+            or raster_ocr
+            or native_typography_tolerance
+            or sys.platform != "win32"
+        )
+    ):
+        raise ValueError("NATIVE_WINDOWS_OCR_REQUIRE_WINDOWS_NATIVE_PARSE_ONLY")
+    if type(native_upstage_ocr) is not bool or (
+        native_upstage_ocr
+        and (
+            not verify_paragraphs
+            or stage != "parse"
+            or raster_ocr
+            or native_typography_tolerance
+            or native_windows_ocr
+        )
+    ):
+        raise ValueError("NATIVE_UPSTAGE_OCR_REQUIRE_NATIVE_PARSE_ONLY")
     if type(raster_ocr) is not bool or (
         raster_ocr
         and (type(verify_paragraphs) is not bool or not verify_paragraphs or stage != "parse")
@@ -58,8 +97,8 @@ def build_composition(
         "upstage_probe",
     }:
         raise ValueError("EXPLICIT_LOCAL_SYNTHETIC_EXTRACTION_REQUIRED")
-    note_ledger = Path(__file__).resolve().parents[4] / ".local/upstage/budget.sqlite3"
-    if raster_ocr and not note_ledger.is_file():
+    note_ledger = budget_ledger_path()
+    if (raster_ocr or native_upstage_ocr) and not note_ledger.is_file():
         raise ValueError("SHARED_BUDGET_LEDGER_REQUIRED")
     build_proofops_composition(
         app_env=os.environ.get("APP_ENV", "local"),
@@ -88,6 +127,12 @@ def build_composition(
         from proofops.adapters.local.upstage_parse import UpstageParseProbe
 
         raster_probe = UpstageParseProbe(os.environ.get("UPSTAGE_API_KEY", ""), note_ledger)
+    upstage_ocr_probe = None
+    if native_upstage_ocr:
+        from proofops.adapters.local.upstage_parse import UpstageParseProbe
+
+        # Same shared ledger and unchanged transport as raster/note calls.
+        upstage_ocr_probe = UpstageParseProbe(os.environ.get("UPSTAGE_API_KEY", ""), note_ledger)
     runner = LocalParserRunner(
         LocalSQLiteRunStore(database),
         uploads,
@@ -95,10 +140,16 @@ def build_composition(
         profile=profile,
         verify_paragraphs=verify_paragraphs,
         native_typography_tolerance=native_typography_tolerance,
+        native_windows_ocr=native_windows_ocr,
         note_client=note_client,
         note_ledger=note_ledger,
         raster_probe=raster_probe,
         raster_ledger=note_ledger if raster_ocr else None,
+        **(
+            {"upstage_ocr_probe": upstage_ocr_probe, "upstage_ocr_ledger": note_ledger}
+            if native_upstage_ocr
+            else {}
+        ),
         telemetry=Telemetry(
             service="worker", env="local", stream=sys.stdout, hash_key=secrets.token_bytes(32)
         ),
@@ -112,14 +163,21 @@ def build_composition(
             from proofops.adapters.local.upstage import MODEL_PRO4, UpstageProbe
 
             from proofops_worker.live_tagging import LiveTaggingRuntime
+            from proofops_worker.tagging_model import select_tagging_probe
 
             if not note_ledger.is_file():
                 raise ValueError("SHARED_BUDGET_LEDGER_REQUIRED")
-            probe = UpstageProbe(
-                os.environ.get("UPSTAGE_API_KEY", ""), note_ledger, model=MODEL_PRO4
-            )
+            api_key = os.environ.get("UPSTAGE_API_KEY", "")
+            # Eager Pro 4 probe as before; the frozen snapshot selects the model, and a
+            # Pro 3 run gets its own probe on the same shared ledger. No fallback.
+            probes = {MODEL_PRO4: UpstageProbe(api_key, note_ledger, model=MODEL_PRO4)}
 
             def live_factory(owner, snapshot, graph, lease, usage):
+                probe = select_tagging_probe(
+                    snapshot,
+                    probes,
+                    lambda model: UpstageProbe(api_key, note_ledger, model=model),
+                )
                 return LiveTaggingRuntime(
                     owner,
                     snapshot,
@@ -154,7 +212,7 @@ def build_composition(
             )
 
             # The existing user-authorized ledger must exist; never mint another allowance.
-            ledger = Path(__file__).resolve().parents[4] / ".local/upstage/budget.sqlite3"
+            ledger = note_ledger
             if not ledger.is_file():
                 raise ValueError("SHARED_BUDGET_LEDGER_REQUIRED")
             settings_path = os.environ.get("LOCAL_RUN_SETTINGS_PATH")

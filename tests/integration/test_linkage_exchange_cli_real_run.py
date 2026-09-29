@@ -596,3 +596,136 @@ def test_real_naver_rereviewed_head_is_read_at_revision_three(tmp_path, capsys):
         assert cli._cmd_build_packet(args) == 1
         reasons[item] = json.loads(capsys.readouterr().out)["reason"]
     assert set(reasons.values()) == {"no_verified_trigger"}
+
+
+# ---------------------------------------------------------------------------
+# C1 caller-reviewed entity_set bridge, end to end through the CLI.
+#
+# A real accepted M2 review stores `org_boundary` as the evidence sentence, which
+# is not a typed entity_set. `--c1-entity-set-review` supplies the SCHEMA_GUIDE
+# "원문·승인 기록": entity IDs, each named by a literal label inside the verified
+# evidence quote, pinned to tenant/company/run/claim/version/tag revision. The
+# financial context, entity ID and review record are all SYNTHETIC; nothing here
+# claims a real boundary or a semantic C1 result.
+# ---------------------------------------------------------------------------
+
+
+def _c1_review_file(tmp_path, reviewed, name="review.json", **overrides):
+    claim = reviewed["claim"]
+    ref = claim.source_refs[0]
+    label = ref.quote.split()[0]
+    review = {
+        "synthetic": True,
+        "tenant_id": TENANT,
+        "company_id": reviewed["company_id"],
+        "run_id": reviewed["run_id"],
+        "claim_id": reviewed["claim_id"],
+        "document_version_id": claim.document_version_id,
+        "tag_revision": 2,
+        "fact_name": "org_boundary",
+        "fact_value": ref.quote,
+        "kind": "entity_set",
+        "entities": [
+            {"entity_id": "SYNTHETIC-ENTITY-1", "source_label": label, "source_id": ref.source_id}
+        ],
+        "source_bindings": [{"source_id": ref.source_id, "quote": ref.quote}],
+        "review_id": "synthetic-c1-review-1",
+        "reviewed_by": "synthetic-reviewer",
+        "reviewed_at": "2026-09-29",
+        "review_origin": "ai_delegated",
+    } | overrides
+    path = tmp_path / name
+    path.write_text(json.dumps(review, ensure_ascii=False), encoding="utf-8")
+    return str(path)
+
+
+def test_cli_c1_entity_set_review_builds_a_typed_packet_and_separate_receipt(
+    tmp_path, monkeypatch, capsys
+):
+    from proofops.domain.reconciliation.engine import canonical_sha256
+
+    from tests.integration.test_reviewed_tag_head_consumers import _track_changing_review
+
+    (tmp_path / "run").mkdir()
+    reviewed = _track_changing_review(tmp_path / "run", monkeypatch)
+    cli = _load_cli_module()
+    _use_fixture_parser(monkeypatch, reviewed["runner"])
+
+    def args(review, receipt=None):
+        namespace = _cli_args(
+            cli,
+            tenant_id=TENANT,
+            run_id=reviewed["run_id"],
+            claim_id=reviewed["claim_id"],
+            database_path=reviewed["service"].store.path,
+            item="C1",
+            financial_context=_synthetic_financial_context(tmp_path, reviewed["company_id"]),
+        )
+        namespace.c1_entity_set_review = review
+        namespace.c1_review_receipt_out = receipt
+        return namespace
+
+    # Without the review the sentence is still refused, with the remedy named.
+    assert cli._cmd_build_packet(args(None)) == 1
+    unreviewed = json.loads(capsys.readouterr().out)
+    assert unreviewed["reason"] == "invalid_reconciliation_packet"
+    assert "C1EntitySetReview" in unreviewed["detail"]
+
+    # Offline authoring path: the draft copies every pin from the trusted head;
+    # a delegated AI reviewer only adds the entity IDs, labels and its identity.
+    draft_path = tmp_path / "draft.json"
+    draft_args = argparse.Namespace(
+        tenant_id=TENANT,
+        run_id=reviewed["run_id"],
+        claim_id=reviewed["claim_id"],
+        database_path=reviewed["service"].store.path,
+        output=str(draft_path),
+        synthetic=True,
+    )
+    assert cli._cmd_draft_c1_review(draft_args) == 0
+    draft = json.loads(draft_path.read_text(encoding="utf-8"))
+    expected = json.loads(Path(_c1_review_file(tmp_path, reviewed)).read_text(encoding="utf-8"))
+    pinned = ("tenant_id", "company_id", "run_id", "claim_id", "document_version_id")
+    pinned += ("tag_revision", "fact_name", "fact_value", "source_bindings")
+    assert {k: draft[k] for k in pinned} == {k: expected[k] for k in pinned}
+    assert draft["entities"] == [] and draft["review_origin"] is None
+    assert cli._cmd_build_packet(args(str(draft_path))) == 1  # an unfilled draft never builds
+    assert json.loads(capsys.readouterr().out)["reason"] == "invalid_c1_entity_set_review"
+    draft |= {
+        k: expected[k]
+        for k in ("entities", "review_id", "reviewed_by", "reviewed_at", "review_origin")
+    }
+    filled = tmp_path / "filled.json"
+    filled.write_text(json.dumps(draft, ensure_ascii=False), encoding="utf-8")
+
+    receipt_path = tmp_path / "receipt.json"
+    assert cli._cmd_build_packet(args(str(filled), str(receipt_path))) == 0
+    packet = json.loads(capsys.readouterr().out)
+    assert packet["synthetic"] is True
+    assert packet["sustainability"]["kind"] == "entity_set"
+    assert packet["sustainability"]["normalized"] == '["SYNTHETIC-ENTITY-1"]'
+    assert packet["sustainability"]["raw"] == reviewed["claim"].source_refs[0].quote
+    assert packet["claim"]["trigger_elements"] == ["organizational_boundary"]
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert receipt["packet_sha256"] == canonical_sha256(packet)
+    assert receipt["review"]["tag_revision"] == 2
+    assert receipt["review_kind"] == "ai_delegated_entity_set_review_not_independent_gold"
+
+    # The receipt path is never overwritten.
+    assert cli._cmd_build_packet(args(_c1_review_file(tmp_path, reviewed), str(receipt_path))) == 2
+    capsys.readouterr()
+
+    # A review of the superseded revision, or pinned to another tenant, blocks.
+    for name, overrides, reason in (
+        ("stale.json", {"tag_revision": 1}, "review_revision_stale"),
+        (
+            "tenant.json",
+            {"tenant_id": "99999999-9999-4999-8999-999999999999"},
+            "review_tenant_mismatch",
+        ),
+        ("run.json", {"run_id": "another-run"}, "review_run_mismatch"),
+    ):
+        assert (
+            cli._cmd_build_packet(args(_c1_review_file(tmp_path, reviewed, name, **overrides))) == 1
+        )
+        assert json.loads(capsys.readouterr().out)["reason"] == reason

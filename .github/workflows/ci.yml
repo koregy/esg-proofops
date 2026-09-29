@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, "feature/*"]
+    branches: [main, "feature/*", "submission/**"]
   pull_request:
     branches: [main]
 
@@ -37,6 +37,7 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run mypy packages/proofops apps/api/src apps/worker/src apps/agent/src evaluation tests/load infra/cdk/staging_gate.py
       - run: uv run pytest tests/unit tests/contracts tests/e2e/test_staging_gate.py -q
+      - run: uv run pytest tests/test_kia_submission_case.py -q
 
   reconciliation:
     env:
@@ -73,6 +74,12 @@ jobs:
         run: uv run --no-sync python scripts/verify_reconciliation.py --output .local/reconciliation-ci --timeout-seconds 600
       - name: Real Java parser and local tagging regression
         run: uv run --no-sync python -m pytest tests/acceptance/test_parsing.py tests/integration/test_local_tag_runner.py tests/integration/test_native_paragraph_worker.py -q
+      - name: Contained source previews and parser runtime guards
+        run: uv run --no-sync python -m pytest tests/integration/test_source_api.py tests/integration/test_source_preview_isolation.py tests/unit/test_opendataloader_runtime_guards.py -q
+      - name: Cross-platform paid-dispatch exclusion (fake provider only)
+        run: uv run --no-sync python -m pytest tests/unit/test_operation_lock.py tests/unit/test_tagging_platform.py tests/integration/test_upstage_tagging.py -q
+      - name: Native API OCR and pinned Solar Pro 3 tagging (fake provider only)
+        run: uv run --no-sync python -m pytest tests/integration/test_native_upstage_ocr_worker.py tests/integration/test_native_widget_visibility.py tests/integration/test_solar_pro3_tagging.py tests/integration/test_solar_pro3_live_tagging_worker.py tests/unit/test_native_upstage_ocr.py tests/unit/test_solar_pro3_pilot_flag.py -q
       - name: Preserve verification evidence, including failures
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -98,6 +105,18 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter proofops-web typecheck
       - run: pnpm --filter proofops-web build
+      - name: Exercise review, export retry, and verified report preview
+        run: node apps/web/test/submission-review-flow.mjs --dist apps/web/dist --out .local/review-flow-ci
+      - name: Exercise upload persistence and explicit source-pinned scope proposals
+        run: node apps/web/test/submission-scope-proposal.mjs
+      - name: Build public submission demo
+        run: pnpm --filter proofops-web build
+        env:
+          VITE_DEMO_STATIC: "true"
+      - name: Exercise public demo and read-only export in Chrome
+        run: node apps/web/test/submission-static-demo.mjs
+      - name: Exercise rule guide, stored replay, local simulation, and audit report
+        run: node apps/web/test/submission-extended-demo.mjs
 
   architecture:
     runs-on: ubuntu-24.04

@@ -45,6 +45,25 @@ def main() -> None:
         help="Use versioned quote typography comparison; requires --verify-paragraphs",
     )
     arguments.add_argument(
+        "--native-windows-ocr",
+        action="store_true",
+        help=(
+            "NEW runs on Windows only: corroborate native paragraphs with the pinned Korean "
+            "Windows.Media.Ocr engine instead of macOS Vision; requires --verify-paragraphs, "
+            "not combinable with --native-quote-typography or --raster-ocr"
+        ),
+    )
+    arguments.add_argument(
+        "--native-upstage-ocr",
+        action="store_true",
+        help=(
+            "NEW runs whose snapshot pins native_upstage_ocr_policy_v1: corroborate "
+            "native paragraphs that lack a rendered reader (UnsupportedPlatform) with "
+            "Upstage Document Parse on the shared ledger; requires --verify-paragraphs, "
+            "excludes --raster-ocr, --native-quote-typography and --native-windows-ocr"
+        ),
+    )
+    arguments.add_argument(
         "--raster-ocr",
         action="store_true",
         help=(
@@ -78,6 +97,9 @@ def main() -> None:
             verify_paragraphs=options.verify_paragraphs,
             native_typography_tolerance=options.native_quote_typography,
             raster_ocr=options.raster_ocr,
+            # Passed only when chosen, so every existing invocation is unchanged.
+            **({"native_windows_ocr": True} if options.native_windows_ocr else {}),
+            **({"native_upstage_ocr": True} if options.native_upstage_ocr else {}),
         )
         if artifacts:
             if not isinstance(runner, LocalParserRunner):

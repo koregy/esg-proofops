@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hmac
+import http.client
 import json
 import os
 import sys
@@ -49,12 +50,22 @@ MAX_CONTEXT = 2_000
 MAX_ESTIMATE_USD = 0.01
 INPUT_RATE = 0.15 / 1_000_000
 OUTPUT_RATE = 0.60 / 1_000_000
+# Vercel maxDuration is 55s; never start a paid call that cannot finish inside it.
+PROVIDER_TIMEOUT_S = 20
+TIME_BUDGET_S = 50
+CLASSIFY_MAX_TOKENS = 384
+TAG_MAX_TOKENS = 1024
+# Bad model output after a paid call becomes an explicit partial, never a silent retry.
+OUTPUT_FAILURES = frozenset(
+    {"UPSTAGE_RESPONSE_INVALID", "UPSTAGE_OUTPUT_TRUNCATED", "UPSTAGE_RESPONSE_TOO_LARGE"}
+)
+TAG_FAILURES = OUTPUT_FAILURES | {"UPSTAGE_UNAVAILABLE", "UPSTAGE_RATE_LIMITED"}
 PACK = RulePackSnapshot(**json.loads((ROOT / "api/rulepack.json").read_text(encoding="utf-8")))
 
 
 class LiveError(Exception):
-    def __init__(self, status: int, code: str):
-        self.status, self.code = status, code
+    def __init__(self, status: int, code: str, cost_usd: float | None = None):
+        self.status, self.code, self.cost_usd = status, code, cost_usd
 
 
 def _hash(text: str) -> str:
@@ -118,9 +129,14 @@ def _provider(system: str, user: dict, max_tokens: int) -> dict:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=20) as response:
+        with urllib.request.urlopen(request, timeout=PROVIDER_TIMEOUT_S) as response:
             raw = response.read(65_537)
-    except (urllib.error.URLError, TimeoutError) as exc:
+    except urllib.error.HTTPError as exc:
+        if exc.code == 429:
+            raise LiveError(503, "UPSTAGE_RATE_LIMITED") from None
+        raise LiveError(502, "UPSTAGE_UNAVAILABLE") from None
+    except (urllib.error.URLError, http.client.HTTPException, OSError) as exc:
+        # TimeoutError and connection resets are OSError subclasses.
         raise LiveError(502, "UPSTAGE_UNAVAILABLE") from exc
     if len(raw) > 65_536:
         raise LiveError(502, "UPSTAGE_RESPONSE_TOO_LARGE")
@@ -140,34 +156,126 @@ def _step(call_model, system: str, user: dict, max_tokens: int, spent_estimate: 
     if spent_estimate + estimate > MAX_ESTIMATE_USD:
         raise LiveError(400, "REQUEST_COST_CAP")
     started = monotonic()
-    data = call_model(system, user, max_tokens)
     try:
-        message = json.loads(data["choices"][0]["message"]["content"])
+        data = call_model(system, user, max_tokens)
+    except LiveError as exc:
+        # The provider may have billed a failed call; report the pre-call upper bound.
+        if exc.cost_usd is None:
+            exc.cost_usd = estimate
+        raise
+    try:
+        choice = data["choices"][0]
         usage = data["usage"]
         tokens = {"input": usage["prompt_tokens"], "output": usage["completion_tokens"]}
         if any(type(n) is not int or n < 0 for n in tokens.values()):
             raise ValueError
         if tokens["output"] > max_tokens:
             raise ValueError
-        if not isinstance(message, dict):
-            raise ValueError
     except (KeyError, IndexError, TypeError, ValueError) as exc:
-        raise LiveError(502, "UPSTAGE_RESPONSE_INVALID") from exc
+        raise LiveError(502, "UPSTAGE_RESPONSE_INVALID", estimate) from exc
     actual = (tokens["input"] * INPUT_RATE + tokens["output"] * OUTPUT_RATE) * 1.1
     if actual > MAX_ESTIMATE_USD:
         raise LiveError(502, "ACTUAL_COST_CAP_EXCEEDED")
+    try:
+        if choice.get("finish_reason") == "length":
+            raise LiveError(502, "UPSTAGE_OUTPUT_TRUNCATED", actual)
+        content = choice["message"]["content"].strip()
+        if content.startswith("```"):
+            content = content.removeprefix("```json").removeprefix("```").removesuffix("```")
+        message = json.loads(content)
+        if not isinstance(message, dict):
+            raise ValueError
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
+        raise LiveError(502, "UPSTAGE_RESPONSE_INVALID", actual) from exc
     return message, tokens, round((monotonic() - started) * 1000), estimate, actual
+
+
+def _unclassified(
+    steps: list, source: dict, cost: float, ms: int, failure: str | None = None
+) -> dict:
+    result = {
+        "status": "needs_review",
+        "notice": "원문 PDF 검증 없음 — 입력 텍스트 기준",
+        "draft": "사용자 최종 검토 전",
+        "steps": steps,
+        "source": source,
+        "replicas": 1,
+        "decision": None,
+        "cost_estimate_usd": round(cost, 6),
+        "duration_ms": ms,
+    }
+    if failure:
+        result["status"] = "partial"
+        result["partial"] = {"stage": "preliminary_classification", "reason": failure}
+        result["explanation"] = (
+            f"분류 응답을 확정하지 못해({failure}) 요소 태깅과 등급 계산을 하지 않았습니다. "
+            "자동 재시도는 하지 않습니다."
+        )
+    return result
+
+
+def _tagging_failed(
+    steps: list,
+    source: dict,
+    elements: list,
+    prompt_sha256: str,
+    failure: str,
+    tag_ms: int,
+    classify_ms: int,
+    cost: float,
+) -> dict:
+    # No candidate exists, so every element stays unknown; unknown never means absent.
+    return {
+        "status": "partial",
+        "draft": "사용자 최종 검토 전",
+        "notice": "원문 PDF 검증 없음 — 입력 텍스트 기준",
+        "replicas": 0,
+        "steps": [
+            *steps,
+            {
+                "name": "element_tagging",
+                "status": "failed",
+                "error": failure,
+                "elements": [
+                    {
+                        "name": name,
+                        "element_id": element_id,
+                        "candidate_state": None,
+                        "engine_state": "unknown",
+                        "quote": None,
+                        "page_label": None,
+                    }
+                    for name, element_id in elements
+                ],
+                "model": MODEL,
+                "prompt_sha256": prompt_sha256,
+                "duration_ms": tag_ms,
+                "tokens": None,
+            },
+            {"name": "python_rule_engine", "status": "not_run", "duration_ms": 0},
+        ],
+        "source": source,
+        "partial": {"stage": "element_tagging", "reason": failure},
+        "decision": None,
+        "explanation": (
+            f"요소 태깅 응답을 완성하지 못해({failure}) 모든 요소를 확인 전으로 두고 "
+            "등급을 계산하지 않았습니다. 자동 재시도는 하지 않습니다."
+        ),
+        "cost_estimate_usd": round(cost, 6),
+        "duration_ms": classify_ms + tag_ms,
+    }
 
 
 def run_claim(payload: dict, *, access_code: str, call_model=None) -> dict:
     required = os.environ.get("DEMO_ACCESS_CODE", "")
     if not required:
         raise LiveError(503, "DEMO_NOT_CONFIGURED")
-    if not hmac.compare_digest(access_code, required):
+    if not hmac.compare_digest(access_code.encode("utf-8"), required.encode("utf-8")):
         raise LiveError(403, "ACCESS_DENIED")
     if datetime.now(UTC) >= PRICE_RECHECK_AT:
         raise LiveError(503, "PRICE_RECHECK_REQUIRED")
     call_model = call_model or _provider
+    request_started = monotonic()
     if not isinstance(payload, dict) or set(payload) - {"claim", "context", "page_label"}:
         raise LiveError(400, "INVALID_INPUT")
     claim, context, page = (
@@ -194,51 +302,62 @@ def run_claim(payload: dict, *, access_code: str, call_model=None) -> dict:
         "sources": [{"source_index": 0, "text": claim}],
         "context_blocks": [{"text": context}] if context else [],
     }
-    preliminary, usage1, ms1, est1, actual1 = _step(
-        call_model, CLASSIFY_PROMPT, classify_user, 384, 0
-    )
-    track = preliminary.get("track")
-    category = preliminary.get("safe_harbor_category")
-    if track in ("unknown", "unclear", "null", "none"):
-        track = None
-    if category in ("null", "none", "unknown"):
-        category = None
-    if (
-        preliminary.get("claim_id") != claim_id
-        or track not in (*MAPPINGS, None)
-        or category
-        not in (None, "forward_looking", "emissions_estimate", "third_party_information")
-    ):
-        raise LiveError(502, "CLASSIFICATION_INVALID")
-    steps = [
-        {
-            "name": "preliminary_classification",
-            "track": track,
-            "safe_harbor_category": category,
-            "model": MODEL,
-            "prompt_sha256": _hash(CLASSIFY_PROMPT),
-            "duration_ms": ms1,
-            "tokens": usage1,
-        }
-    ]
     source = {
         "kind": "pasted_text",
         "sha256": _hash(claim),
         "page_label": page,
         "document_version_id": document_id,
     }
-    if track is None:
-        return {
-            "status": "needs_review",
-            "notice": "원문 PDF 검증 없음 — 입력 텍스트 기준",
-            "draft": "사용자 최종 검토 전",
-            "steps": steps,
-            "source": source,
-            "replicas": 1,
-            "decision": None,
-            "cost_estimate_usd": round(actual1, 6),
+    classify_step = {
+        "name": "preliminary_classification",
+        "track": None,
+        "safe_harbor_category": None,
+        "model": MODEL,
+        "prompt_sha256": _hash(CLASSIFY_PROMPT),
+    }
+    try:
+        preliminary, usage1, ms1, est1, actual1 = _step(
+            call_model, CLASSIFY_PROMPT, classify_user, CLASSIFY_MAX_TOKENS, 0
+        )
+    except LiveError as exc:
+        if exc.code not in OUTPUT_FAILURES:
+            raise
+        ms = round((monotonic() - request_started) * 1000)
+        failed = classify_step | {"status": "failed", "error": exc.code, "duration_ms": ms}
+        return _unclassified([failed], source, exc.cost_usd, ms, exc.code)
+    track = preliminary.get("track")
+    category = preliminary.get("safe_harbor_category")
+    # Case/whitespace variants only; unknown values still fail closed below.
+    if isinstance(track, str):
+        track = track.strip().lower()
+    if isinstance(category, str):
+        category = category.strip().lower()
+    if track in ("unknown", "unclear", "null", "none"):
+        track = None
+    if category in ("null", "none", "unknown"):
+        category = None
+    if isinstance(category, str):
+        category = category.replace("-", "_").replace(" ", "_")
+    if (
+        preliminary.get("claim_id") != claim_id
+        or track not in (*MAPPINGS, None)
+        or category
+        not in (None, "forward_looking", "emissions_estimate", "third_party_information")
+    ):
+        # An unbound or out-of-vocabulary classification is discarded, not trusted.
+        failed = classify_step | {
+            "status": "failed",
+            "error": "CLASSIFICATION_INVALID",
             "duration_ms": ms1,
+            "tokens": usage1,
         }
+        return _unclassified([failed], source, actual1, ms1, "CLASSIFICATION_INVALID")
+    steps = [
+        classify_step
+        | {"track": track, "safe_harbor_category": category, "duration_ms": ms1, "tokens": usage1}
+    ]
+    if track is None:
+        return _unclassified(steps, source, actual1, ms1)
     names = sorted({name for group in MAPPINGS[track].values() for name in group})
     definitions = {e["id"]: e for e in PACK.file_content("rubric/elements.yaml")["elements"]}
     local_allowed = {
@@ -260,7 +379,29 @@ def run_claim(payload: dict, *, access_code: str, call_model=None) -> dict:
         "track": track,
         "elements": names,
     }
-    raw_tags, usage2, ms2, _, actual2 = _step(call_model, tag_system, tag_user, 768, est1)
+    if monotonic() - request_started + PROVIDER_TIMEOUT_S > TIME_BUDGET_S:
+        raise LiveError(504, "TIME_BUDGET_EXCEEDED")
+    element_ids = {name: element for element, group in MAPPINGS[track].items() for name in group}
+    tag_started = monotonic()
+    try:
+        raw_tags, usage2, ms2, _, actual2 = _step(
+            call_model, tag_system, tag_user, TAG_MAX_TOKENS, est1
+        )
+    except LiveError as exc:
+        if exc.code not in TAG_FAILURES:
+            raise
+        if actual1 + exc.cost_usd > MAX_ESTIMATE_USD:
+            raise LiveError(502, "ACTUAL_COST_CAP_EXCEEDED") from None
+        return _tagging_failed(
+            steps,
+            source,
+            [(name, element_ids[name]) for name in names],
+            _hash(tag_system),
+            exc.code,
+            round((monotonic() - tag_started) * 1000),
+            ms1,
+            actual1 + exc.cost_usd,
+        )
     if actual1 + actual2 > MAX_ESTIMATE_USD:
         raise LiveError(502, "ACTUAL_COST_CAP_EXCEEDED")
     given = raw_tags.get("elements", [])
@@ -290,7 +431,6 @@ def run_claim(payload: dict, *, access_code: str, call_model=None) -> dict:
             else normalized
         )
     facts, visible = [], []
-    element_ids = {name: element for element, group in MAPPINGS[track].items() for name in group}
     for name in names:
         item = given_by_name.get(name, {"name": name, "state": "unknown", "quote": None})
         state, quote = item["state"], item["quote"]
@@ -412,8 +552,10 @@ class handler(BaseHTTPRequestHandler):
     def do_POST(self):
         try:
             length = int(self.headers.get("Content-Length", "0"))
-            if length < 1 or length > MAX_BODY:
+            if length > MAX_BODY:
                 raise LiveError(413, "BODY_TOO_LARGE")
+            if length < 1:
+                raise LiveError(400, "INVALID_INPUT")
             payload = json.loads(self.rfile.read(length))
             result = run_claim(payload, access_code=self.headers.get("X-Demo-Access-Code", ""))
             status = 200

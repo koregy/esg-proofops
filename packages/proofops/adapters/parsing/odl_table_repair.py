@@ -68,7 +68,13 @@ def locate_auxiliary_cells(
         if words is None:
             receipt["reason"] = "words_unavailable"
             continue
-        if source is not None and words and any("ink_bbox" not in w for w in words):
+        # A word the caller already tried and marked resolved=False stays
+        # unresolved; re-running the native reader per table cannot change it.
+        if (
+            source is not None
+            and words
+            and any("ink_bbox" not in w and w.get("resolved") is not False for w in words)
+        ):
             try:
                 from proofops.adapters.local.native_glyph_geometry import native_word_ink_geometry
 
@@ -87,6 +93,10 @@ def locate_auxiliary_cells(
                         w["resolved"] = False
             except Exception:
                 pass
+        for w in words:
+            # A resolved flag never stands in for real ink geometry.
+            if w.get("resolved") is True and "ink_bbox" not in w:
+                w["resolved"] = False
         cells = [
             cell
             for row in table.get("rows") or []

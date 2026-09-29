@@ -321,3 +321,96 @@ def test_explicit_period_exclusion_uses_same_exact_year_normalization():
     assert match_assurance(unknown, ctx).status == "undetermined"
     other = replace(statement, excluded_periods=("2024년도",))
     assert match_assurance(other, ctx).status == "covered"
+
+
+def test_normalize_interval_accepts_only_explicit_complete_calendar_intervals():
+    from datetime import date
+
+    from proofops.application.assurance import _normalize_interval
+
+    year = (date(2025, 1, 1), date(2025, 12, 31))
+    for spelling in (
+        "2025-01-01~2025-12-31",
+        "2025-01-01 - 2025-12-31",
+        "2025-01-01 to 2025-12-31",
+        "2025.01.01 ~ 2025.12.31",
+        "2025. 1. 1. ~ 2025. 12. 31.",
+        "2025년 1월 1일 ~ 2025년 12월 31일",
+        "2025년 1월 1일부터 2025년 12월 31일까지",
+        "2025년 1월 1일부터2025년 12월 31일까지",
+    ):
+        assert _normalize_interval(spelling) == year, spelling
+    for rejected in (
+        None,
+        "2025",
+        "2025년",
+        "2023~2024",
+        "FY2025",
+        "2025-01-01",
+        "2025-12-31~2025-01-01",
+        "2025-02-29~2025-12-31",
+        "2025-13-01~2025-12-31",
+        "2025년 1월 1일부터 12월 31일까지",
+        "2025년 1월 1일부터 2025년 12월 31일",
+        "2025년 1월 1일 ~ 2025년 12월 31일까지",
+        "보고기간 2025-01-01~2025-12-31",
+        "2025-01~2025-12",
+    ):
+        assert _normalize_interval(rejected) is None, rejected
+    assert _normalize_interval("2024-02-29~2024-12-31") == (date(2024, 2, 29), date(2024, 12, 31))
+
+
+def test_interval_period_match_is_immutable_and_rule_hash_is_versioned():
+    from proofops.application.assurance import MATCH_RULES, ClaimContext
+    from proofops.domain.provenance import canonical_hash
+
+    graph, by_native = _graph()
+    statement = replace(_statement(graph, by_native), reporting_period="2025.01.01 ~ 2025.12.31")
+    claim = ClaimContext(
+        TENANT, VERSION, CLAIM, "Scope 1", "2025-01-01~2025-12-31", ("예시법인",), ("서울 사업장",)
+    )
+    result = match_assurance(statement, claim)
+    assert (result.period_match, result.status) == ("yes", "covered")
+    assert statement.reporting_period == "2025.01.01 ~ 2025.12.31"
+    assert claim.reporting_period == "2025-01-01~2025-12-31"
+    assert result.rule_sha256 == canonical_hash(MATCH_RULES)
+    assert "period_interval" in MATCH_RULES
+    import pytest
+
+    with pytest.raises(AttributeError):
+        result.period_match = "no"  # type: ignore[misc]
+    # A year label is never equated with a calendar interval in either direction.
+    assert match_assurance(replace(statement, reporting_period="2025"), claim).period_match == (
+        "unknown"
+    )
+
+
+def test_forged_or_rejected_period_refs_never_reach_interval_comparison():
+    graph, by_native = _graph()
+    claim_block = by_native["claim"]
+    # Forged interval quote over the verified `2025년` offsets: never compared.
+    forged = replace(_subref(claim_block, "2025년"), quote="2025-01-01~2025-12-31")
+    inputs, _ = _inputs(graph, by_native, dims_override={"reporting_period": forged})
+    ctx = claim_context_from_review_inputs(
+        inputs, tenant_id=TENANT, document_version_id=VERSION, claim_id=CLAIM
+    )
+    assert ctx.reporting_period is None
+    # Statement side: a rejected period tag makes the opinion unresolved.
+    tagged_period = replace(by_native["period"].source_ref(), verification_state="rejected")
+    statement = _statement(graph, by_native)
+    tagged = dict(statement.tagged_fields)
+    tagged["reporting_period"] = (tagged_period,)
+    reextracted = extract_assurance(
+        graph,
+        tuple(r for items in tagged.values() for r in items),
+        BINDING,
+        tagged_fields=tagged,
+        tenant_id=TENANT,
+        statement_id=STATEMENT,
+        model_sha256="c" * 64,
+        prompt_sha256="d" * 64,
+        replicate_id=1,
+    )
+    assert "reporting_period" in reextracted.unresolved_fields
+    assert reextracted.reporting_period is None
+    assert match_assurance(reextracted, ctx).status == "undetermined"

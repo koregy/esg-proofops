@@ -1,0 +1,445 @@
+{
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": "1.2"
+    },
+    "claim_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "item": {
+      "enum": [
+        "C1",
+        "C2",
+        "C3",
+        "C4"
+      ]
+    },
+    "execution_state": {
+      "enum": [
+        "completed",
+        "blocked",
+        "not_run"
+      ]
+    },
+    "status": {
+      "enum": [
+        "matched",
+        "needs_explanation",
+        "not_applicable",
+        null
+      ]
+    },
+    "review_required": {
+      "type": "boolean"
+    },
+    "reason_codes": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "source_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "explanation_source_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "sustainability_value": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "financial_value": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "packet_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "policy_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "synthetic": {
+      "type": "boolean"
+    },
+    "engine_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "not_applicable_reason": {
+      "enum": [
+        "financial_filing_not_available_as_of",
+        "not_comparable",
+        "period_out_of_scope",
+        "c3_trigger_absent",
+        null
+      ]
+    },
+    "filing_lookup": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "outcome": {
+              "enum": [
+                "pinned",
+                "no_timely_filing"
+              ]
+            },
+            "cutoff": {
+              "type": "object",
+              "properties": {
+                "date": {
+                  "type": "string",
+                  "format": "date"
+                },
+                "granularity": {
+                  "const": "date_inclusive"
+                }
+              },
+              "required": [
+                "date",
+                "granularity"
+              ],
+              "additionalProperties": false
+            },
+            "collection_sha256": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "retrieved_from": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "Z$"
+                }
+              ]
+            },
+            "retrieved_until": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "Z$"
+                }
+              ]
+            },
+            "search_request": {
+              "type": "object",
+              "properties": {
+                "corp_code": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "bgn_de": {
+                  "type": "string",
+                  "pattern": "^[0-9]{8}$"
+                },
+                "end_de": {
+                  "type": "string",
+                  "pattern": "^[0-9]{8}$"
+                },
+                "last_reprt_at": {
+                  "const": "N"
+                },
+                "pblntf_ty": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "pblntf_detail_ty": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "page_count": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100
+                }
+              },
+              "required": [
+                "corp_code",
+                "bgn_de",
+                "end_de",
+                "last_reprt_at",
+                "pblntf_ty",
+                "pblntf_detail_ty",
+                "page_count"
+              ],
+              "additionalProperties": false
+            },
+            "page_sha256": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            },
+            "pinned_rcept_no": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^[0-9]{14}$"
+            },
+            "family_basis": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1
+            },
+            "filings": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "rcept_no": {
+                    "type": "string",
+                    "pattern": "^[0-9]{14}$"
+                  },
+                  "rcept_dt": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "report_nm": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "timely": {
+                    "type": "boolean"
+                  },
+                  "lineage": {
+                    "enum": [
+                      "family",
+                      "unrelated",
+                      null
+                    ]
+                  }
+                },
+                "required": [
+                  "rcept_no",
+                  "rcept_dt",
+                  "report_nm",
+                  "timely",
+                  "lineage"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "outcome",
+            "cutoff",
+            "collection_sha256",
+            "retrieved_from",
+            "retrieved_until",
+            "search_request",
+            "page_sha256",
+            "pinned_rcept_no",
+            "family_basis",
+            "filings"
+          ],
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "outcome": {
+                    "const": "pinned"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "pinned_rcept_no": {
+                    "type": "string"
+                  },
+                  "family_basis": {
+                    "type": "null"
+                  }
+                }
+              },
+              "else": {
+                "properties": {
+                  "pinned_rcept_no": {
+                    "type": "null"
+                  },
+                  "family_basis": {
+                    "type": "string"
+                  },
+                  "collection_sha256": {
+                    "type": "string"
+                  },
+                  "retrieved_from": {
+                    "type": "string"
+                  },
+                  "retrieved_until": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "required": [
+    "schema_version",
+    "claim_id",
+    "item",
+    "execution_state",
+    "status",
+    "review_required",
+    "reason_codes",
+    "source_ids",
+    "explanation_source_id",
+    "sustainability_value",
+    "financial_value",
+    "packet_sha256",
+    "policy_sha256",
+    "synthetic",
+    "engine_version",
+    "not_applicable_reason",
+    "filing_lookup"
+  ],
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "execution_state": {
+            "const": "completed"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "status": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "not_applicable"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "not_applicable_reason": {
+            "type": "string"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "not_applicable_reason": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "not_applicable_reason": {
+            "const": "financial_filing_not_available_as_of"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "execution_state": {
+            "const": "completed"
+          },
+          "filing_lookup": {
+            "type": "object",
+            "properties": {
+              "outcome": {
+                "const": "no_timely_filing"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "filing_lookup": {
+            "type": "object",
+            "properties": {
+              "outcome": {
+                "const": "no_timely_filing"
+              }
+            }
+          }
+        },
+        "required": [
+          "filing_lookup"
+        ]
+      },
+      "then": {
+        "properties": {
+          "not_applicable_reason": {
+            "const": "financial_filing_not_available_as_of"
+          }
+        }
+      }
+    }
+  ],
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "Opt-in successor of output 1.1, produced only under adopted revision rec-002-006-v2. 1.1 results and schema are unchanged. Adds an explicit not_applicable_reason and the REC-006 filing_lookup record."
+}

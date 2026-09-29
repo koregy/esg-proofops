@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from proofops.adapters.local.assurance_head import assurance_proofs
 from proofops.adapters.local.catalog_pages import initialize, page
 from proofops.adapters.local.run_artifacts import load_run_graph
 from proofops.application.assurance import (
@@ -59,7 +60,8 @@ class LocalAnalysisStore:
             )
 
     def _first_page(self, tenant_id, run_id, endpoint, limit, now, prepared, snapshot, epoch):
-        with self.runs.jobs._transaction() as db:
+        jobs = self.runs.jobs
+        with assurance_proofs(jobs, tenant_id, run_id), jobs._transaction() as db:
             initialize(db)
             current_snapshot = self.runs._snapshot(db, tenant_id, run_id)
             current_run = self.runs.jobs._get(db, tenant_id, run_id, "run", "META")
@@ -234,6 +236,9 @@ class LocalAnalysisStore:
             "tag_revision",
             f'{claim.claim_id}:{head["tag_revision"]:010}',
         )
+        from proofops.adapters.local.assurance_head import check_assurance_tag
+
+        check_assurance_tag(db, self.runs.jobs, tenant_id, run_id, tag)
         raw = tag.get("confirmed_tags")
         if raw is None or raw.get("safe_harbor_category") is None:
             return self._unknown_safe_harbor(claim.claim_id)

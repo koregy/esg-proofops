@@ -20,6 +20,77 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 import analyze_report as ar  # noqa: E402
 
 
+def test_position_context_plan_includes_table_dependencies(pdf, tmp_path):
+    plan = ar.plan_run(
+        _args(
+            pdf,
+            state=tmp_path / "position",
+            preliminary_table_role=True,
+            position_context_order=True,
+            extraction_context=True,
+        )
+    )
+    argv = plan["argv"]
+    for flag in (
+        "--preliminary-context",
+        "--preliminary-table-context",
+        "--preliminary-table-role",
+        "--position-context-order",
+        "--extraction-context",
+    ):
+        assert argv.count(flag) == 1
+    assert "--preliminary-actor-role" not in argv
+    assert "--preliminary-goal-role" not in argv
+    assert "--invoke" not in argv
+    assert not (tmp_path / "position").exists()
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"preliminary_table_role": True},
+        {"extraction_context": True},
+        {
+            "preliminary_table_role": True,
+            "extraction_context": True,
+            "preliminary_actor_role": True,
+        },
+    ],
+)
+def test_invalid_position_context_refused_before_launch(pdf, tmp_path, options):
+    state = tmp_path / "invalid-position"
+    with pytest.raises(ar.PlanError, match="position-context-order"):
+        ar.plan_run(_args(pdf, state=state, position_context_order=True, **options))
+    assert not state.exists()
+
+
+def test_explicit_full_report_resources_are_bounded_and_forwarded(pdf, tmp_path):
+    from evaluation.local_upstage_pilot import parser_resource_limits
+
+    assert parser_resource_limits() == {"timeout_seconds": 120, "memory_bytes": 805306368}
+    plan = ar.plan_run(
+        _args(
+            pdf,
+            state=tmp_path / "large",
+            parser_timeout_seconds=300,
+            parser_memory_bytes=2 * 1024**3,
+        )
+    )
+    argv = plan["argv"]
+    assert argv[argv.index("--parser-timeout-seconds") + 1] == "300"
+    assert argv[argv.index("--parser-memory-bytes") + 1] == str(2 * 1024**3)
+    for timeout, memory in [
+        (0, None),
+        (901, None),
+        (True, None),
+        (None, 1),
+        (None, 5 * 1024**3),
+        (None, False),
+    ]:
+        with pytest.raises(ValueError):
+            parser_resource_limits(timeout, memory)
+
+
 def _make_pdf(path: Path, pages: int = 3) -> Path:
     from pypdf import PdfWriter
 
@@ -58,6 +129,34 @@ def _args(pdf, **overrides):
     )
     base.update(overrides)
     return Namespace(**base)
+
+
+def test_all_pages_preserves_full_document_scope_without_running(pdf, tmp_path):
+    plan = ar.plan_run(
+        _args(pdf, pages=None, all_pages=True, claim_pages="2", state=tmp_path / "full")
+    )
+    assert plan["pages"] == [1, 2, 3]
+    assert plan["claim_pages"] == [2]
+    assert plan["page_count"] == 3
+    assert plan["invoke"] is False
+    assert not plan["state"].exists()
+
+
+@pytest.mark.parametrize("options", [{"pages": "1"}, {"pages": None, "auto_scope": True}])
+def test_all_pages_rejects_conflicting_selection_before_scope_discovery(pdf, monkeypatch, options):
+    def forbidden(_):
+        pytest.fail("conflicting selection must not discover or write a scope proposal")
+
+    monkeypatch.setattr(ar, "discover_auto_scope", forbidden)
+    with pytest.raises(ar.PlanError, match="--all-pages"):
+        ar.plan_run(_args(pdf, all_pages=True, **options))
+
+
+def test_page_ranges_are_explicit_sorted_unique_and_bounded():
+    assert ar.parse_pages("3,1-3,7-8") == [1, 2, 3, 7, 8]
+    for invalid in ("3-1", "0-2", "1-2-3", "1-999999999"):
+        with pytest.raises(ar.PlanError):
+            ar.parse_pages(invalid)
 
 
 @pytest.mark.parametrize("enabled", [False, True])
@@ -607,3 +706,108 @@ def test_direct_script_dry_plan_from_outside_checkout(pdf, tmp_path):
     assert result.returncode == 0, result.stderr
     assert "DRY PLAN" in result.stdout and "--preliminary-actor-role" in result.stdout
     assert not state.exists()
+
+
+def _session_ledger(path: Path, amount: str = "5") -> Path:
+    from datetime import UTC, datetime, timedelta
+
+    from proofops.adapters.local import upstage
+
+    now = datetime.now(UTC)
+    upstage.create_session_ledger(
+        path,
+        amount_usd=amount,
+        reason="User approved additional spend",
+        authorized_by="user via master coordinator",
+        authorized_at=(now - timedelta(hours=1)).isoformat(),
+        expires_at=(now + timedelta(hours=1)).isoformat(),
+    )
+    return path
+
+
+def test_java_path_is_validated_and_forwarded_only_when_given(pdf, tmp_path):
+    plan = ar.plan_run(_args(pdf, state=tmp_path / "run"))
+    assert "--java-path" not in plan["argv"]
+    with pytest.raises(ar.PlanError, match="--java-path not found"):
+        ar.plan_run(_args(pdf, state=tmp_path / "run", java_path=tmp_path / "nojava.exe"))
+    java = tmp_path / "java.exe"
+    java.write_bytes(b"")
+    argv = ar.plan_run(_args(pdf, state=tmp_path / "run", java_path=java))["argv"]
+    assert argv[argv.index("--java-path") + 1] == str(java.resolve())
+
+
+def test_explicit_budget_ledger_must_be_session_grant_and_is_forwarded(pdf, tmp_path, monkeypatch):
+    legacy = tmp_path / "legacy" / "budget.sqlite3"
+    monkeypatch.setattr(ar, "BUDGET_LEDGER", legacy)
+    plan = ar.plan_run(_args(pdf, state=tmp_path / "run"))
+    assert plan["ledger_status"] == {"state": "absent"}
+    assert "--budget-ledger" not in plan["argv"]
+    assert not legacy.exists()  # the dry plan never mints a ledger
+    missing = tmp_path / "session" / "submission.sqlite3"
+    with pytest.raises(ar.PlanError, match="budget ledger not found"):
+        ar.plan_run(_args(pdf, state=tmp_path / "run", budget_ledger=missing))
+    assert not missing.exists()
+    from proofops.adapters.local.upstage import UpstageProbe
+
+    UpstageProbe("test-secret", legacy)
+    with pytest.raises(ar.PlanError, match="must be an explicit session-grant ledger"):
+        ar.plan_run(_args(pdf, state=tmp_path / "run", budget_ledger=legacy))
+    session = _session_ledger(tmp_path / "session" / "submission.sqlite3", "10")
+    plan = ar.plan_run(_args(pdf, state=tmp_path / "run", budget_ledger=session))
+    argv = plan["argv"]
+    assert argv[argv.index("--budget-ledger") + 1] == str(session.resolve())
+    assert plan["ledger_status"]["authorized_limit_usd"] == "10.00"
+    assert plan["ledger_status"]["amount_basis"] == "gross-including-10pct-vat"
+
+
+def test_company_identity_is_forwarded_only_as_a_pair(pdf, tmp_path):
+    with pytest.raises(ar.PlanError, match="required together"):
+        ar.plan_run(_args(pdf, state=tmp_path / "run", company_name="Kia"))
+    argv = ar.plan_run(
+        _args(
+            pdf,
+            state=tmp_path / "run",
+            company_name=" Kia Corporation ",
+            company_registration="DART:00000001",
+        )
+    )["argv"]
+    assert argv[argv.index("--company-name") + 1] == "Kia Corporation"
+    assert argv[argv.index("--company-registration") + 1] == "DART:00000001"
+    assert "--company-name" not in ar.plan_run(_args(pdf, state=tmp_path / "run"))["argv"]
+
+
+def test_invoke_with_session_grant_requires_key_file_and_headroom(pdf, tmp_path, monkeypatch):
+    fenced = _session_ledger(tmp_path / "upstage" / "submission.sqlite3")
+    monkeypatch.setattr(ar, "BUDGET_LEDGER", tmp_path / "absent-legacy.sqlite3")
+    key = tmp_path / ".env.upstage.local"
+
+    def run():
+        return ar.plan_run(
+            _args(pdf, state=tmp_path / "run", invoke=True, key_file=key, budget_ledger=fenced)
+        )
+
+    with pytest.raises(ar.PlanError, match="--key-file not found"):
+        run()
+    key.write_text("UPSTAGE_API_KEY=placeholder\n")
+    plan = run()
+    status = plan["ledger_status"]
+    assert status["state"] == "session_grant"
+    assert status["authorized_limit_usd"] == "5.00" and status["can_reserve"] is True
+    assert status["prior_cumulative_usage"] == "unknown"
+    assert "--invoke" in plan["argv"]
+
+    from proofops.adapters.local import upstage
+
+    probe = upstage.UpstageProbe("test-secret", fenced)
+    for index in range(5):
+        probe._reserve(f"r{index}", {"request_id": f"r{index}"})
+    with pytest.raises(ar.PlanError, match="no USD1 reservation headroom"):
+        run()
+
+
+def test_invoke_refuses_invalid_ledger(pdf, tmp_path, monkeypatch):
+    fenced = tmp_path / "budget.sqlite3"
+    fenced.write_bytes(b"not sqlite")
+    monkeypatch.setattr(ar, "BUDGET_LEDGER", fenced)
+    with pytest.raises(ar.PlanError, match="budget ledger invalid"):
+        ar.plan_run(_args(pdf, state=tmp_path / "run", invoke=True))
