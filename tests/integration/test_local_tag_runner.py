@@ -678,25 +678,38 @@ def test_failed_renewal_during_last_element_call_prevents_claim_publication(tmp_
     def short_claim(message, *, owner, now, lease_seconds):
         return original_claim(message, owner=owner, now=now, lease_seconds=2)
 
-    def renewal_fails_on_keepalive(lease, *, now, lease_seconds):
-        if threading.current_thread().name.startswith("lease-heartbeat:"):
+    # Deterministic ordering, independent of runner speed (Windows CI once ran the
+    # first two calls slower than the ~0.67s keepalive tick, so the renewal failed
+    # before the last call started): keepalive renewals SUCCEED until the final
+    # element call is in flight, then the next renewal fails, and that call does
+    # not return until the failure has actually been recorded.
+    last_call_started, renewal_lost = threading.Event(), threading.Event()
+
+    def renewal_fails_during_last_call(lease, *, now, lease_seconds):
+        if (
+            threading.current_thread().name.startswith("lease-heartbeat:")
+            and last_call_started.is_set()
+        ):
+            renewal_lost.set()
             raise LeaseLost("LEASE_LOST")
         return original_heartbeat(lease, now=now, lease_seconds=min(lease_seconds, 2))
 
     monkeypatch.setattr(jobs, "claim_job", short_claim)
-    monkeypatch.setattr(jobs, "heartbeat", renewal_fails_on_keepalive)
+    monkeypatch.setattr(jobs, "heartbeat", renewal_fails_during_last_call)
     started, base_now = time_module.monotonic(), now[0]
     runner.clock = lambda: base_now + int(time_module.monotonic() - started)
     invoke = runner.transport.invoke
 
-    def slow_last_call(request):
+    def last_call_outlives_renewal(request):
         if len(runner.transport.requests) == 2:
-            time_module.sleep(1.1)
+            last_call_started.set()
+            assert renewal_lost.wait(timeout=30), "keepalive never attempted a renewal"
         return invoke(request)
 
-    monkeypatch.setattr(runner.transport, "invoke", slow_last_call)
+    monkeypatch.setattr(runner.transport, "invoke", last_call_outlives_renewal)
     message = tag_message(service, run_id, now[0])
     assert runner.run_once(tenant_id=TENANT, run_id=run_id) == "LEASE_HEARTBEAT_FAILED"
+    assert renewal_lost.is_set()
     assert len(runner.transport.requests) == 3
     assert jobs.read_checkpoint(message) is None
     with jobs._transaction() as db:

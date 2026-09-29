@@ -2,7 +2,7 @@
 
 Use `scripts/authorize_upstage_session.py --help` to create a **new** ledger from an explicit user grant. Its amount is the complete additional session ceiling, including 10% VAT, not an extension of an assumed historical balance. Prior cumulative usage remains unknown. Existing ledgers and response directories are never overwritten; no automatic top-up is available. A bounded expiry stops new reservations while permitting settlement of prior calls.
 
-Pass the same absolute `--budget-ledger` to `scripts/analyze_report.py`, the pilot, and `scripts/produce_assurance.py`. The pilot freezes this path into its manifest and workers receive `LOCAL_UPSTAGE_LEDGER_PATH`. An invalid explicit path fails closed rather than falling back to a legacy budget. Keep the key file outside Git and pass only its path.
+Pass the same absolute ledger path via `--budget-ledger` to `scripts/analyze_report.py` and the pilot, and via `--ledger` to `scripts/produce_assurance.py`. The pilot freezes this path into its manifest and workers receive `LOCAL_UPSTAGE_LEDGER_PATH`. An invalid explicit path fails closed rather than falling back to a legacy budget. Keep the key file outside Git and pass only its path.
 
 Each request reserves USD1 in a SQLite immediate transaction. Successful calls settle using provider usage and pinned gross prices. Unknown/failed calls retain the reservation; they are not automatically retried or treated as free. Hence usable headroom can be less than the nominal remaining balance. A new ledger is not a way to escape this session limit: all calls authorized by one grant must share the same ledger.
 

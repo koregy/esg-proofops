@@ -721,6 +721,8 @@ _WINDOWS_MAX_PATH = 260
 
 def _windows_long_paths_enabled() -> bool:
     """Whether this process may open paths past MAX_PATH (registry + manifest)."""
+    if sys.platform != "win32":
+        return False
     import ctypes
 
     try:
