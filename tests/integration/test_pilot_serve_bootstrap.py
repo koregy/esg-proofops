@@ -91,3 +91,34 @@ def test_bootstrap_login_lands_on_upload_page_with_same_cookie_policy():
         flag in landed.headers["set-cookie"] for flag in ("Secure", "HttpOnly", "SameSite=strict")
     )
     assert client.get("/__local/default").headers["location"] == "/runs/run/claims"
+
+
+def submission(*, bootstrap, claim_pages=None):
+    return pilot.local_submission_body(
+        worker_enabled=True,
+        candidate_rule_pack_id="pack",
+        selected_pages=[1],
+        claim_pages=claim_pages,
+        bootstrap=bootstrap,
+    )
+
+
+def test_local_submission_offers_only_declared_subset_scope():
+    # The pilot composes upstage_probe, whose run creation rejects scope=full.
+    for bootstrap in (False, True):
+        body = submission(bootstrap=bootstrap)
+        assert body["supported_scopes"] == ["declared_subset"]
+        assert body["scope_reason"] == "upstage_probe_declared_subset_only"
+
+
+def test_bootstrap_submission_withholds_seed_default_pages():
+    body = submission(bootstrap=True)
+    assert body["selected_pages"] == [] and body["page_selection"] == "explicit_required"
+    assert body["worker_enabled"] is True and body["candidate_rule_pack_id"] == "pack"
+
+
+def test_saved_run_submission_keeps_declared_pages_and_claim_pin():
+    body = submission(bootstrap=False, claim_pages=[1])
+    assert body["selected_pages"] == [1] and body["page_selection"] == "saved_run_pages"
+    assert body["required_pages"] == [1]
+    assert submission(bootstrap=True)["required_pages"] == []

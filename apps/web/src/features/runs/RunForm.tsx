@@ -3,18 +3,22 @@ import { ApiError, errorMessage, isSessionError, requestJson } from "../session/
 import type { RuntimeOptions, UploadSelection } from "../upload/CompanySelector";
 import type { ReadyDocumentVersion } from "../upload/UploadForm";
 import type { RunSnapshot } from "./RunProgress";
+import {
+  checkLocalSubmission,
+  fullScopeSupported,
+  initialPages,
+  missingRequiredPages,
+  preflightFailures,
+  type LocalSubmission,
+  type PreflightCheck,
+  type RunScope,
+} from "./runScope";
 
 type Preflight = {
   ready: boolean;
-  checks: Array<{ name: string; status: "pass" | "fail" | "not_run"; reason: string }>;
+  checks: PreflightCheck[];
   binding_sha256: string | null;
   checked_at: string;
-};
-
-type LocalSubmission = {
-  worker_enabled: boolean;
-  candidate_rule_pack_id: string | null;
-  selected_pages: number[];
 };
 
 type ScopeProposal = {
@@ -128,7 +132,7 @@ export function RunForm({
   onSessionInvalid,
 }: Props) {
   const [mode, setMode] = useState<"disclosure" | "advertising">("disclosure");
-  const [scope, setScope] = useState<"full" | "declared_subset">("full");
+  const [scope, setScope] = useState<RunScope>("full");
   const [pageText, setPageText] = useState("");
   const [rulePackId, setRulePackId] = useState("");
   const [local, setLocal] = useState<LocalSubmission | null>(null);
@@ -136,6 +140,7 @@ export function RunForm({
   const [localError, setLocalError] = useState(false);
   const [phase, setPhase] = useState("준비된 문서 버전의 분석 범위를 확인해 주세요.");
   const [error, setError] = useState<string | null>(null);
+  const [failedChecks, setFailedChecks] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [proposal, setProposal] = useState<ScopeProposal | null>(null);
   const [proposalBusy, setProposalBusy] = useState(false);
@@ -158,15 +163,11 @@ export function RunForm({
     requestJson<LocalSubmission>(`${apiBase}/local/submission`, { signal: request.signal })
       .then(value => {
         if (request.signal.aborted) return;
-        if (typeof value.worker_enabled !== "boolean" ||
-            !(value.candidate_rule_pack_id === null || typeof value.candidate_rule_pack_id === "string") ||
-            !Array.isArray(value.selected_pages) || !value.selected_pages.every(p => Number.isInteger(p) && p > 0)) {
-          throw new Error("로컬 실행 설정을 확인할 수 없습니다.");
-        }
+        checkLocalSubmission(value);
         setLocal(value);
-        if (value.selected_pages.length) {
-          setScope("declared_subset"); setPageText(value.selected_pages.join(","));
-        }
+        const pages = initialPages(value);
+        if (pages.length) setPageText(pages.join(","));
+        if (pages.length || !fullScopeSupported(value)) setScope("declared_subset");
       })
       .catch(reason => {
         if (request.signal.aborted) return;
@@ -179,6 +180,10 @@ export function RunForm({
 
   const candidatePackId = mode === "disclosure" ? local?.candidate_rule_pack_id : null;
   const localBlocked = localLoading || localError || local?.worker_enabled === false;
+  const fullAllowed = fullScopeSupported(local);
+  // An unsupported "full" never reaches the request, even before the local hints load.
+  const runScope: RunScope = fullAllowed ? scope : "declared_subset";
+  const requiredPages = local?.required_pages ?? [];
   useEffect(() => {
     if (rulePackId === candidatePackId && candidatePackId) return;
     if (!activePacks.some((pack) => pack.rule_pack_id === rulePackId)) {
@@ -194,6 +199,7 @@ export function RunForm({
     setScope("full");
     setPageText("");
     setError(null);
+    setFailedChecks([]);
     setBusy(false);
     setPhase("준비된 문서 버전의 분석 범위를 확인해 주세요.");
     proposalController.current?.abort();
@@ -268,18 +274,24 @@ export function RunForm({
       setError("승인된 동의·실행 환경과 사용할 규칙집을 선택해 주세요.");
       return;
     }
+    setFailedChecks([]);
     let pages: number[] | undefined;
     try {
-      pages = scope === "declared_subset" ? parsePages(pageText, version.page_count) : undefined;
+      pages = runScope === "declared_subset" ? parsePages(pageText, version.page_count) : undefined;
     } catch (reason: unknown) {
       setError(reason instanceof Error ? reason.message : "분석 페이지를 확인해 주세요.");
+      return;
+    }
+    const missing = pages ? missingRequiredPages(local, pages) : [];
+    if (missing.length) {
+      setError(`이 로컬 실행의 고정 주장 페이지 ${missing.join(", ")}을(를) 분석 페이지에 포함해 주세요.`);
       return;
     }
 
     const signature = JSON.stringify({
       version: version.version_id,
       mode,
-      scope,
+      scope: runScope,
       pages,
       rulePackId,
       consentProfileId: selection.consentProfileId,
@@ -315,7 +327,8 @@ export function RunForm({
         }),
       });
       if (!preflight.ready) {
-        setError("사전 점검을 통과하지 못했습니다. 관리자에게 승인 구성을 확인해 달라고 요청하세요.");
+        setFailedChecks(preflightFailures(preflight.checks));
+        setError("사전 점검을 통과하지 못했습니다. 아래 실패 항목을 관리자에게 전달해 승인 구성을 확인해 달라고 요청하세요.");
         setPhase("분석 실행을 시작하지 않았습니다.");
         return;
       }
@@ -331,7 +344,7 @@ export function RunForm({
         body: JSON.stringify({
           document_version_id: version.version_id,
           mode,
-          scope,
+          scope: runScope,
           ...(pages ? { selected_pages: pages } : {}),
           rule_pack_id: rulePackId,
           consent_profile_id: selection.consentProfileId,
@@ -382,10 +395,17 @@ export function RunForm({
         {rulePackId === candidatePackId && candidatePackId ? <p role="status">초안은 추출·태깅 참고용입니다. 승인 전에는 등급과 검토 수정 확정을 보류합니다.</p> : null}
 
         <label htmlFor="run-scope">분석 범위</label>
-        <select id="run-scope" value={scope} onChange={(event) => setScope(event.target.value as typeof scope)}>
-          <option value="full">문서 전체</option>
+        <select id="run-scope" value={runScope} onChange={(event) => setScope(event.target.value as RunScope)} aria-describedby={fullAllowed ? undefined : "run-scope-help"}>
+          <option value="full" disabled={!fullAllowed}>{fullAllowed ? "문서 전체" : "문서 전체 (이 로컬 실행에서는 지원하지 않음)"}</option>
           <option value="declared_subset">지정한 페이지만</option>
         </select>
+        {!fullAllowed ? (
+          <p id="run-scope-help" role="status">
+            이 로컬 실행 구성(Upstage 추출·OCR)은 지정한 페이지만 분석합니다. 입력한 페이지만 결과에 포함되며 문서 전체 분석이 아닙니다.
+            {local?.page_selection === "explicit_required" ? " 초기 설정 페이지를 자동으로 넣지 않으니, 페이지를 직접 입력하거나 아래 범위 후보를 적용하세요." : null}
+            {requiredPages.length ? ` 고정 주장 페이지 ${requiredPages.join(", ")}은(는) 반드시 포함해야 합니다.` : null}
+          </p>
+        ) : null}
         <section aria-label="환경 범위 제안" aria-busy={proposalBusy} style={{ display: "grid", gap: 6, padding: 8, border: "1px solid #ccc", borderRadius: 6 }}>
           <button type="button" onClick={inspectScope} disabled={proposalBusy || !sourceSha || version.page_count === null} aria-describedby="scope-proposal-help" style={{ minHeight: 44 }}>
             {proposalBusy ? "문서 구조 확인 중…" : "환경(E) 범위 후보 찾기"}
@@ -415,7 +435,7 @@ export function RunForm({
             </div>
           ) : null}
         </section>
-        {scope === "declared_subset" ? (
+        {runScope === "declared_subset" ? (
           <>
             <label htmlFor="selected-pages">분석할 실제 PDF 페이지</label>
             <input
@@ -441,6 +461,9 @@ export function RunForm({
       {!canRun ? <p role="status">분석 전 사전 점검과 실행 시작은 관리자 권한이 필요합니다.</p> : null}
       <p role="status" aria-live="polite">{phase}</p>
       {error ? <p role="alert">{error}</p> : null}
+      {failedChecks.length ? (
+        <ul aria-label="사전 점검 실패 항목">{failedChecks.map(line => <li key={line}>{line}</li>)}</ul>
+      ) : null}
     </form>
   );
 }

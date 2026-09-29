@@ -87,6 +87,34 @@ def serve_refusal(
     return None
 
 
+def local_submission_body(
+    *,
+    worker_enabled: bool,
+    candidate_rule_pack_id: str | None,
+    selected_pages: list[int],
+    claim_pages: list[int] | None,
+    bootstrap: bool,
+) -> dict:
+    """Local-only new-analysis hints for the web form; never an authorization.
+
+    The pilot always composes ``LOCAL_EXTRACTION_MODE=upstage_probe``, and run
+    creation rejects any non-``declared_subset`` scope there, so ``full`` is not
+    offered. A bootstrap seed never ran and its CLI default pages (``--pages 1``)
+    are not a reviewer choice, so they are withheld: the user must type pages or
+    apply a scope proposal. A frozen ``claim_pages`` pin must stay inside any new
+    run's declared pages. The run service still enforces every guard itself.
+    """
+    return dict(
+        worker_enabled=worker_enabled,
+        candidate_rule_pack_id=candidate_rule_pack_id,
+        selected_pages=[] if bootstrap else list(selected_pages),
+        supported_scopes=["declared_subset"],
+        scope_reason="upstage_probe_declared_subset_only",
+        page_selection="explicit_required" if bootstrap else "saved_run_pages",
+        required_pages=list(claim_pages or []),
+    )
+
+
 def pilot_company_body(legal_name, registration_identifier, *, existing: bool) -> dict:
     """Explicit company identity belongs to a new run, never a stored snapshot."""
     if legal_name is None and registration_identifier is None:
@@ -1871,6 +1899,7 @@ def main():
         run_meta = c.runs.store.jobs.get_run(tenant, run_id)
         candidate_rule_pack_id = run_meta.get("rule_pack_id")
         served_pages = list(manifest.get("selected_pages", []))
+        served_claim_pages = manifest.get("claim_pages")
 
         @app.get("/local/submission", include_in_schema=False)
         def local_submission(request: Request):
@@ -1888,10 +1917,12 @@ def main():
                     status_code=404,
                 )
             return JSONResponse(
-                dict(
+                local_submission_body(
                     worker_enabled=bool(worker_thread and worker_thread.is_alive()),
                     candidate_rule_pack_id=candidate_rule_pack_id,
                     selected_pages=served_pages,
+                    claim_pages=served_claim_pages,
+                    bootstrap=bootstrap_landing is not None,
                 ),
                 headers={"Cache-Control": "no-store"},
             )
