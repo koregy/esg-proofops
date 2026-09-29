@@ -1,4 +1,24 @@
-## 2026-09-29 17:13 KST · Actual parsing and remaining source verification
+## 2026-09-29 17:52 KST · Implemented and under integration
+
+The submission branch now includes the immutable API candidate importer, Kia
+followup exporter (29 checks, 28 literal matches; six candidate records including
+the 2024 revenue share), opt-in Windows OCR, faster byte-pinned typography replay,
+and paired grade agreement evaluation (linear and quadratic weighted kappa).
+Targeted coordinator checks passed: followup 13, Windows OCR 24, replay reuse 18,
+agreement evaluation 13. The Windows reader's real Korean crop samples contain
+OCR differences; no full 61-block Windows re-evaluation or real Kia P4 completion
+is claimed. API parsing and candidate integrity do not establish citation quality.
+
+Full-source verification for P4 consumers, full-document search coverage receipts,
+the Upstage raster corroboration runtime, and versioned REC-002/006 guards remain
+in active integration. Uncommitted code is not release validation. The existing
+public-PDF run is still extracting; a new reader requires a new run.
+
+Both CI events passed for `7cdb473` and `563fedd`; one event also passed for
+`73839d2`. Later Windows/replay/agreement commits are undergoing CI. PR #1 remains
+draft with a readable UTF-8 description. No AWS deployment has been performed.
+
+## Earlier 2026-09-29 17:13 KST · Actual parsing and remaining source verification
 
 The reviewer's private Kia PDF was received and matched the reply's complete
 SHA-256 `d0d814d98c4aeedbbdb2bf8631b8981ae5cde94dec32aa32c57510420274da1f`.
