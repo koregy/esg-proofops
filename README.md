@@ -41,6 +41,23 @@ AWS 배포 구조는 [명세](docs/00_MASTER_SPEC.md)에 기록되어 있습니�
 | --- | --- | --- |
 | KB 보고서 물리 30쪽 로컬 실행 | 추출 후보 7개 중 원문 확인 2개, 미확인 5개. 태깅은 선행 조건 때문에 보류; 자동 등급 없음. | [실행 기록](evidence/developer-a-validation-20260918.md) |
 | 삼성생명·한전 저장 결과 재생 | 각각 주장 2개·3개를 근거 후보와 연결. 원문 미검증으로 확정 등급 0개. | [재생 기록](evidence/source-linked-demo-verification.md) |
+| NAVER 공개 시연 스냅샷 | 244쪽 중 54쪽 부분 실행. 주장 331개, 원문 검증 272개, 저장된 E3 17개. AI 위임 검토이며 독립 평가 정확도가 아님. | [저장된 결과](apps/web/public/demo/naver-2025.json) |
+| 기아 원문 대조 시험 | 28쪽 대상 28블록 중 15개 일치, 주장 8개 중 4개 원문 검증·모두 검토 필요. 보증 페이지 대상 152블록 중 27개 일치, 52개 미처리. | [본문 없는 검증 수치](evidence/kia-native-api-validation-20260929.json) |
+
+공개 화면의 `/validation/kia`는 기아 검증 수치와 보류 상태를 보여 줍니다. 비공개 PDF 본문이나 기업 확정 등급을 공개하는 화면은 아닙니다.
+
+## 추가 검토 기능
+
+| 기능 | 실행·계약 안내 |
+| --- | --- |
+| Upstage 원문 이미지 대조와 오프라인 재생 | [새 실행의 OCR 정책](docs/NATIVE_UPSTAGE_OCR.md) |
+| Solar Pro 3 추출·태깅 모델 고정 | [모델 선택과 기존 실행 호환성](docs/SOLAR_PRO3_TAGGING.md) |
+| 전체 검색 증빙과 명시적 부재 검토 | [검색 범위 증빙](docs/search-coverage-receipt-contract.md) · [검토 연결](docs/absence-review-link-contract.md) |
+| 본문·표 수치 대조 P6 | [검증된 차원 결속과 검토 CLI](docs/NUMERIC_P6_LINK.md) |
+| 세이프하버 체크리스트 | [원문 근거 입력 CLI](docs/SAFE_HARBOR_CHECKLIST_PRODUCER.md) — 법적 효력·등급은 미정 |
+| 산업별 프로젝트 검토 | [주제 검토·명시적 비적용 승인](docs/industry-topic-review-contract.md) — 공식 대응표·만족도는 미정 |
+
+구현과 실제 보고서 적용의 차이, 미정 정책, 배포 상태는 [계획서 대비 현황](docs/SUBMISSION_PLAN_REMAINING_20260929.md)에 기록합니다.
 
 ## 로컬 실행
 

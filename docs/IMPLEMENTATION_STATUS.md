@@ -24,8 +24,12 @@ Kia report, assurance linkage or accuracy result is claimed.
 
 Both GitHub CI events passed at `ca797fb`, including the launcher options for
 table-role and position-context ordering. Later industry/UI changes require their
-own CI. Numeric P6 review integration is being repaired and independently reviewed;
-uncommitted work is not accepted release functionality. The ten-slide PPT v3 is
+own CI. Numeric P6 integration passed independent review and was committed in
+`47087cc`. The 39-test producer/review run passed; the mixed-CLI loader follow-up
+passed 87 scoped checks, with coordinator rerun of its changed 20-test suite.
+The public Kia metadata page passed 14 extended browser checks, including mobile
+layout and no API/write requests. Commit `b9d5d06` updates the navigation regression
+for its additional menu item. The ten-slide PPT v3 is
 prepared, with deployment still pending. No AWS deployment was made.
 
 ## Earlier 2026-09-29 18:28 KST · Native API OCR and Solar Pro 3 integrated
