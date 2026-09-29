@@ -1070,10 +1070,12 @@ def main():
         args.verify_paragraphs
         and sys.platform == "win32"
         and not getattr(args, "native_windows_ocr", False)
+        and not getattr(args, "native_upstage_ocr", False)
     ):
         print(
             "note: --verify-paragraphs on Windows leaves rendered text unresolved "
-            "(macOS Vision only); add --native-windows-ocr for a NEW run",
+            "(macOS Vision only); choose --native-windows-ocr or --native-upstage-ocr "
+            "for a NEW run",
             file=sys.stderr,
         )
     if getattr(args, "native_upstage_ocr", False) and (
