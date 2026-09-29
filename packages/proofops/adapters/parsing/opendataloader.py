@@ -607,6 +607,11 @@ class OpenDataLoaderParser(ParserPort):
                     # more now that the outcome is final.
                     _check_limits(isolation, process, work, profile)
                     if process.returncode:
+                        if sys.platform != "win32":
+                            import signal
+
+                            if process.returncode == -signal.SIGXCPU:
+                                raise ParseFailure("PARSER_TIMEOUT")
                         raise ParseFailure("PARSER_FAILED")
                 finally:
                     try:
@@ -687,7 +692,10 @@ def _child_limits(profile: dict[str, Any]) -> None:
     if sys.platform != "win32":
         import resource
 
-        resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu))
+        # A distinct soft limit emits SIGXCPU, so the parent can distinguish
+        # CPU exhaustion from an unrelated kill before its wall-clock poll.
+        # The wall deadline is unchanged; the hard limit is a final fallback.
+        resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu + 1))
         resource.setrlimit(
             resource.RLIMIT_FSIZE, (profile["max_output_bytes"], profile["max_output_bytes"])
         )
