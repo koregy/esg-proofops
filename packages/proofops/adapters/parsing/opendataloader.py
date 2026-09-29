@@ -936,8 +936,12 @@ def _child(work: Path) -> None:
             # ink it owns; a table whose ownership is not exact stays untouched.
             words_by_page = {}
             source_pdf_bytes = (work / "source.pdf").read_bytes()
+            # locate_auxiliary_cells reads words only for pages holding a table.
+            table_pages = {node["page number"] for node in nodes}
             with pdfplumber.open(work / "source.pdf") as document:
                 for number in selected:
+                    if number not in table_pages:
+                        continue
                     page = document.pages[number - 1]
                     raw_words = page.extract_words()
                     if not raw_words:
