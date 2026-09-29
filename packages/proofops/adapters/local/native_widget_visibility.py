@@ -95,7 +95,7 @@ def _static_pushbuttons(form) -> bool:
     if not isinstance(fields, list):
         return False
     stack = [(field, None, None) for field in fields]
-    seen = set()
+    seen: set[int] = set()
     while stack:
         value, inherited_type, inherited_flags = stack.pop()
         value = resolve1(value)
