@@ -416,6 +416,8 @@ def build_pilot_argv(
     tagging_model: str | None = None,
     preliminary_context: bool = False,
     preliminary_actor_role: bool = False,
+    preliminary_table_role: bool = False,
+    position_context_order: bool = False,
     ai_project_review: bool = False,
     extraction_year_notation: bool = False,
     extraction_context: bool = False,
@@ -513,7 +515,13 @@ def build_pilot_argv(
         argv += ["--tagging-model", tagging_model]
     if live_relations:
         argv.append("--live-relations")
-    if preliminary_context or preliminary_actor_role:
+    if position_context_order and (not extraction_context or not preliminary_table_role):
+        raise PlanError(
+            "--position-context-order requires --extraction-context and --preliminary-table-role"
+        )
+    if position_context_order and preliminary_actor_role:
+        raise PlanError("--position-context-order cannot be combined with --preliminary-actor-role")
+    if preliminary_context or preliminary_actor_role or preliminary_table_role:
         argv.append("--preliminary-context")
     if preliminary_actor_role:
         argv += [
@@ -522,6 +530,10 @@ def build_pilot_argv(
             "--preliminary-goal-role",
             "--preliminary-actor-role",
         ]
+    elif preliminary_table_role:
+        argv += ["--preliminary-table-context", "--preliminary-table-role"]
+    if position_context_order:
+        argv.append("--position-context-order")
     if ai_project_review:
         argv.append("--ai-project-review")
     if extraction_year_notation:
@@ -662,8 +674,12 @@ def plan_run(args: argparse.Namespace) -> dict:
     claim_span_typography = bool(getattr(args, "claim_span_typography", False))
     live_relations = bool(getattr(args, "live_relations", False))
     preliminary_actor_role = bool(getattr(args, "preliminary_actor_role", False))
+    preliminary_table_role = bool(getattr(args, "preliminary_table_role", False))
+    position_context_order = bool(getattr(args, "position_context_order", False))
     preliminary_context = (
-        bool(getattr(args, "preliminary_context", False)) or preliminary_actor_role
+        bool(getattr(args, "preliminary_context", False))
+        or preliminary_actor_role
+        or preliminary_table_role
     )
     ai_project_review = bool(getattr(args, "ai_project_review", False))
     extraction_year_notation = bool(getattr(args, "extraction_year_notation", False))
@@ -697,6 +713,8 @@ def plan_run(args: argparse.Namespace) -> dict:
         tagging_model=getattr(args, "tagging_model", None),
         preliminary_context=preliminary_context,
         preliminary_actor_role=preliminary_actor_role,
+        preliminary_table_role=preliminary_table_role,
+        position_context_order=position_context_order,
         ai_project_review=ai_project_review,
         extraction_year_notation=extraction_year_notation,
         extraction_context=extraction_context,
@@ -744,6 +762,8 @@ def plan_run(args: argparse.Namespace) -> dict:
         "tagging_model": getattr(args, "tagging_model", None) or "solar-pro4",
         "preliminary_context": preliminary_context,
         "preliminary_actor_role": preliminary_actor_role,
+        "preliminary_table_role": preliminary_table_role,
+        "position_context_order": position_context_order,
         "ai_project_review": ai_project_review,
         "extraction_year_notation": extraction_year_notation,
         "extraction_context": extraction_context,
@@ -800,6 +820,8 @@ def print_plan(plan: dict) -> None:
         "live_relations",
         "preliminary_context",
         "preliminary_actor_role",
+        "preliminary_table_role",
+        "position_context_order",
         "ai_project_review",
         "extraction_year_notation",
         "extraction_context",
@@ -1020,6 +1042,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Use the actor/goal-period classification profile for a NEW run. "
         "Includes its required context/table/goal options; no rule approval or paid "
         "call is enabled by this flag. Existing saved runs are unchanged.",
+    )
+    parser.add_argument(
+        "--preliminary-table-role",
+        action="store_true",
+        help="NEW run: classify table roles with the required preliminary/table context.",
+    )
+    parser.add_argument(
+        "--position-context-order",
+        action="store_true",
+        help="NEW run: preserve positional context ordering; requires --extraction-context "
+        "and --preliminary-table-role, excludes --preliminary-actor-role.",
     )
     parser.add_argument(
         "--ai-project-review",

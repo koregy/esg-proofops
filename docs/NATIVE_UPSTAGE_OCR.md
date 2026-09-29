@@ -36,6 +36,11 @@ Java 21을 자동으로 찾지 못하면 `--java-path`로 실행 파일을 지�
 Solar Pro 3를 사용한다. `--tagging-model solar-pro3`는 사전 분류·요소 태깅·관계 추출에도
 같은 모델을 고정한다. 옵션 생략 시 기존 태깅 모델 Solar Pro 4를 유지한다.
 
+표의 역할과 위치별 문맥을 사용하는 새 실행은 `--preliminary-table-role
+--position-context-order --extraction-context`를 함께 지정할 수 있다. 실행기는 필요한
+사전 분류 문맥·표 문맥 옵션을 자동으로 포함한다. 위치 순서 옵션과
+`--preliminary-actor-role`은 함께 사용하지 않는다.
+
 이미지 대조는 한 호출당 최대 10개 문단을 처리하며 `--upstage-ocr-max-calls`는 1~20이다.
 `--native-windows-ocr`, `--native-quote-typography`, 기존 raster 경로와 함께 사용하지 않는다.
 미정산 요청은 자동 재전송하지 않는다. 학생 계정의 무료 사용 여부와 별개로 공용 장부는

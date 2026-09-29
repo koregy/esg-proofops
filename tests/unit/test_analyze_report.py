@@ -20,6 +20,50 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 import analyze_report as ar  # noqa: E402
 
 
+def test_position_context_plan_includes_table_dependencies(pdf, tmp_path):
+    plan = ar.plan_run(
+        _args(
+            pdf,
+            state=tmp_path / "position",
+            preliminary_table_role=True,
+            position_context_order=True,
+            extraction_context=True,
+        )
+    )
+    argv = plan["argv"]
+    for flag in (
+        "--preliminary-context",
+        "--preliminary-table-context",
+        "--preliminary-table-role",
+        "--position-context-order",
+        "--extraction-context",
+    ):
+        assert argv.count(flag) == 1
+    assert "--preliminary-actor-role" not in argv
+    assert "--preliminary-goal-role" not in argv
+    assert "--invoke" not in argv
+    assert not (tmp_path / "position").exists()
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"preliminary_table_role": True},
+        {"extraction_context": True},
+        {
+            "preliminary_table_role": True,
+            "extraction_context": True,
+            "preliminary_actor_role": True,
+        },
+    ],
+)
+def test_invalid_position_context_refused_before_launch(pdf, tmp_path, options):
+    state = tmp_path / "invalid-position"
+    with pytest.raises(ar.PlanError, match="position-context-order"):
+        ar.plan_run(_args(pdf, state=state, position_context_order=True, **options))
+    assert not state.exists()
+
+
 def test_explicit_full_report_resources_are_bounded_and_forwarded(pdf, tmp_path):
     from evaluation.local_upstage_pilot import parser_resource_limits
 
