@@ -18,8 +18,9 @@ artifacts/receipts themselves; this helper never computes or stores hashes.
 
 Pure application helper: stdlib ``datetime``/``typing`` for parsing and
 annotations plus the existing domain error type only. No ambient clock,
-network, file, or environment access. Supports only ``solar-pro4``; there is
-no Pro 3 support and no fallback model.
+network, file, or environment access. The historical policy supports only
+``solar-pro4``. An explicit, separately versioned Pro 3 policy is dispatched to
+``input_reservation_pro3``; there is no fallback model.
 """
 
 from __future__ import annotations
@@ -118,6 +119,10 @@ def validate_capacity_policy(policy: dict[str, Any], *, model_id: str, checked_a
     timezone-aware with ``captured_at <= checked_at < expires_at``. Bool
     values are never accepted as counts.
     """
+    if model_id == "solar-pro3":
+        from proofops.application.input_reservation_pro3 import validate_pro3_capacity_policy
+
+        return validate_pro3_capacity_policy(policy, model_id=model_id, checked_at=checked_at)
     if not isinstance(policy, dict):
         raise DomainValidationError("capacity policy must be an object")
     if set(policy.keys()) != set(_POLICY_KEYS):
