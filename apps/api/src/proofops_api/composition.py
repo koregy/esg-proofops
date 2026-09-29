@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from proofops.adapters.local.analysis_store import LocalAnalysisStore
-from proofops.adapters.local.assurance_head import AssuranceProofVerifier
+from proofops.adapters.local.assurance_head import AbsenceProofVerifier, AssuranceProofVerifier
 from proofops.adapters.local.assurance_store import LocalAssuranceStore
 from proofops.adapters.local.claim_store import LocalClaimStore
 from proofops.adapters.local.classification_store import LocalSQLiteClassificationStore
@@ -148,6 +148,19 @@ def build_composition() -> ApiComposition:
             uploads.read_original(tenant, version)
         ).hexdigest(),
     )
+    # Reviewed whole-document absences replay the producer's receipt/review files
+    # (beside the run DB) from the original PDF, graph and claim on every head read.
+    from proofops.adapters.local.search_coverage_store import (
+        LocalSearchCoverageStore,
+        run_loader,
+    )
+
+    search_coverage = LocalSearchCoverageStore(
+        database_path.parent / "search-coverage", run_loader(runs.store, uploads, parser)
+    )
+    runs.store.jobs.absence_verifier = AbsenceProofVerifier(
+        runs.store.jobs, load_inputs=tags.load_inputs, evidence=search_coverage
+    )
     return ApiComposition(
         proofops=proofops_composition,
         auth_store=auth_store,
@@ -165,6 +178,7 @@ def build_composition() -> ApiComposition:
             verify_context_sources=tags.verify_context_sources,
             load_run_snapshot=runs.store.snapshot,
             load_assurance_statement=assurance.load,
+            search_coverage=search_coverage,
         ),
         source_conditions=LocalSourceConditionReview(runs.store, uploads, parser),
         rescores=RescoreService(

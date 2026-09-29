@@ -366,6 +366,17 @@ class LocalSQLiteReviewStore:
         with self.jobs._transaction() as db:
             return self._lookup(db, tenant_id, review_id)
 
+    def head_tag(self, tenant_id, run_id, claim_id):
+        """Current head tag (read-only) so trusted replays can run before resolve's writer."""
+        with self.jobs._transaction() as db:
+            raw = self.jobs._raw(db, tenant_id, run_id, "claim_head", claim_id)
+            if raw is None:
+                return None
+            head = json.loads(raw)
+            return self.jobs._get(
+                db, tenant_id, run_id, "tag_revision", f'{claim_id}:{head["tag_revision"]:010}'
+            )
+
     def publish(self, inputs, review):
         with self.jobs._transaction() as db:
             tenant, run_id = inputs.context.claim.tenant_id, inputs.run_id

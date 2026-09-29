@@ -42,7 +42,7 @@ OTHER_RUN = "88888888-8888-4888-8888-888888888888"
 
 @pytest.fixture
 def published(ws):  # noqa: F811
-    _, service, inputs, review, body, _, _ = ws
+    _, service, inputs, review, body, _, auth = ws
     statement = statement_for(inputs)
     _publish_statement(service, statement)
     legacy = service.store.history(TENANT, RUN, review["claim_id"])["tags"][0]
@@ -73,6 +73,7 @@ def published(ws):  # noqa: F811
         rescore=rescore,
         legacy=legacy,
         claim_id=review["claim_id"],
+        auth=auth,
     )
 
 
@@ -223,3 +224,28 @@ def test_every_head_consumer_entry_computes_proofs_before_its_transaction(module
     )
     assert "assurance_proofs(" in source
     assert source.index("assurance_proofs(") < source.rindex("_transaction()")
+
+
+def test_http_claim_detail_serves_p4_and_refuses_tampered_source_or_statement(published):
+    """HTTP-level: the real claims router reads heads only through the proof guard."""
+    from tests.integration.test_absence_review_link import claims_http_client
+
+    env = published
+    client = claims_http_client(env.auth, env.jobs, env.inputs.context.claim, env.inputs)
+    url = f"/v1/runs/{RUN}/claims/{env.claim_id}"
+    response = client.get(url)
+    assert response.status_code == 200, response.text
+    p4 = next(e for e in response.json()["elements"] if e["element_id"] == "P4")
+    assert (p4["state"], p4["normalized_value"]) == ("present", "covered")
+
+    env.source["digest"] = "f" * 64  # original PDF replaced, metadata repinned
+    refused = client.get(url)
+    assert refused.status_code == 409
+    assert refused.json()["error"]["code"] == "ARTIFACT_UNAVAILABLE"
+    env.source["digest"] = env.inputs.original.source_sha256
+    assert client.get(url).status_code == 200
+
+    forged = _statement_to_payload(env.statement)
+    forged["provider"] = "다른 보증기관"
+    _replace_statement(env, forged)
+    assert client.get(url).status_code == 409

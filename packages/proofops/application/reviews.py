@@ -27,6 +27,14 @@ from proofops.application.evidence.report_level import check_report_level
 from proofops.application.evidence.retrieval import EvidencePacket
 from proofops.application.evidence.span_citations import verify_source_ref
 from proofops.application.ingest.graph_fusion import CanonicalDocumentGraph
+from proofops.application.tagging.absence_link import (
+    POLICY as ABSENCE_POLICY,
+)
+from proofops.application.tagging.absence_link import (
+    AbsenceLinkRejected,
+    derive_absences,
+    replay_absence_receipt,
+)
 from proofops.application.tagging.assurance_link import (
     POLICY as ASSURANCE_POLICY,
 )
@@ -375,8 +383,17 @@ def _review_applicability(inputs: ReviewInputs, track: str, review: Any):
     return facts, receipt
 
 
-def _review_safe_harbor(inputs: ReviewInputs, review: Any):
-    """Create only explicit checklist facts from replayed packet references."""
+def _review_safe_harbor(inputs: ReviewInputs, review: Any, *, carried: bool = False):
+    """Create only explicit checklist facts from replayed packet references.
+
+    R00 §12 common guard: a checklist ``absent`` needs a trusted, replay-valid
+    full-document search-coverage proof. Checklist items are not G/P/M elements, so
+    the search-coverage producer cannot attest them yet, and a caller-supplied
+    ``search_coverage_verified`` boolean is never authority. Every ``absent`` item is
+    therefore refused, both in a new request and when an earlier stored receipt would
+    be carried into a new revision. Stored revisions are never rewritten; their
+    items stay as recorded.
+    """
     if not isinstance(review, dict) or set(review) != {
         "policy",
         "input_snapshot_sha256",
@@ -435,6 +452,13 @@ def _review_safe_harbor(inputs: ReviewInputs, review: Any):
             or (state in ("present", "absent", "conflict") and not item["evidence_refs"])
         ):
             raise ReviewRejected("SAFE_HARBOR_REVIEW_INVALID")
+        if state == "absent":
+            raise ReviewRejected(
+                "SAFE_HARBOR_ABSENCE_CARRY_REQUIRES_RECEIPT"
+                if carried
+                else "SAFE_HARBOR_ABSENCE_RECEIPT_REQUIRED",
+                409 if carried else 422,
+            )
         seen.add(name)
         refs, scopes = [], set()
         for raw in item["evidence_refs"]:
@@ -612,6 +636,7 @@ class ReviewService:
         verify_context_sources=None,
         load_run_snapshot=None,
         load_assurance_statement=None,
+        search_coverage=None,
     ):
         self.store, self.load_inputs = store, load_inputs
         self.verify_context_sources = verify_context_sources
@@ -619,6 +644,9 @@ class ReviewService:
         # Trusted re-extracting loader (``LocalAssuranceStore.load``); P4 work fails
         # closed without it, and nothing else in a review can create P4.
         self.load_assurance_statement = load_assurance_statement
+        # Trusted search-coverage port (``LocalSearchCoverageStore``); absence work
+        # fails closed without it. It replays receipts from the current source/run.
+        self.search_coverage = search_coverage
 
     def _review(self, inputs: ReviewInputs, review_id: str | None = None) -> dict:
         inputs.validate()
@@ -704,6 +732,7 @@ class ReviewService:
         category_review: dict | None = None,
         context_review: dict | None = None,
         assurance_review: dict | None = None,
+        absence_review: dict | None = None,
         reopen: bool = False,
     ):
         """Trusted backend-only operation for explicit user-delegated AI review.
@@ -747,6 +776,7 @@ class ReviewService:
             category_review=category_review,
             context_review=context_review,
             assurance_review=assurance_review,
+            absence_review=absence_review,
             reopen=reopen,
         )
 
@@ -767,6 +797,7 @@ class ReviewService:
         category_review=None,
         context_review=None,
         assurance_review=None,
+        absence_review=None,
         reopen=False,
     ):
         if not isinstance(actor, AuthContext) or not actor.has_capability("reviewer"):
@@ -822,6 +853,38 @@ class ReviewService:
             if "value" not in preloaded_statement:
                 raise ReviewRejected("ASSURANCE_LOADER_UNAVAILABLE", 409)
             return preloaded_statement["value"]
+
+        # search-absence-link-v1: the producer port replays receipts from the original
+        # PDF/graph/claim/run snapshot and opens its own transactions, so derivation
+        # (fresh) and replay (carried) both happen here, before the writer transaction.
+        # ``build`` re-pins the result to the exact head it is applied to.
+        absence_pre: dict = {}
+        if absence_review is not None:
+            if self.search_coverage is None:
+                raise ReviewRejected("ABSENCE_EVIDENCE_UNAVAILABLE", 409)
+            try:
+                absence_pre["fresh"] = derive_absences(inputs, absence_review, self.search_coverage)
+            except AbsenceLinkRejected as exc:
+                raise ReviewRejected(str(exc), 409) from exc
+        elif reopen:
+            head_tag = getattr(self.store, "head_tag", None)
+            prior_head = (
+                head_tag(actor.tenant_id, target["run_id"], target["claim_id"])
+                if head_tag is not None
+                else None
+            )
+            prior_absence = (prior_head or {}).get("absence_review")
+            if prior_absence is not None:
+                if self.search_coverage is None:
+                    absence_pre["error"] = "ABSENCE_EVIDENCE_UNAVAILABLE"
+                else:
+                    try:
+                        absence_pre["carried"] = (
+                            prior_absence["receipt_sha256"],
+                            replay_absence_receipt(inputs, prior_absence, self.search_coverage),
+                        )
+                    except (AbsenceLinkRejected, KeyError, TypeError) as exc:
+                        absence_pre["error"] = str(exc) or "ABSENCE_REPLAY_MISMATCH"
 
         def build(review, initial, decision_revision):
             inputs.validate()
@@ -928,7 +991,7 @@ class ReviewService:
             safe_harbor_facts, safe_harbor_receipt = ([], None)
             if effective_safe_harbor is not None:
                 safe_harbor_facts, safe_harbor_receipt = _review_safe_harbor(
-                    inputs, effective_safe_harbor
+                    inputs, effective_safe_harbor, carried=safe_harbor_carried
                 )
                 previous_names |= {f.name for f in safe_harbor_facts}
             new_facts = [f for n, f in facts.items() if n not in previous_names] + reviewed_facts
@@ -1033,6 +1096,42 @@ class ReviewService:
                 or body_p4.credited_from is not None
             ):
                 raise ReviewRejected("ASSURANCE_ELEMENT_MISMATCH")
+            absence_facts: dict = {}
+            absence_receipt = None
+            prior_absence = initial.get("absence_review")
+            if prior_absence is not None and not reopen:
+                raise ReviewRejected("ABSENCE_REPLAY_MISMATCH", 409)
+            body_states = {e.element_id: e for e in elements}
+            if "fresh" in absence_pre:
+                absence_facts, absence_receipt = absence_pre["fresh"]
+                if absence_review["track"] != body["track"]:
+                    raise ReviewRejected("ABSENCE_TRACK_MISMATCH")
+            elif prior_absence is not None:
+                items = [item["element_id"] for item in prior_absence.get("items", ())]
+                if body["track"] == prior_absence.get("request", {}).get("track") and all(
+                    body_states.get(e) is not None and body_states[e].state == "absent"
+                    for e in items
+                ):
+                    if "error" in absence_pre:
+                        raise ReviewRejected(absence_pre["error"], 409)
+                    carried_sha, (absence_facts, absence_receipt) = absence_pre["carried"]
+                    if carried_sha != prior_absence.get("receipt_sha256"):
+                        raise ReviewRejected("ABSENCE_REPLAY_MISMATCH", 409)
+                    absence_receipt = {
+                        **absence_receipt,
+                        "carried_from": prior_absence.get("carried_from", prior_provenance),
+                    }
+            for element_id in absence_facts:
+                element = body_states.get(element_id)
+                if (
+                    element is None
+                    or element.state != "absent"
+                    or element.reason_code != ABSENCE_POLICY
+                    or element.evidence_refs
+                    or element.normalized_value is not None
+                    or element.credited_from is not None
+                ):
+                    raise ReviewRejected("ABSENCE_ELEMENT_MISMATCH")
             checked_elements = []
             report_level_receipts = []
             prior_report_level = {
@@ -1055,6 +1154,8 @@ class ReviewService:
                 previous = [facts.get(name) for name in names]
                 if element.element_id == "P4" and assurance_fact is not None:
                     previous = [assurance_fact]
+                if element.element_id in absence_facts:
+                    previous = list(absence_facts[element.element_id])
                 report_level = (
                     element.state == "present"
                     and element.reason_code is not None
@@ -1325,6 +1426,8 @@ class ReviewService:
                 tag["report_level_review"] = report_level_receipts
             if assurance_receipt is not None:
                 tag["assurance_review"] = assurance_receipt
+            if absence_receipt is not None:
+                tag["absence_review"] = absence_receipt
             if extra_tag:
                 tag.update(extra_tag)
             decision_record = dict(
@@ -1346,6 +1449,8 @@ class ReviewService:
                 trusted_options["context_review"] = context_review
             if assurance_review is not None:
                 trusted_options["assurance_review"] = assurance_review
+            if absence_review is not None:
+                trusted_options["absence_review"] = absence_review
             # Every supplied trusted option joins the retry identity on EVERY
             # callable surface, not only when an AI provenance label is present:
             # a same-key retry with a changed receipt must conflict, never replay.

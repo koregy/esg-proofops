@@ -31,6 +31,12 @@ from contextvars import ContextVar
 from hashlib import sha256
 from typing import Protocol
 
+from proofops.application.tagging.absence_link import POLICY as ABSENCE_POLICY
+from proofops.application.tagging.absence_link import POLICY_HASH as ABSENCE_POLICY_HASH
+from proofops.application.tagging.absence_link import (
+    AbsenceLinkRejected,
+    replay_absence_receipt,
+)
 from proofops.application.tagging.assurance_link import (
     FACT,
     POLICY,
@@ -212,11 +218,133 @@ class AssuranceProofVerifier:
         return proofs
 
 
+def _marked_heads(jobs, tenant_id, run_id, claim_ids, marker: bytes) -> dict:
+    """Current heads whose tag bytes carry ``marker`` (cheap SQL prefilter, one read)."""
+    wanted = None if claim_ids is None else set(claim_ids)
+    heads = {}
+    with jobs._transaction() as db:
+        rows = db.execute(
+            """SELECT record_id, value FROM job_records
+            WHERE tenant_id=? AND run_id=? AND kind='claim_head'""",
+            (tenant_id, run_id),
+        ).fetchall()
+        for claim_id, raw in rows:
+            if wanted is not None and claim_id not in wanted:
+                continue
+            key = f"{claim_id}:{json.loads(raw)['tag_revision']:010}"
+            hit = db.execute(
+                """SELECT value FROM job_records WHERE tenant_id=? AND run_id=?
+                AND kind='tag_revision' AND record_id=? AND instr(value, ?) > 0""",
+                (tenant_id, run_id, key, marker),
+            ).fetchone()
+            if hit is not None:
+                heads[claim_id] = json.loads(hit[0])
+    return heads
+
+
+def check_absence_integrity(tag) -> bool:
+    """Receipt-internal pins of a ``search-absence-link-v1`` head. Returns receipt presence."""
+    receipt = tag.get("absence_review") if isinstance(tag, dict) else None
+    if receipt is None:
+        if isinstance(tag, dict) and any(
+            e.get("reason_code") == ABSENCE_POLICY for e in tag.get("elements") or ()
+        ):
+            raise AssuranceHeadRejected("ABSENCE_PROOF_MISSING")
+        return False
+    try:
+        stored = {k: v for k, v in receipt.items() if k not in ("receipt_sha256", "carried_from")}
+        request = receipt["request"]
+        pinned_input = tag.get("input_snapshot_sha256") or (
+            canonical_hash(tag["inputs"]) if "inputs" in tag else None
+        )
+        confirmed = tag.get("confirmed_tags") or {}
+        facts = {f["name"]: f for f in confirmed.get("facts") or ()}
+        elements = {e["element_id"]: e for e in tag.get("elements") or ()}
+        ok = (
+            receipt.get("receipt_sha256") == canonical_hash(stored)
+            and (receipt.get("policy"), receipt.get("policy_hash"))
+            == (ABSENCE_POLICY, ABSENCE_POLICY_HASH)
+            and (request.get("policy"), request.get("policy_hash"))
+            == (ABSENCE_POLICY, ABSENCE_POLICY_HASH)
+            and receipt.get("request_sha256") == canonical_hash(request)
+            and request.get("input_snapshot_sha256") == pinned_input
+            and request.get("track") == confirmed.get("track")
+            and request.get("claim_id") == confirmed.get("claim_id")
+            and bool(receipt.get("items"))
+        )
+        for item in receipt.get("items") or ():
+            element = elements.get(item["element_id"])
+            ok = ok and (
+                element is not None
+                and element["state"] == "absent"
+                and element["reason_code"] == ABSENCE_POLICY
+                and not element["evidence_refs"]
+                and item["element_state_candidate"] == "absent"
+                and all(
+                    name in facts
+                    and facts[name]["state"] == "absent"
+                    and facts[name]["search_coverage_verified"] is True
+                    for name in item["absent_facts"]
+                )
+            )
+    except (KeyError, TypeError, AttributeError, ValueError):
+        ok = False
+    if not ok:
+        raise AssuranceHeadRejected("ABSENCE_HEAD_REJECTED")
+    return True
+
+
+class AbsenceProofVerifier:
+    """Full, transaction-free replay of absence receipts on current heads.
+
+    ``evidence`` is the trusted producer port (``LocalSearchCoverageStore``): every
+    replay recomputes the receipt from the original PDF, graph, claim and run
+    snapshot and re-validates the stored whole-corpus review.
+    """
+
+    receipt_key = "absence_review"
+
+    def __init__(self, jobs, *, load_inputs: Callable, evidence):
+        self.jobs, self.load_inputs, self.evidence = jobs, load_inputs, evidence
+
+    def prove(self, tenant_id, run_id, claim_ids: Iterable[str] | None = None) -> dict:
+        heads = _marked_heads(self.jobs, tenant_id, run_id, claim_ids, _ABSENCE_MARKER)
+        proofs: dict = {}
+        for claim_id, tag in heads.items():
+            try:
+                if not check_absence_integrity(tag):
+                    continue
+                inputs = self.load_inputs(tenant_id, run_id, claim_id)
+                replay_absence_receipt(inputs, tag["absence_review"], self.evidence)
+                proofs[claim_id] = dict(
+                    tag_revision=tag["tag_revision"],
+                    tag_sha256=canonical_hash(tag),
+                    receipt_sha256=tag["absence_review"]["receipt_sha256"],
+                )
+            except AssuranceHeadRejected as exc:
+                proofs[claim_id] = str(exc)
+            except AbsenceLinkRejected as exc:
+                proofs[claim_id] = f"ABSENCE_REDERIVATION_FAILED:{exc}"
+            except (ValueError, KeyError, TypeError, OSError) as exc:
+                proofs[claim_id] = f"ABSENCE_REDERIVATION_FAILED:{type(exc).__name__}"
+        return proofs
+
+
+_ABSENCE_MARKER = b'"absence_review":'
+_VERIFIER_ATTRIBUTES = {
+    "assurance_review": ("assurance_verifier", "ASSURANCE_LOADER_UNAVAILABLE"),
+    "absence_review": ("absence_verifier", "ABSENCE_EVIDENCE_UNAVAILABLE"),
+}
+
+
 @contextmanager
 def assurance_proofs(
     jobs, tenant_id, run_id, claim_ids: Iterable[str] | None = None
 ) -> Iterator[None]:
-    """Compute proofs before a consumer transaction; must not be entered inside one."""
+    """Compute head proofs before a consumer transaction; never enter inside one.
+
+    Covers every receipt kind in ``_VERIFIER_ATTRIBUTES`` (P4 assurance, absence).
+    """
     current = dict(_PROOFS.get() or {})
     key = (str(getattr(jobs, "path", id(jobs))), tenant_id, run_id)
     wanted = None if claim_ids is None else frozenset(claim_ids)
@@ -226,8 +354,12 @@ def assurance_proofs(
     ):
         yield
         return
-    verifier = getattr(jobs, "assurance_verifier", None)
-    proofs = verifier.prove(tenant_id, run_id, wanted) if verifier is not None else None
+    proofs = {}
+    for receipt_key, (attribute, _) in _VERIFIER_ATTRIBUTES.items():
+        verifier = getattr(jobs, attribute, None)
+        proofs[receipt_key] = (
+            verifier.prove(tenant_id, run_id, wanted) if verifier is not None else None
+        )
     current[key] = dict(claims=wanted, proofs=proofs)
     token = _PROOFS.set(current)
     try:
@@ -237,27 +369,40 @@ def assurance_proofs(
 
 
 def check_assurance_tag(db, jobs, tenant_id, run_id, tag) -> None:
-    """Consumer check inside the read transaction; fails closed for receipt heads."""
-    if not check_integrity(db, jobs, tenant_id, run_id, tag):
+    """Consumer check inside the read transaction; fails closed for receipt heads.
+
+    Applies to every trusted head receipt: ``assurance_review`` (P4) and
+    ``absence_review`` (search-absence-link-v1). Heads without either are untouched.
+    """
+    present = {
+        "assurance_review": check_integrity(db, jobs, tenant_id, run_id, tag),
+        "absence_review": check_absence_integrity(tag),
+    }
+    if not any(present.values()):
         return
     context = (_PROOFS.get() or {}).get((str(getattr(jobs, "path", id(jobs))), tenant_id, run_id))
     if context is None:
         raise AssuranceHeadRejected("ASSURANCE_PROOF_UNAVAILABLE")
-    if context["proofs"] is None:
-        raise AssuranceHeadRejected("ASSURANCE_LOADER_UNAVAILABLE")
     claim_id = (tag.get("confirmed_tags") or {}).get("claim_id")
-    proof = context["proofs"].get(claim_id)
-    if proof is None:
-        raise AssuranceHeadRejected("ASSURANCE_PROOF_STALE")
-    if isinstance(proof, str):
-        raise AssuranceHeadRejected(proof)
-    _, statement_sha = _statement_record(db, jobs, tenant_id, run_id)
-    if (
-        proof["tag_revision"] != tag["tag_revision"]
-        or proof["tag_sha256"] != canonical_hash(tag)
-        or proof["statement_record_sha256"] != statement_sha
-    ):
-        raise AssuranceHeadRejected("ASSURANCE_PROOF_STALE")
+    for receipt_key, needed in present.items():
+        if not needed:
+            continue
+        proofs = context["proofs"].get(receipt_key)
+        if proofs is None:
+            raise AssuranceHeadRejected(_VERIFIER_ATTRIBUTES[receipt_key][1])
+        proof = proofs.get(claim_id)
+        if proof is None:
+            raise AssuranceHeadRejected("ASSURANCE_PROOF_STALE")
+        if isinstance(proof, str):
+            raise AssuranceHeadRejected(proof)
+        if proof["tag_revision"] != tag["tag_revision"] or proof["tag_sha256"] != canonical_hash(
+            tag
+        ):
+            raise AssuranceHeadRejected("ASSURANCE_PROOF_STALE")
+        if receipt_key == "assurance_review":
+            _, statement_sha = _statement_record(db, jobs, tenant_id, run_id)
+            if proof["statement_record_sha256"] != statement_sha:
+                raise AssuranceHeadRejected("ASSURANCE_PROOF_STALE")
 
 
 def read_head(jobs, tenant_id, run_id, claim_id):
