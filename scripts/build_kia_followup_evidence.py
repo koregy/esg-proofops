@@ -381,7 +381,9 @@ def case_candidates(checks: list[dict], reproduction: dict, money: dict, c04_cur
             calculation_basis="내부관리회계 기준",
             evidence=["P106-REVENUE-SHARE", "P106-REVENUE-YEARS", "P106-REVENUE-BASIS"],
             product_claim_registered=False,
-            remaining_gate="source geometry and accepted claim binding required for product registration",
+            remaining_gate=(
+                "source geometry and accepted claim binding required for product registration"
+            ),
             csv_row_written=False,
             classification_equivalence_to_regulatory_green_revenue=None,
         ),
