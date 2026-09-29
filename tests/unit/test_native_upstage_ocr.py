@@ -55,7 +55,7 @@ def test_quote_fold_is_exactly_the_existing_finite_map():
     ("native", "provider", "expected"),
     [
         ("‘2019년’ 목표", "'2019년' 목표", True),
-        ("“A” and ‘b’", '"A" and \'b\'', True),
+        ("“A” and ‘b’", "\"A\" and 'b'", True),
         ("Scope 1  emissions\n12,345", "Scope 1 emissions 12,345", True),
         ("12,345 tCO2e", "12.345 tCO2e", False),
         ("12,345 tCO2e", "12345 tCO2e", False),

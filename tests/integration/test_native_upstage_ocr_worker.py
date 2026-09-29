@@ -109,9 +109,7 @@ def test_snapshot_pins_policy_and_excludes_raster(tmp_path, monkeypatch):
     service, _runner, run_id, _probe, _calls = setup_run(tmp_path, monkeypatch)
     snapshot = service.store.snapshot(AUTH.tenant_id, run_id)
     assert snapshot["native_upstage_ocr_policy"] == native_upstage_ocr_policy()
-    assert snapshot["native_upstage_ocr_policy_hash"] == canonical_hash(
-        native_upstage_ocr_policy()
-    )
+    assert snapshot["native_upstage_ocr_policy_hash"] == canonical_hash(native_upstage_ocr_policy())
     assert not any(key.startswith("raster_ocr_") for key in snapshot)
     # Both configurations at once never create a run.
     with pytest.raises(ValueError):
@@ -187,7 +185,9 @@ def test_ocr_mismatch_or_hidden_text_stays_unresolved(tmp_path, monkeypatch, pro
     assert coverage["unresolved_source_ids"] == coverage["eligible_source_ids"] != []
     graph = runner.load_graph(**identity)
     assert all(
-        b.quality != "verified" for b in graph.blocks if b.source_id in coverage["eligible_source_ids"]
+        b.quality != "verified"
+        for b in graph.blocks
+        if b.source_id in coverage["eligible_source_ids"]
     )
     assert len(calls) == 1
 
