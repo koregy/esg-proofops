@@ -29,7 +29,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_JAVA = "/opt/homebrew/opt/openjdk@21/bin/java"
 
 
-def local_login_response(sessions, user: str, tenant: str, run_id: str):
+def local_login_response(sessions, user: str, tenant: str, run_id: str, landing: str | None = None):
     """The secret loopback login link renews an expired demo session on each visit."""
     from fastapi.responses import RedirectResponse
     from proofops.adapters.local.auth_store import hash_token, new_session_id
@@ -40,11 +40,51 @@ def local_login_response(sessions, user: str, tenant: str, run_id: str):
     sessions.put_with_token(
         SessionRecord(session, user, tenant, hash_token(csrf), now + 3600, now + 3600, False), csrf
     )
-    response = RedirectResponse(f"/runs/{run_id}/claims", status_code=303)
+    response = RedirectResponse(landing or f"/runs/{run_id}/claims", status_code=303)
     response.set_cookie(
         SESSION_COOKIE_NAME, session, secure=True, httponly=True, samesite="strict", path="/"
     )
     return response
+
+
+# Seed states that never produced a stage artifact: claims are unavailable only
+# because nothing ran, so there is no stored claim artifact whose integrity could fail.
+_BOOTSTRAP_SEED_STATUSES = {"queued", "cancelled"}
+
+
+def serve_refusal(
+    claims_status: int, run_meta: dict, *, bootstrap: bool, worker: bool, pipeline_status: str
+) -> str | None:
+    """Why --serve must refuse this run, or None to serve.
+
+    Ordinary serving still requires the saved run's claims to read back HTTP 200.
+    ``--serve-bootstrap`` is an explicit opt-in that serves the upload/new-analysis
+    pages for a seed that never ran (no ``--invoke`` here, no completed stage). Any
+    run that advanced past parse keeps the fail-closed claims check, so integrity
+    errors in stored claims are never served. With the worker the seed must already
+    be cancelled, otherwise the worker would drive it without a user action.
+    """
+    if claims_status == 200:
+        return None
+    refusal = (
+        f"Cannot serve this run: claims HTTP {claims_status}; inspect the saved inspection JSON"
+    )
+    if not bootstrap:
+        return refusal
+    status = run_meta.get("status")
+    if (
+        pipeline_status != "not_run"
+        or status not in _BOOTSTRAP_SEED_STATUSES
+        or "current_stage" in run_meta
+        or "parse_job" in run_meta
+    ):
+        return refusal + " (--serve-bootstrap applies only to a seed that never ran)"
+    if worker and status != "cancelled":
+        return (
+            f"Cannot bootstrap-serve with --serve-worker: seed run is {status}; cancel it "
+            "first so the worker never drives it without a user action"
+        )
+    return None
 
 
 def pilot_company_body(legal_name, registration_identifier, *, existing: bool) -> dict:
@@ -909,10 +949,22 @@ def main():
         "(parse/extract/tag via the run's shared ledger). Distinct from read-only "
         "--resume; requires --serve. Re-serving stored results alone never needs it.",
     )
+    parser.add_argument(
+        "--serve-bootstrap",
+        action="store_true",
+        help="Explicit opt-in: serve the upload/new-analysis pages for a seed run that "
+        "never ran (queued or cancelled, no completed stage). Ordinary --serve still "
+        "requires stored claims to read back HTTP 200. Cannot be combined with --invoke; "
+        "with --serve-worker the seed must already be cancelled.",
+    )
     parser.add_argument("--port", type=int, default=8766)
     args = parser.parse_args()
     if args.serve_worker and not args.serve:
         parser.error("--serve-worker requires --serve")
+    if args.serve_bootstrap and not args.serve:
+        parser.error("--serve-bootstrap requires --serve")
+    if args.serve_bootstrap and args.invoke:
+        parser.error("--serve-bootstrap never invokes models; omit --invoke")
     if args.serve:
         if not 1 <= args.port <= 65535:
             parser.error("--port must be between 1 and 65535")
@@ -1787,11 +1839,16 @@ def main():
         flush=True,
     )
     if args.serve:
-        if response.status_code != 200:
-            raise SystemExit(
-                f"Cannot serve this run: claims HTTP {response.status_code}; "
-                "inspect the saved inspection JSON"
-            )
+        refusal = serve_refusal(
+            response.status_code,
+            c.runs.store.jobs.get_run(tenant, run_id),
+            bootstrap=args.serve_bootstrap,
+            worker=args.serve_worker,
+            pipeline_status=pipeline_outcome["status"],
+        )
+        if refusal is not None:
+            raise SystemExit(refusal)
+        bootstrap_landing = "/documents/new" if response.status_code != 200 else None
         import uvicorn
         from fastapi import HTTPException
         from fastapi.responses import FileResponse
@@ -1801,7 +1858,9 @@ def main():
 
         @app.get("/__local/" + login_token, include_in_schema=False)
         def login():
-            return local_login_response(c.auth_store.sessions, user, tenant, run_id)
+            return local_login_response(
+                c.auth_store.sessions, user, tenant, run_id, bootstrap_landing
+            )
 
         app.mount("/assets", StaticFiles(directory=ROOT / "apps/web/dist/assets"))
 

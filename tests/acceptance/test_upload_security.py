@@ -757,3 +757,36 @@ def test_hide_with_nonboolean_H_on_gesture_is_rejected(tmp_path):
             PdfLimits(),
             tenant_id="00000000-0000-4000-8000-000000000001",
         )
+
+
+def _pdf_with_extra_reference():
+    """A one-page PDF whose page names one indirect object via /Extra."""
+    writer = PdfWriter()
+    writer.add_blank_page(width=600, height=800)
+    extra = writer._add_object(DictionaryObject({NameObject("/Kind"): NameObject("/Extra")}))
+    writer.pages[0][NameObject("/Extra")] = extra
+    output = BytesIO()
+    writer.write(output)
+    return output.getvalue(), extra.idnum
+
+
+def test_reference_to_undefined_object_is_null_not_invalid():
+    """ISO 32000-1 7.3.10: an object absent from xref, object streams and body is null."""
+    data, number = _pdf_with_extra_reference()
+    tenant = "00000000-0000-4000-8000-000000000001"
+    assert verify_quarantined_pdf(source(data), PdfLimits(), tenant_id=tenant).page_count == 1
+    missing = int("9" * len(str(number)))  # same digit count keeps xref offsets valid
+    assert missing != number and f"{missing} 0 obj".encode() not in data
+    dangling = data.replace(f"/Extra {number} 0 R".encode(), f"/Extra {missing} 0 R".encode())
+    assert dangling != data
+    assert verify_quarantined_pdf(source(dangling), PdfLimits(), tenant_id=tenant).page_count == 1
+
+
+def test_corrupt_object_that_the_xref_indexes_still_rejects():
+    data, number = _pdf_with_extra_reference()
+    corrupt = data.replace(f"\n{number} 0 obj".encode(), f"\n{number} 1 obj".encode())
+    assert corrupt != data
+    with pytest.raises(UploadRejected, match="PDF_INVALID"):
+        verify_quarantined_pdf(
+            source(corrupt), PdfLimits(), tenant_id="00000000-0000-4000-8000-000000000001"
+        )

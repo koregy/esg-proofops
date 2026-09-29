@@ -335,6 +335,28 @@ def _inspect(path: str, limits: PdfLimits) -> int:
         ]
         seen: set[int] = set()
         decoded = 0
+        body_headers: set[tuple[int, int]] | None = None
+
+        def undefined_reference(reference: IndirectObject) -> bool:
+            """ISO 32000-1 7.3.10: a reference to an object that no xref section, no
+            object stream and no ``N G obj`` in the file body defines is null.
+
+            An object the xref or an object stream does index is always resolved,
+            so a corrupt claimed object still fails closed. The body headers are the
+            ones pypdf's own recovery search would find, collected in one pass.
+            """
+            nonlocal body_headers
+            if reference.idnum in reader.xref.get(reference.generation, {}) or (
+                reference.generation == 0 and reference.idnum in reader.xref_objStm
+            ):
+                return False
+            if body_headers is None:
+                body_headers = {
+                    (int(match[1]), int(match[2]))
+                    for match in re.finditer(rb"\s(\d+)\s+(\d+)\s+obj", Path(path).read_bytes())
+                }
+            return (reference.idnum, reference.generation) not in body_headers
+
         # Action dictionaries reachable from /AA, /OpenAction, or an annotation's
         # direct /A are validated by explicit subtype allowlist below; they must
         # never be treated as merely "present -> reject" (that rejected inert
@@ -548,9 +570,21 @@ def _inspect(path: str, limits: PdfLimits) -> int:
                 allow_user_named_action=allow_uri,
             )
 
+        # isinstance against pypdf's generic containers is slow; scalars carry
+        # nothing to inspect, so classify each concrete type once and skip them.
+        container_types: dict[type, bool] = {}
         while pending:
             value = pending.pop()
+            kind = type(value)
+            if kind not in container_types:
+                container_types[kind] = isinstance(
+                    value, IndirectObject | DictionaryObject | ArrayObject
+                )
+            if not container_types[kind]:
+                continue
             if isinstance(value, IndirectObject):
+                if undefined_reference(value):
+                    continue  # null by definition; nothing to inspect
                 value = value.get_object()
             if isinstance(value, DictionaryObject | ArrayObject):
                 if id(value) in seen:
