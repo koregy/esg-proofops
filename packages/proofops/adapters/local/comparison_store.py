@@ -8,6 +8,7 @@ from datetime import date
 from pathlib import Path
 from uuid import uuid4
 
+from proofops.adapters.local.assurance_head import assurance_proofs
 from proofops.adapters.local.summary_store import LocalSummaryStore
 from proofops.application.comparisons import (
     ApprovedVersion,
@@ -335,7 +336,11 @@ class LocalComparisonStore:
             current_claims = self.claims.list(tenant, run_id)
             prior_claims = self.claims.list(tenant, prior_run_id)
             try:
-                with self.jobs._transaction() as db:
+                with (
+                    assurance_proofs(self.jobs, tenant, run_id),
+                    assurance_proofs(self.jobs, tenant, prior_run_id),
+                    self.jobs._transaction() as db,
+                ):
                     current = self.jobs._get(db, tenant, run_id, "run", "META")
                     prior = self.jobs._get(db, tenant, prior_run_id, "run", "META")
                     if (

@@ -21,7 +21,9 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from proofops.adapters.local.assurance_head import assurance_proofs
 from proofops.adapters.reconciliation.files import FileSourceReader, SourceReadError
+from proofops.application.reconciliation import revision as rec_revision
 from proofops.application.reconciliation.presentation import project_result
 from proofops.application.reconciliation.schema import validate_schema
 from proofops.application.reconciliation.service import canonical_sha256, reconcile
@@ -38,6 +40,11 @@ IMMUTABLE_TABLES = (
 )
 BUNDLE_REQUIRED = ("packet", "policy", "documents", "artifacts")
 BUNDLE_OPTIONAL = ("coverage", "policies")
+# Adopted REC-002/REC-006 (R00 section 12). Present only in snapshots registered
+# with them, so every earlier snapshot, detail and replay keeps its exact shape.
+REVISION_BUNDLE = ("adopted_revision", "revision_receipt", "filing_pages")
+FILING_PAGE_DIR = "_rec_pages"
+MAX_FILING_PAGE_BYTES = 5 * 1024 * 1024
 REVIEW_FIELDS = (
     "reason",
     "confirm_source_bindings",
@@ -256,11 +263,18 @@ class LocalReconciliationStore:
         self._require(auth, "admin")
         tenant = self._tenant(auth)
         packet, policy, documents, artifacts, coverage = self._validate_bundle(bundle)
+        adopted, receipt, filing_pages = self._validate_revision_bundle(bundle)
         anchor = self._verified_claim(tenant, run_id, claim_id, packet, policy)
 
         case_id = str(uuid4())
         created_at, actor = _now(), _text(getattr(auth, "user_sub", None), "FORBIDDEN")
         imported = self._import_artifacts(tenant, case_id, artifacts, packet, Path(artifact_root))
+        if filing_pages:
+            try:
+                self._import_filing_pages(tenant, case_id, filing_pages, Path(artifact_root))
+            except BaseException:
+                shutil.rmtree(self._case_root(tenant, case_id), ignore_errors=True)
+                raise
         provenance = {
             "tenant_id": tenant,
             "run_id": run_id,
@@ -278,6 +292,11 @@ class LocalReconciliationStore:
             "documents_sha256": canonical_sha256(documents),
             "artifacts_sha256": canonical_sha256(artifacts),
         }
+        if adopted is not None:
+            provenance["adopted_revision"] = adopted
+            provenance["revision_receipt_sha256"] = (
+                rec_revision.receipt_body_sha256(receipt) if receipt is not None else None
+            )
         snapshot = {
             "case_id": case_id,
             "run_id": run_id,
@@ -291,6 +310,9 @@ class LocalReconciliationStore:
             "coverage": coverage,
             "provenance": provenance,
         }
+        if adopted is not None:
+            snapshot["adopted_revision"] = adopted
+            snapshot["revision_receipt"] = receipt
         try:
             with self.jobs._transaction() as db:
                 db.execute(
@@ -343,7 +365,8 @@ class LocalReconciliationStore:
 
     def _validate_bundle(self, bundle) -> tuple[dict, dict, dict, dict, dict]:
         supplied = _mapping(bundle, "VALIDATION_ERROR")
-        if not set(BUNDLE_REQUIRED) <= set(supplied) <= set(BUNDLE_REQUIRED + BUNDLE_OPTIONAL):
+        allowed = set(BUNDLE_REQUIRED + BUNDLE_OPTIONAL + REVISION_BUNDLE)
+        if not set(BUNDLE_REQUIRED) <= set(supplied) <= allowed:
             raise ReconciliationRejected("VALIDATION_ERROR", 422)
         packet = deepcopy(_mapping(supplied["packet"], "VALIDATION_ERROR"))
         policy = deepcopy(_mapping(supplied["policy"], "VALIDATION_ERROR"))
@@ -366,6 +389,100 @@ class LocalReconciliationStore:
                 raise ReconciliationRejected("DOCUMENT_BINDING_MISSING", 422)
         return packet, policy, documents, artifacts, coverage
 
+    @staticmethod
+    def _validate_revision_bundle(bundle) -> tuple[str | None, dict | None, dict[str, str]]:
+        """Neutralise and shape-check the optional adopted-revision import.
+
+        A receipt carries no authority here: any imported ``confirmation`` is
+        dropped, and only an authenticated reviewer's review event can confirm
+        the receipt body hash later. Naming the revision without a receipt is
+        kept, so evaluation blocks instead of silently using the legacy path.
+        """
+        if not any(key in bundle for key in REVISION_BUNDLE):
+            return None, None, {}
+        adopted = bundle.get("adopted_revision")
+        if adopted != rec_revision.REVISION:
+            raise ReconciliationRejected("VALIDATION_ERROR", 422)
+        receipt = bundle.get("revision_receipt")
+        pages = bundle.get("filing_pages") or {}
+        if not isinstance(pages, Mapping):
+            raise ReconciliationRejected("VALIDATION_ERROR", 422)
+        if receipt is None:
+            if pages:
+                raise ReconciliationRejected("VALIDATION_ERROR", 422)
+            return adopted, None, {}
+        receipt = deepcopy(_mapping(receipt, "VALIDATION_ERROR"))
+        receipt.pop("confirmation", None)
+        if receipt.get("revision") != rec_revision.REVISION:
+            raise ReconciliationRejected("VALIDATION_ERROR", 422)
+        try:
+            canonical_sha256(receipt)
+            referenced = [page["sha256"] for page in receipt["filing_history"]["search"]["pages"]]
+        except (KeyError, TypeError, ValueError) as error:
+            raise ReconciliationRejected("VALIDATION_ERROR", 422) from error
+        if not all(isinstance(digest, str) for digest in referenced) or set(referenced) != set(
+            pages
+        ):
+            raise ReconciliationRejected("FILING_PAGE_BINDING_MISSING", 422)
+        return (
+            adopted,
+            receipt,
+            {digest: _text(path, "VALIDATION_ERROR") for digest, path in pages.items()},
+        )
+
+    def _import_filing_pages(self, tenant, case_id, pages, source_root) -> None:
+        """Copy raw OpenDART list pages, addressed by the SHA-256 of their bytes."""
+        root = Path(source_root).resolve()
+        destination = self._case_root(tenant, case_id) / FILING_PAGE_DIR
+        destination.mkdir(parents=True, exist_ok=True)
+        for digest, relative in pages.items():
+            if Path(relative).is_absolute() or ":" in relative or ".." in Path(relative).parts:
+                raise ReconciliationRejected("ARTIFACT_PATH_INVALID", 422)
+            origin = (root / relative).resolve()
+            if not origin.is_relative_to(root) or not origin.is_file():
+                raise ReconciliationRejected("ARTIFACT_UNVERIFIED", 422)
+            if origin.stat().st_size > MAX_FILING_PAGE_BYTES:
+                raise ReconciliationRejected("ARTIFACT_TOO_LARGE", 422)
+            payload = origin.read_bytes()
+            if sha256(payload).hexdigest() != digest:
+                raise ReconciliationRejected("ARTIFACT_UNVERIFIED", 422)
+            # Short managed name (Windows path limit); every read re-checks the full hash.
+            with (destination / _page_name(digest)).open("xb") as stream:
+                stream.write(payload)
+
+    def _filing_page_reader(self, tenant: str, case_id: str):
+        root = self._case_root(tenant, case_id) / FILING_PAGE_DIR
+
+        def read(digest: str) -> bytes:
+            if not isinstance(digest, str) or len(digest) != 64 or not digest.isalnum():
+                raise ReconciliationRejected("SOURCE_UNVERIFIED", 409)
+            path = root / _page_name(digest)
+            if path.stat().st_size > MAX_FILING_PAGE_BYTES:
+                raise ReconciliationRejected("SOURCE_UNVERIFIED", 409)
+            return path.read_bytes()
+
+        return read
+
+    @staticmethod
+    def _receipt_confirmation(db, tenant, case_id, receipt) -> dict[str, Any] | None:
+        """The latest review event confirms the receipt only if it bound its hash."""
+        row = db.execute(
+            "SELECT payload FROM reconciliation_revision WHERE tenant_id=? AND case_id=?"
+            " AND kind='review' ORDER BY revision DESC LIMIT 1",
+            (tenant, case_id),
+        ).fetchone()
+        if row is None:
+            return None
+        event = json.loads(row[0]).get("event") or {}
+        body_sha256 = rec_revision.receipt_body_sha256(receipt)
+        if event.get("revision_receipt_sha256") != body_sha256:
+            return None
+        return {
+            "actor": event.get("actor"),
+            "confirmed_on": str(event.get("created_at", ""))[:10],
+            "receipt_sha256": body_sha256,
+        }
+
     def _verified_claim(self, tenant, run_id, claim_id, packet, policy) -> dict[str, Any]:
         """Bind the draft to a claim that a real extraction actually produced.
 
@@ -383,7 +500,10 @@ class LocalReconciliationStore:
         if getattr(claim, "source_quality", None) != "verified":
             raise ReconciliationRejected("CLAIM_NOT_VERIFIED", 422)
         try:
-            with self.jobs._transaction() as db:
+            with (
+                assurance_proofs(self.jobs, tenant, run_id, (claim.claim_id,)),
+                self.jobs._transaction() as db,
+            ):
                 run = self.jobs._get(db, tenant, run_id, "run", "META")
                 head = self._reviewed_head(db, tenant, run_id, claim)
         except ReconciliationRejected:
@@ -640,7 +760,7 @@ class LocalReconciliationStore:
                     "projection": payload.get("projection"),
                     "created_at": row[1],
                 }
-        return {
+        detail = {
             "case_id": case_id,
             "run_id": snapshot["run_id"],
             "claim_id": snapshot["claim_id"],
@@ -672,6 +792,14 @@ class LocalReconciliationStore:
             "coverage_confirmed": head["coverage_confirmed"],
             "policy_approval": head["approval"],
         }
+        if "adopted_revision" in snapshot:
+            # The case detail schema is closed; provenance is the open, audited view.
+            detail["provenance"] = dict(
+                snapshot["provenance"],
+                revision_receipt=snapshot["revision_receipt"],
+                revision_receipt_state="confirmed" if confirmed else "draft",
+            )
+        return detail
 
     # ------------------------------------------------------------------ #
     # mutations
@@ -755,6 +883,10 @@ class LocalReconciliationStore:
                 "packet_sha256": canonical_sha256(snapshot["packet"]),
                 "coverage_sha256": canonical_sha256(snapshot["coverage"]),
             }
+            if snapshot.get("revision_receipt") is not None:
+                event["revision_receipt_sha256"] = rec_revision.receipt_body_sha256(
+                    snapshot["revision_receipt"]
+                )
             self._append(
                 db, tenant, case_id, revision, "review", actor, created_at, {"event": event}
             )
@@ -847,7 +979,7 @@ class LocalReconciliationStore:
 
         def apply(db, tenant, case_id, head, revision, actor, created_at):
             snapshot = self._case_row(db, tenant, case_id)
-            result = self._reconcile(tenant, case_id, snapshot, head)
+            result = self._reconcile(tenant, case_id, snapshot, head, db=db)
             projection = project_result(result, snapshot["packet"], snapshot["documents"])
             self._append(
                 db,
@@ -882,7 +1014,7 @@ class LocalReconciliationStore:
             auth, case_id, "evaluation", "editor", if_match, idempotency_key, {}, apply
         )
 
-    def _reconcile(self, tenant, case_id, snapshot, head) -> dict[str, Any]:
+    def _reconcile(self, tenant, case_id, snapshot, head, *, db=None) -> dict[str, Any]:
         """Evaluate server-owned snapshots. Unconfirmed bindings are simply absent."""
         confirmed = head["review_state"] == "reviewed"
         policy = snapshot["policy"]
@@ -911,6 +1043,18 @@ class LocalReconciliationStore:
             reader = FileSourceReader(self._case_root(tenant, case_id), artifacts)
         except Exception:
             reader = _unreadable
+        revision_kwargs: dict[str, Any] = {}
+        if "adopted_revision" in snapshot:
+            receipt = deepcopy(snapshot.get("revision_receipt"))
+            if receipt is not None and confirmed and db is not None:
+                confirmation = self._receipt_confirmation(db, tenant, case_id, receipt)
+                if confirmation is not None:
+                    receipt["confirmation"] = confirmation
+            revision_kwargs = {
+                "adopted_revision": snapshot["adopted_revision"],
+                "revision_receipt": receipt,
+                "filing_page_reader": self._filing_page_reader(tenant, case_id),
+            }
         return reconcile(
             deepcopy(snapshot["packet"]),
             deepcopy(policy),
@@ -921,11 +1065,16 @@ class LocalReconciliationStore:
             if confirmed and head["coverage_confirmed"]
             else None,
             document_registry=deepcopy(snapshot["documents"]) if confirmed else None,
+            **revision_kwargs,
         )
 
 
 def _encode(value: Any) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+
+
+def _page_name(digest: str) -> str:
+    return f"{digest[:24]}.json"
 
 
 def _no_candidates(_packet: Mapping[str, Any]) -> list[dict[str, Any]]:

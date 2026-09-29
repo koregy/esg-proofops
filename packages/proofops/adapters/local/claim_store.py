@@ -6,6 +6,7 @@ import json
 from dataclasses import asdict
 from hashlib import sha256
 
+from proofops.adapters.local.assurance_head import assurance_proofs
 from proofops.adapters.local.run_artifacts import load_run_graph
 from proofops.application.claim_scope import claim_pages_for
 from proofops.application.claims import ClaimScope, ExtractionProfile, discover_atomic_claims
@@ -154,7 +155,9 @@ class LocalClaimStore:
     def current_tag(self, tenant_id: str, run_id: str, claim_id: str, *, connection=None):
         """Read one atomic head; immutable prior revisions are never scanned."""
         if connection is None:
-            with self.store.jobs._transaction() as db:
+            # P4 receipt heads are fully re-derived before the read transaction opens.
+            jobs = self.store.jobs
+            with assurance_proofs(jobs, tenant_id, run_id, (claim_id,)), jobs._transaction() as db:
                 return self.current_tag(tenant_id, run_id, claim_id, connection=db)
         jobs = self.store.jobs
         run = jobs._get(connection, tenant_id, run_id, "run", "META")
@@ -165,6 +168,10 @@ class LocalClaimStore:
         tag = jobs._get(
             connection, tenant_id, run_id, "tag_revision", f'{claim_id}:{head["tag_revision"]:010}'
         )
+        from proofops.adapters.local.assurance_head import check_assurance_tag
+
+        # A P4 receipt head is served only with a proof re-derived for this exact head.
+        check_assurance_tag(connection, jobs, tenant_id, run_id, tag)
         decision = (
             jobs._get(
                 connection,
@@ -196,7 +203,8 @@ class LocalClaimStore:
         from proofops.adapters.local.catalog_pages import initialize, page
 
         tenant_id = discovery.scope.tenant_id
-        with self.store.jobs._transaction() as db:
+        jobs = self.store.jobs
+        with assurance_proofs(jobs, tenant_id, run_id), jobs._transaction() as db:
             initialize(db)
             run = self.store.jobs._get(db, tenant_id, run_id, "run", "META")
 

@@ -11,6 +11,7 @@ from dataclasses import asdict
 from hashlib import sha256
 from uuid import uuid4
 
+from proofops.adapters.local.assurance_head import assurance_proofs
 from proofops.adapters.local.audit_store import append_audit_transaction, read_audit_head
 from proofops.adapters.local.run_artifacts import load_run_graph
 from proofops.adapters.local.summary_store import LocalSummaryStore
@@ -154,7 +155,7 @@ class LocalExportStore:
         if len(claims) > 1000:
             raise ExportRejected("EXPORT_SIZE_LIMIT")
         claim_map = {claim.claim_id: claim for claim in claims}
-        with self.jobs._transaction() as db:
+        with assurance_proofs(self.jobs, tenant, run_id), self.jobs._transaction() as db:
             run = self.jobs._get(db, tenant, run_id, "run", "META")
             snapshot = self.runs._snapshot(db, tenant, run_id)
             ids = self.summaries._claim_ids(db, run, snapshot)

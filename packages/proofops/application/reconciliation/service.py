@@ -10,6 +10,7 @@ from copy import deepcopy
 from datetime import date
 from typing import Any
 
+from . import revision as rec_revision
 from .schema import validate_schema
 from .sources import validate_source_bytes
 
@@ -386,6 +387,76 @@ def reconcile(
     policy_registry: Mapping[str, Any] | None = None,
     coverage_registry: Mapping[str, Any] | None = None,
     document_registry: Mapping[str, Any] | None = None,
+    adopted_revision: str | None = None,
+    revision_receipt: Mapping[str, Any] | None = None,
+    filing_page_reader: Any = None,
+) -> dict[str, Any]:
+    """Verify provenance, then evaluate with the pure 1.1 engine.
+
+    ``adopted_revision=None`` is the frozen legacy path and ignores nothing new:
+    passing a receipt without naming the revision is a caller error. With
+    ``adopted_revision=revision.REVISION`` the adopted REC-002/REC-006 gates in
+    :mod:`.revision` apply and a missing or unconfirmed receipt blocks.
+    """
+    if adopted_revision is None:
+        if revision_receipt is not None or filing_page_reader is not None:
+            raise ValueError("revision_receipt_without_revision")
+        return _reconcile(
+            packet,
+            policy,
+            source_reader=source_reader,
+            explanation_search=explanation_search,
+            policy_registry=policy_registry,
+            coverage_registry=coverage_registry,
+            document_registry=document_registry,
+            receipt=None,
+            page_reader=None,
+        )
+    if adopted_revision != rec_revision.REVISION:
+        raise ValueError("unknown_reconciliation_revision")
+    if isinstance(packet, Mapping) and packet.get("item") == "C5":
+        raise NotImplementedError("stage_disabled")
+    validate_schema("input", packet)
+    validate_schema("policy", policy)
+    try:
+        receipt = rec_revision.require_confirmed(
+            revision_receipt if revision_receipt is not None else {}
+        )
+    except rec_revision.RevisionBlocked as error:
+        code = "revision_receipt_missing" if revision_receipt is None else error.code
+        return _revised(_blocked(packet, policy, code))
+    result = _reconcile(
+        packet,
+        policy,
+        source_reader=source_reader,
+        explanation_search=explanation_search,
+        policy_registry=policy_registry,
+        coverage_registry=coverage_registry,
+        document_registry=document_registry,
+        receipt=receipt,
+        page_reader=filing_page_reader,
+    )
+    return _revised(result)
+
+
+def _revised(result: dict[str, Any]) -> dict[str, Any]:
+    # engine_version is a free string in output 1.1; the suffix lets replay tell
+    # which gate set produced a stored result without any schema change.
+    result["engine_version"] = f"{result['engine_version']}{rec_revision.ENGINE_SUFFIX}"
+    return result
+
+
+def _reconcile(
+    packet: dict[str, Any],
+    policy: dict[str, Any],
+    *,
+    source_reader: Any,
+    explanation_search: Any,
+    policy_registry: Mapping[str, Any] | None,
+    coverage_registry: Mapping[str, Any] | None,
+    document_registry: Mapping[str, Any] | None,
+    receipt: Mapping[str, Any] | None,
+    page_reader: Any,
 ) -> dict[str, Any]:
     if isinstance(packet, Mapping) and packet.get("item") == "C5":
         raise NotImplementedError("stage_disabled")
@@ -404,6 +475,13 @@ def reconcile(
         reason = _verify_source(source, trusted_packet, source_reader, document_registry)
         if reason is not None:
             return _blocked(packet, policy, reason)
+    if receipt is not None:
+        try:
+            rec_revision.verify_filing_history(
+                receipt, trusted_packet, sources, documents, page_reader
+            )
+        except rec_revision.RevisionBlocked as error:
+            return _blocked(packet, policy, error.code)
     claim_source = sources[trusted_packet["claim"]["source_id"]]
     if not _has_source_role(claim_source, documents, "claim"):
         return _blocked(packet, policy, "source_role_mismatch")
@@ -434,6 +512,7 @@ def reconcile(
         return _blocked(packet, policy, reason or "coverage_unverified")
 
     explanation_id = trusted_packet["explanation"]["source_id"]
+    unbound_excluded = False
     if explanation_id is None:
         try:
             candidates = explanation_search(deepcopy(trusted_packet))
@@ -452,14 +531,33 @@ def reconcile(
                 return _blocked(packet, policy, "explanation_source_unverified")
             if not _has_source_role(candidate, documents, "explanation"):
                 return _blocked(packet, policy, "source_role_mismatch")
+            if receipt is not None and not rec_revision.explanation_bound(
+                receipt, candidate, trusted_packet
+            ):
+                # REC-002: a verified but unrelated quote is not an explanation.
+                # It stays a verified reviewed source so coverage still closes.
+                unbound_excluded = True
+                trusted_packet["sources"].append(deepcopy(candidate))
+                sources[candidate["source_id"]] = candidate
+                continue
             verified.append(candidate)
+            if receipt is not None:
+                trusted_packet["sources"].append(deepcopy(candidate))
+                sources[candidate["source_id"]] = candidate
         if verified:
             selected = min(verified, key=lambda value: value["source_id"])
-            trusted_packet["sources"].append(deepcopy(selected))
-            sources[selected["source_id"]] = selected
+            if receipt is None:
+                trusted_packet["sources"].append(deepcopy(selected))
+                sources[selected["source_id"]] = selected
             trusted_packet["explanation"]["source_id"] = selected["source_id"]
     elif explanation_id not in reviewed:
         return _blocked(packet, policy, "coverage_unverified")
+    elif receipt is not None:
+        asserted = sources[explanation_id]
+        if not _has_source_role(asserted, documents, "explanation"):
+            return _blocked(packet, policy, "source_role_mismatch")
+        if not rec_revision.explanation_bound(receipt, asserted, trusted_packet):
+            return _blocked(packet, policy, "explanation_binding_missing")
 
     if trusted_packet["search"]["state"] == "complete" and not reviewed.issubset(sources):
         return _blocked(packet, policy, "coverage_unverified")
@@ -468,4 +566,6 @@ def reconcile(
     # decisions and selected candidates are verification inputs, not new client revisions.
     result["packet_sha256"] = canonical_sha256(packet)
     result["policy_sha256"] = canonical_sha256(policy)
+    if unbound_excluded:
+        result["reason_codes"] = [*result["reason_codes"], "explanation_candidate_unbound"]
     return result

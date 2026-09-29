@@ -27,6 +27,14 @@ from proofops.application.evidence.report_level import check_report_level
 from proofops.application.evidence.retrieval import EvidencePacket
 from proofops.application.evidence.span_citations import verify_source_ref
 from proofops.application.ingest.graph_fusion import CanonicalDocumentGraph
+from proofops.application.tagging.assurance_link import (
+    POLICY as ASSURANCE_POLICY,
+)
+from proofops.application.tagging.assurance_link import (
+    AssuranceLinkRejected,
+    derive_assurance_fact,
+    replay_assurance_receipt,
+)
 from proofops.application.tagging.consensus import (
     PARTIAL_FACTS_HASH,
     PARTIAL_FACTS_V1,
@@ -603,10 +611,14 @@ class ReviewService:
         load_inputs: Callable[[str, str, str], ReviewInputs],
         verify_context_sources=None,
         load_run_snapshot=None,
+        load_assurance_statement=None,
     ):
         self.store, self.load_inputs = store, load_inputs
         self.verify_context_sources = verify_context_sources
         self.load_run_snapshot = load_run_snapshot
+        # Trusted re-extracting loader (``LocalAssuranceStore.load``); P4 work fails
+        # closed without it, and nothing else in a review can create P4.
+        self.load_assurance_statement = load_assurance_statement
 
     def _review(self, inputs: ReviewInputs, review_id: str | None = None) -> dict:
         inputs.validate()
@@ -691,6 +703,7 @@ class ReviewService:
         safe_harbor_review: dict | None = None,
         category_review: dict | None = None,
         context_review: dict | None = None,
+        assurance_review: dict | None = None,
         reopen: bool = False,
     ):
         """Trusted backend-only operation for explicit user-delegated AI review.
@@ -733,6 +746,7 @@ class ReviewService:
             safe_harbor_review=safe_harbor_review,
             category_review=category_review,
             context_review=context_review,
+            assurance_review=assurance_review,
             reopen=reopen,
         )
 
@@ -752,6 +766,7 @@ class ReviewService:
         safe_harbor_review=None,
         category_review=None,
         context_review=None,
+        assurance_review=None,
         reopen=False,
     ):
         if not isinstance(actor, AuthContext) or not actor.has_capability("reviewer"):
@@ -787,6 +802,26 @@ class ReviewService:
             and inputs.rulepack.approved_at
         ):
             raise ReviewRejected("RULEPACK_APPROVAL_REQUIRED", 409)
+
+        # The statement loader re-extracts from the graph and opens its own SQLite
+        # writer transaction, so it must run before the review store's transaction.
+        preloaded_statement: dict = {}
+        if self.load_assurance_statement is not None and (assurance_review is not None or reopen):
+            try:
+                preloaded_statement["value"] = self.load_assurance_statement(
+                    actor.tenant_id, target["run_id"]
+                )
+            except (ValueError, KeyError, TypeError):
+                preloaded_statement["error"] = "ASSURANCE_STATEMENT_SOURCE_REJECTED"
+
+        def statement_for_build():
+            if self.load_assurance_statement is None:
+                raise ReviewRejected("ASSURANCE_LOADER_UNAVAILABLE", 409)
+            if "error" in preloaded_statement:
+                raise ReviewRejected(preloaded_statement["error"], 409)
+            if "value" not in preloaded_statement:
+                raise ReviewRejected("ASSURANCE_LOADER_UNAVAILABLE", 409)
+            return preloaded_statement["value"]
 
         def build(review, initial, decision_revision):
             inputs.validate()
@@ -954,6 +989,50 @@ class ReviewService:
                     context_receipt["carried_from"] = prior_context.get(
                         "carried_from", prior_provenance
                     )
+            # P4 (assurance-link-v1): only a statement-pinned, re-extracted, fully
+            # covered single-opinion match can supply the prior fact P4 requires.
+            # A carried receipt is recomputed and must be byte-identical.
+            assurance_fact, assurance_receipt = None, None
+            body_p4 = next((e for e in elements if e.element_id == "P4"), None)
+            prior_assurance = initial.get("assurance_review")
+            if prior_assurance is not None and not reopen:
+                raise ReviewRejected("ASSURANCE_REPLAY_MISMATCH", 409)
+            if assurance_review is not None:
+                if body["track"] != "performance":
+                    raise ReviewRejected("ASSURANCE_TRACK_MISMATCH")
+                statement = statement_for_build()
+                try:
+                    assurance_fact, assurance_receipt = derive_assurance_fact(
+                        inputs, assurance_review, statement
+                    )
+                except AssuranceLinkRejected as exc:
+                    raise ReviewRejected(str(exc), 409) from exc
+                if assurance_fact is None:
+                    raise ReviewRejected("ASSURANCE_NOT_COVERED")
+            elif (
+                isinstance(prior_assurance, dict)
+                and body["track"] == "performance"
+                and body_p4 is not None
+                and body_p4.state == "present"
+            ):
+                statement = statement_for_build()
+                try:
+                    assurance_fact, assurance_receipt = replay_assurance_receipt(
+                        inputs, prior_assurance, statement
+                    )
+                except AssuranceLinkRejected as exc:
+                    raise ReviewRejected("ASSURANCE_REPLAY_MISMATCH", 409) from exc
+                assurance_receipt = {
+                    **assurance_receipt,
+                    "carried_from": prior_assurance.get("carried_from", prior_provenance),
+                }
+            if assurance_fact is not None and (
+                body_p4 is None
+                or body_p4.state != "present"
+                or body_p4.reason_code != ASSURANCE_POLICY
+                or body_p4.credited_from is not None
+            ):
+                raise ReviewRejected("ASSURANCE_ELEMENT_MISMATCH")
             checked_elements = []
             report_level_receipts = []
             prior_report_level = {
@@ -974,6 +1053,8 @@ class ReviewService:
                     )
                 names = MAPPINGS[body["track"]][element.element_id]
                 previous = [facts.get(name) for name in names]
+                if element.element_id == "P4" and assurance_fact is not None:
+                    previous = [assurance_fact]
                 report_level = (
                     element.state == "present"
                     and element.reason_code is not None
@@ -1242,6 +1323,8 @@ class ReviewService:
                 tag["claim_context_review"] = context_receipt
             if report_level_receipts:
                 tag["report_level_review"] = report_level_receipts
+            if assurance_receipt is not None:
+                tag["assurance_review"] = assurance_receipt
             if extra_tag:
                 tag.update(extra_tag)
             decision_record = dict(
@@ -1261,6 +1344,8 @@ class ReviewService:
                 trusted_options["category_review"] = category_review
             if context_review is not None:
                 trusted_options["context_review"] = context_review
+            if assurance_review is not None:
+                trusted_options["assurance_review"] = assurance_review
             # Every supplied trusted option joins the retry identity on EVERY
             # callable surface, not only when an AI provenance label is present:
             # a same-key retry with a changed receipt must conflict, never replay.
