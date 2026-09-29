@@ -1,6 +1,7 @@
 """Operator inspection and dry planning cannot invoke a paid transport."""
 
 import json
+import sqlite3
 
 import pytest
 
@@ -72,3 +73,38 @@ def test_evaluation_import_retains_same_producer():
     from evaluation.assurance_run import run_assurance_producer as compatible
 
     assert compatible is run_assurance_producer
+
+
+def test_empty_budget_file_cannot_bootstrap_an_allowance(tmp_path):
+    database = tmp_path / "state.db"
+    ledger = tmp_path / "budget.db"
+    key_file = tmp_path / "key.env"
+    database.touch()
+    ledger.touch()
+    key_file.write_text("UPSTAGE_API_KEY=offline-test-only", encoding="utf-8")
+    with pytest.raises(SystemExit) as exc:
+        main(
+            [
+                "--database-path",
+                str(database),
+                "--tenant-id",
+                TENANT,
+                "--run-id",
+                TENANT,
+                "--source-id",
+                "source",
+                "--invoke",
+                "--ledger",
+                str(ledger),
+                "--key-file",
+                str(key_file),
+                "--receipts",
+                str(tmp_path / "receipts"),
+                "--request-id",
+                TENANT,
+            ]
+        )
+    assert exc.value.code == 2
+    with sqlite3.connect(ledger) as db:
+        assert db.execute("SELECT name FROM sqlite_master").fetchall() == []
+    assert not (tmp_path / "receipts").exists()

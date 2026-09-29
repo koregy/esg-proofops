@@ -1,15 +1,15 @@
 {
-  "checked_at": "2026-09-29T01:29:07.326589+00:00",
+  "checked_at": "2026-09-29T06:15:41.095680+00:00",
   "scope": "documentation, structured contracts and synthetic schema examples only",
   "status": "passed",
-  "checks_total": 974,
-  "passed": 974,
+  "checks_total": 981,
+  "passed": 981,
   "failed": 0,
   "counts": {
     "numbered_documents": 35,
     "requirements": 43,
     "tasks": 46,
-    "api_operations": 60,
+    "api_operations": 61,
     "rule_vectors": 28,
     "edge_vectors": 24
   },
@@ -85,6 +85,11 @@
     },
     {
       "name": "json:apps/web/tsconfig.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:apps/web/public/demo/engine-table.json",
       "passed": true,
       "detail": ""
     },
@@ -790,6 +795,16 @@
     },
     {
       "name": "json:fixtures/rule_cases.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:fixtures/submission-kia/dart-consolidation-scope.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "json:fixtures/submission-kia/pinned-inputs.json",
       "passed": true,
       "detail": ""
     },
@@ -1529,6 +1544,11 @@
       "detail": ""
     },
     {
+      "name": "openapi_ref:#/components/schemas/DocumentScopeProposal",
+      "passed": true,
+      "detail": ""
+    },
+    {
       "name": "openapi_ref:#/components/schemas/RunPage",
       "passed": true,
       "detail": ""
@@ -1755,6 +1775,16 @@
     },
     {
       "name": "openapi_ref:#/components/schemas/ClassificationAccepted",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "openapi_ref:#/components/schemas/ScopeProposalSection",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "openapi_ref:#/components/schemas/ScopeProposalAnchor",
       "passed": true,
       "detail": ""
     },
@@ -2010,6 +2040,11 @@
     },
     {
       "name": "path_params:version_get",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "path_params:version_scope_proposal",
       "passed": true,
       "detail": ""
     },

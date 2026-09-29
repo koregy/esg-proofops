@@ -103,6 +103,8 @@ jobs:
       - run: pnpm --filter proofops-web build
       - name: Exercise review, export retry, and verified report preview
         run: node apps/web/test/submission-review-flow.mjs --dist apps/web/dist --out .local/review-flow-ci
+      - name: Exercise upload persistence and explicit source-pinned scope proposals
+        run: node apps/web/test/submission-scope-proposal.mjs
       - name: Build public submission demo
         run: pnpm --filter proofops-web build
         env:

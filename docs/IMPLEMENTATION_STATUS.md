@@ -42,6 +42,17 @@ UUID. It never creates a budget pool, and publication does not assert claim
 coverage. Five integration checks passed using a stub provider and real parser
 artifacts; new live assurance extraction has not yet run.
 
+Editors can now request a SHA-pinned environmental section proposal from an
+uploaded ready document and explicitly apply/edit a declared subset in RunForm.
+Unknown/conflicting pages remain visible; proposal discovery does not establish
+complete coverage or evidence absence. Inspection runs in a killable child with
+time/memory/output limits. Twenty worker/API checks and 21 browser checks passed;
+the coordinator also checked types and ran 24 section/API checks (one missing
+external fixture skipped). The scope request remains synchronous and concurrency
+is limited per API process. Deployment must retain container resource limits.
+The upload callback reset that previously removed RunForm is fixed. See
+[scope contract](submission-scope-discovery.md).
+
 ## 2026-09-19 · 로컬 근거 검색 어댑터 재사용
 
 기존 한글 BM25 검색을 `LocalEvidenceSearch`로 옮기고 섹션 평가/데모 경로에서

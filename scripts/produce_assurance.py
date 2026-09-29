@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -54,6 +55,17 @@ def main(argv: list[str] | None = None) -> int:
         or args.request_id is None
     ):
         parser.error("--invoke requires existing --ledger, --key-file, --receipts and --request-id")
+    if args.invoke:
+        from proofops.adapters.local.upstage import UpstageProbe
+
+        # Merely touching an empty file must never mint the transport's legacy
+        # allowance. Validate the existing policy and accounting without writes.
+        try:
+            with sqlite3.connect(args.ledger.resolve().as_uri() + "?mode=ro", uri=True) as db:
+                UpstageProbe._authorized_limit(db)
+                UpstageProbe._call_total(db)
+        except (sqlite3.Error, ValueError):
+            parser.error("existing authorized budget ledger is invalid; no call made")
 
     from proofops.adapters.local.assurance_producer import run_assurance_producer
     from proofops.adapters.local.run_artifacts import load_run_graph
@@ -103,8 +115,6 @@ def main(argv: list[str] | None = None) -> int:
             "coverage": "not_assessed",
         }
         if args.invoke:
-            from proofops.adapters.local.upstage import UpstageProbe
-
             key_lines = args.key_file.read_text(encoding="utf-8-sig").splitlines()
             keys = [
                 line.split("=", 1)[1].strip().strip('"').strip("'")

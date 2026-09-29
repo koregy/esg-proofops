@@ -832,6 +832,90 @@ paths:
         schema:
           type: string
           format: uuid
+  /v1/versions/{version_id}/scope-proposal:
+    get:
+      operationId: version_scope_proposal
+      summary: version_scope_proposal
+      x-minimum-role: editor
+      x-rate-limit: 6/min/user
+      x-idempotency-required: false
+      security:
+      - sessionCookie: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentScopeProposal'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Forbidden or CSRF failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found or tenant mismatch
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Conflict / gate blocked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '412':
+          description: Stale revision
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Schema or domain validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Rate/budget limit
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Dependency unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      parameters:
+      - name: version_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: expected_sha256
+        in: query
+        required: true
+        schema:
+          type: string
+          pattern: ^[0-9a-f]{64}$
+      description: Candidate-only environmental section scope for a ready version, computed from the server-held verified original pinned to expected_sha256. Read-only; no model call; never declares full scope or absence. PDF structure is parsed only in a separate killable worker process bounded by wall-clock timeout, memory and output size; failures use stable codes SECTION_INSPECTION_TIMEOUT (503, not retryable), SECTION_INSPECTION_RESOURCE_LIMIT (422), SECTION_INSPECTION_UNAVAILABLE (503, Retry-After) and SCOPE_INSPECTION_BUSY (429, Retry-After).
   /v1/runs:
     get:
       operationId: runs_list
@@ -5750,6 +5834,185 @@ components:
       - report_year
       - status
       - created_at
+    DocumentScopeProposal:
+      properties:
+        version_id:
+          type: string
+          format: uuid
+        document_id:
+          type: string
+          format: uuid
+        source_sha256:
+          type: string
+          pattern: ^[0-9a-f]{64}$
+        page_count:
+          type: integer
+          maximum: 500
+          minimum: 1
+        status:
+          type: string
+          const: candidate_only
+        full_scope_declared:
+          type: boolean
+          const: false
+        apply_as:
+          type: string
+          const: declared_subset
+        method:
+          type: string
+          enum:
+          - pdf_navigation
+          - large_heading_fallback
+          - toc_links
+          - toc_text_fallback
+        proposed_pages:
+          items:
+            type: integer
+            maximum: 500
+            minimum: 1
+          type: array
+        claim_candidate_pages:
+          items:
+            type: integer
+            maximum: 500
+            minimum: 1
+          type: array
+        evidence_candidate_pages:
+          items:
+            type: integer
+            maximum: 500
+            minimum: 1
+          type: array
+        unknown_pages:
+          items:
+            type: integer
+            maximum: 500
+            minimum: 1
+          type: array
+        conflict_pages:
+          items:
+            type: integer
+            maximum: 500
+            minimum: 1
+          type: array
+        other_candidate_pages:
+          items:
+            type: integer
+            maximum: 500
+            minimum: 1
+          type: array
+        sections:
+          items:
+            $ref: '#/components/schemas/ScopeProposalSection'
+          type: array
+        issue_counts:
+          additionalProperties:
+            type: integer
+            minimum: 1
+          type: object
+        policy_sha256:
+          type: string
+          pattern: ^[0-9a-f]{64}$
+        map_sha256:
+          type: string
+          pattern: ^[0-9a-f]{64}$
+        parser_versions:
+          additionalProperties:
+            type: string
+          type: object
+        coverage:
+          type: string
+          const: unvalidated
+        live_model:
+          type: string
+          const: not_run
+        table_figure_validation:
+          type: string
+          const: not_run
+        limitations:
+          items:
+            type: string
+          type: array
+      additionalProperties: false
+      type: object
+      required:
+      - version_id
+      - document_id
+      - source_sha256
+      - page_count
+      - status
+      - full_scope_declared
+      - apply_as
+      - method
+      - proposed_pages
+      - claim_candidate_pages
+      - evidence_candidate_pages
+      - unknown_pages
+      - conflict_pages
+      - other_candidate_pages
+      - sections
+      - issue_counts
+      - policy_sha256
+      - map_sha256
+      - parser_versions
+      - coverage
+      - live_model
+      - table_figure_validation
+      - limitations
+      description: Candidate-only E scope for one ready version; never an approved or full scope.
+    ScopeProposalSection:
+      properties:
+        start_page:
+          type: integer
+          maximum: 500
+          minimum: 1
+        end_page:
+          type: integer
+          maximum: 500
+          minimum: 1
+        role:
+          type: string
+          enum:
+          - e_narrative
+          - esg_data
+          - appendix
+          - other
+          - unknown
+          - conflict
+        anchors:
+          items:
+            $ref: '#/components/schemas/ScopeProposalAnchor'
+          type: array
+      additionalProperties: false
+      type: object
+      required:
+      - start_page
+      - end_page
+      - role
+      - anchors
+    ScopeProposalAnchor:
+      properties:
+        page:
+          type: integer
+          maximum: 500
+          minimum: 1
+        title:
+          type: string
+          maxLength: 200
+        method:
+          type: string
+          enum:
+          - outline
+          - named_destination
+          - large_heading_fallback
+          - toc_links
+          - toc_text_fallback
+      additionalProperties: false
+      type: object
+      required:
+      - page
+      - title
+      - method
     RunCreate:
       type: object
       additionalProperties: false
